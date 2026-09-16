@@ -4,4 +4,4 @@
  * the whole E2E run.
  */
 
-export const E2E_DB_PATH = '/tmp/promptatron-e2e.db'
+export const E2E_DB_PATH = '/tmp/evalharness-e2e.db'

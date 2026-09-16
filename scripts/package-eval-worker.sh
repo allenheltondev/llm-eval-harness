@@ -5,7 +5,7 @@
 # AgentCore's direct code deployment runs a Python zip that must already
 # contain every dependency -- nothing is installed for you at deploy time, and
 # the runtime is arm64 only. So this builds a staging tree of
-# aarch64-manylinux wheels, drops the `promptatron` package next to them, adds
+# aarch64-manylinux wheels, drops the `evalharness` package next to them, adds
 # the root-level entry module AgentCore executes, and zips it under a
 # content-hashed key.
 #
@@ -45,7 +45,7 @@ rm -rf "${STAGING}"
 mkdir -p "${STAGING}" "${BUILD_DIR}"
 
 # 1. Pin the dependency set from the server's lockfile, including the `worker`
-#    extra (bedrock-agentcore). `--no-emit-project` leaves `promptatron` itself
+#    extra (bedrock-agentcore). `--no-emit-project` leaves `evalharness` itself
 #    out: it is pure Python and gets copied in below, so there is no wheel build
 #    to cross-compile.
 log "Exporting locked dependencies (worker extra)"
@@ -73,8 +73,8 @@ uv pip install \
   --requirement "${BUILD_DIR}/requirements.txt"
 
 # 3. The application itself.
-log "Staging the promptatron package"
-cp -R "${SERVER}/promptatron" "${STAGING}/promptatron"
+log "Staging the evalharness package"
+cp -R "${SERVER}/evalharness" "${STAGING}/evalharness"
 
 # 4. The entry module. AgentCore's CodeConfiguration.EntryPoint names a file at
 #    the zip root, and it is executed rather than imported -- so the shim has to
@@ -84,12 +84,12 @@ cat > "${STAGING}/agentcore_app.py" <<'PY'
 
 `AgentRuntimeArtifact.CodeConfiguration.EntryPoint` names a file at the root of
 the zip, so this shim exists purely to be that file. The worker itself is
-`promptatron.worker.agentcore_app`; this re-exports its `app` (for a host that
+`evalharness.worker.agentcore_app`; this re-exports its `app` (for a host that
 imports the module and looks for one) and runs it (for a host that executes the
 file as a script). Edit the package, not this.
 """
 
-from promptatron.worker.agentcore_app import app
+from evalharness.worker.agentcore_app import app
 
 if __name__ == "__main__":
     app.run()

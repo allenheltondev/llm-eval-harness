@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from promptatron.worker.ddb import (
+from evalharness.worker.ddb import (
     CANCEL_SK,
     GSI1_EVAL_PK,
     GSI1_RUN_PK,
@@ -26,7 +26,7 @@ from promptatron.worker.ddb import (
 )
 from tests.fake_dynamodb import FakeDynamoDBClient
 
-TABLE = "promptatron-config-ScenariosTable-TEST"
+TABLE = "llm-eval-harness-ScenariosTable-TEST"
 EVAL_ID = "0123456789abcdef0123456789abcdef"
 FIXED_NOW = 1_700_000_000.0
 
@@ -528,7 +528,7 @@ def test_load_run_maps_every_field_of_the_dynamodb_record(store, monkeypatch):
 def test_to_run_record_defaults_every_field_for_an_empty_record():
     """The other half of the same map: every ``.get(key, default)`` fallback,
     for a record that has none of the optional keys at all."""
-    from promptatron.worker.ddb import _to_run_record
+    from evalharness.worker.ddb import _to_run_record
 
     record = _to_run_record({})
 
@@ -551,7 +551,7 @@ def test_to_run_record_defaults_every_field_for_an_empty_record():
 def test_to_run_record_falls_back_to_now_on_an_unparseable_ts():
     from datetime import datetime
 
-    from promptatron.worker.ddb import _to_run_record
+    from evalharness.worker.ddb import _to_run_record
 
     record = _to_run_record({"ts": "not-a-timestamp"})
 
@@ -562,7 +562,7 @@ def test_to_run_record_falls_back_to_now_on_an_unparseable_ts():
 
 
 def test_load_run_raises_when_the_run_is_in_neither_store(store, monkeypatch):
-    from promptatron.errors import NotFoundError
+    from evalharness.errors import NotFoundError
 
     monkeypatch.setattr(type(store), "_load_local_run", staticmethod(lambda run_id: None))
 
@@ -653,7 +653,7 @@ def test_table_name_is_required():
 
 
 def test_json_attribute_encodes_none_as_null():
-    from promptatron.worker.ddb import _json
+    from evalharness.worker.ddb import _json
 
     assert _json(None) == {"NULL": True}
 
@@ -664,7 +664,7 @@ def test_json_attribute_falls_back_to_str_for_non_native_json_values():
     of raising -- ``json.dumps`` has no default fallback at all."""
     from datetime import UTC, datetime
 
-    from promptatron.worker.ddb import _json
+    from evalharness.worker.ddb import _json
 
     when = datetime(2026, 1, 1, tzinfo=UTC)
     encoded = _json({"seen_at": when})
@@ -673,7 +673,7 @@ def test_json_attribute_falls_back_to_str_for_non_native_json_values():
 
 
 def test_now_iso_is_utc_not_naive_local_time():
-    from promptatron.worker.ddb import _now_iso
+    from evalharness.worker.ddb import _now_iso
 
     assert _now_iso().endswith("+00:00")
 
@@ -806,7 +806,7 @@ def test_save_run_mirrors_a_real_local_sqlite_row(store, client, tmp_path):
     rather than the monkeypatched stand-in most other tests use."""
     from sqlmodel import Session
 
-    from promptatron.store import db, history
+    from evalharness.store import db, history
 
     db.init_db(str(tmp_path / "worker_ddb.db"))
     with Session(db.get_engine()) as session:
@@ -830,7 +830,7 @@ def test_save_run_mirrors_a_real_local_sqlite_row(store, client, tmp_path):
 
 def test_save_run_with_a_real_db_but_an_unknown_run_id_is_a_no_op(store, client, tmp_path):
     """The NotFoundError branch of the real ``_load_local_run``, not the monkeypatched one."""
-    from promptatron.store import db
+    from evalharness.store import db
 
     db.init_db(str(tmp_path / "worker_ddb_empty.db"))
 
@@ -843,7 +843,7 @@ def test_save_run_with_a_real_db_but_an_unknown_run_id_is_a_no_op(store, client,
 def test_save_run_with_no_local_db_configured_is_a_no_op(store, client, monkeypatch):
     """A worker that only ever grades DynamoDB-resident runs never touches SQLite;
     a lookup failure there must not be fatal."""
-    import promptatron.store.db as db_module
+    import evalharness.store.db as db_module
 
     def _broken_engine():
         raise RuntimeError("no local database configured")

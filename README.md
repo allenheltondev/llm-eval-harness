@@ -1,4 +1,4 @@
-# Promptatron 3000
+# LLM Eval Harness
 
 A manual evaluation harness for AWS Bedrock foundation models and prompts, built on the
 [Strands Agents SDK](https://strandsagents.com/). Author scenarios (prompts, datasets, tool
@@ -68,7 +68,7 @@ determinism evaluations, guardrail authoring UI) works end-to-end with no AWS ac
 deployed `api/` stack. This is the fastest way to try the app or develop against it.
 
 ```bash
-PROMPTATRON_FAKE_MODEL=1 make dev
+EVALHARNESS_FAKE_MODEL=1 make dev
 ```
 
 ### Real mode — live Bedrock calls
@@ -84,8 +84,8 @@ PROMPTATRON_FAKE_MODEL=1 make dev
    The server auto-discovers `config_api_url`/`config_api_key` (and, once deployed,
    `eval_runtime_arn`/`eval_table`) from the deployed stack's CloudFormation outputs on first
    use — no more copying `ApiEndpoint`/`ApiKeyId` by hand. If you deployed the stack under a
-   name other than the Makefile default (`promptatron-config`), set
-   `PROMPTATRON_STACK_NAME` to match. See [Configuration](#configuration) for the env vars that
+   name other than the Makefile default (`llm-eval-harness`), set
+   `EVALHARNESS_STACK_NAME` to match. See [Configuration](#configuration) for the env vars that
    still work as manual overrides, and `GET /health`'s `config_store.source`/`cloud_evals.source`
    to see where the server actually got each value from (`"env"` or `"stack"`).
 
@@ -128,15 +128,20 @@ https://d1234abcd.cloudfront.net/api/v1/...  → the server
 
 ### Continuous deployment (GitHub Actions + OIDC)
 
-Deployment follows the same shape as the other `nullchecktv` services (see
-`stream-post-processor`) and reuses the **same org-level secrets** — nothing repo-specific to
-provision:
+Deployment follows the same shape as the `nullchecktv` services' convention (see
+`stream-post-processor` for the origin of the pattern), adapted to a personal account: these are
+**repo-level secrets** on `allenheltondev/llm-eval-harness`, not org-level ones — there is no
+organization here to share them across services.
 
 | Secret | Used for |
 | --- | --- |
 | `PIPELINE_EXECUTION_ROLE` | the role GitHub Actions assumes via OIDC |
 | `CLOUDFORMATION_EXECUTION_ROLE` | passed as `sam deploy --role-arn`, so CloudFormation builds resources under its own role |
 | `ARTIFACTS_BUCKET_NAME` | passed as `sam deploy --s3-bucket` for packaging artifacts |
+
+The OIDC role's trust policy must permit `repo:allenheltondev/llm-eval-harness:*` (or the specific
+branch/environment claims you scope it to) — without that condition, GitHub Actions cannot assume
+`PIPELINE_EXECUTION_ROLE` at all.
 
 The artifacts bucket is not optional in CI, and it does double duty. The pipeline role is scoped
 to it, so letting SAM resolve its own managed bucket fails with `AccessDenied`, and the same
@@ -147,13 +152,13 @@ before.
 
 | Workflow | Trigger | Stack |
 | --- | --- | --- |
-| `deploy-staging.yaml` | pull request to `main` (or manual) | `promptatron-staging` |
-| `deploy-production.yaml` | push to `main` (or manual) | `promptatron-production` |
+| `deploy-staging.yaml` | pull request to `main` (or manual) | `llm-eval-harness-staging` |
+| `deploy-production.yaml` | push to `main` (or manual) | `llm-eval-harness-prod` |
 
 Both call `shared-pre-deploy-validations.yaml` (lint, typecheck, unit tests, `sam validate`) and
 then `shared-deploy.yaml` with `secrets: inherit`. Staging and Production are separate stacks, so
 a PR can never touch production, and each environment deploys one at a time. Fork PRs are skipped
-— they never receive org secrets.
+— they never receive repo secrets.
 
 The deploy job runs the same `make deploy` used locally, so there is one deploy definition rather
 than a CI copy that drifts. Local runs use your own credentials; CI assumes the pipeline role and
@@ -164,27 +169,27 @@ passes the artifacts bucket and CloudFormation execution role through `DEPLOY_S3
 `make deploy` does four things *outside* CloudFormation, so they run as `PIPELINE_EXECUTION_ROLE`
 rather than the CloudFormation execution role: seed the config store, sync the SPA to S3,
 invalidate CloudFront, and upload the server zip. The last one is covered by the shared artifacts
-bucket; the other three touch `promptatron-*` resources this stack creates, and need to be
-allowed on the org pipeline role once:
+bucket; the other three touch `llm-eval-harness-*` resources this stack creates, and need to be
+allowed on the pipeline role once:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "SeedPromptatronConfigStore",
+      "Sid": "SeedLlmEvalHarnessConfigStore",
       "Effect": "Allow",
       "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
-      "Resource": "arn:aws:dynamodb:*:*:table/promptatron-*"
+      "Resource": "arn:aws:dynamodb:*:*:table/llm-eval-harness-*"
     },
     {
-      "Sid": "SyncPromptatronSpa",
+      "Sid": "SyncLlmEvalHarnessSpa",
       "Effect": "Allow",
       "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-      "Resource": ["arn:aws:s3:::promptatron-*", "arn:aws:s3:::promptatron-*/*"]
+      "Resource": ["arn:aws:s3:::llm-eval-harness-*", "arn:aws:s3:::llm-eval-harness-*/*"]
     },
     {
-      "Sid": "InvalidatePromptatronCdn",
+      "Sid": "InvalidateLlmEvalHarnessCdn",
       "Effect": "Allow",
       "Action": "cloudfront:CreateInvalidation",
       "Resource": "*"
@@ -229,26 +234,26 @@ terminals instead; they run the exact same commands.
 
 ## Configuration
 
-### Server (`server/`, env vars prefixed `PROMPTATRON_`)
+### Server (`server/`, env vars prefixed `EVALHARNESS_`)
 
 | Env var | Default | Description |
 | --- | --- | --- |
-| `PROMPTATRON_AWS_REGION` | `us-east-1` | AWS region for Bedrock/Guardrails calls |
-| `PROMPTATRON_CONFIG_API_URL` | *(unset)* | Base URL of the deployed `api/` config store — auto-discovered from the stack's `ApiEndpoint` output; set to override |
-| `PROMPTATRON_CONFIG_API_KEY` | *(unset)* | `x-api-key` bearer token for the config store — auto-discovered from the stack's `ApiKeyId` output; set to override |
-| `PROMPTATRON_DB_PATH` | `./data/promptatron.db` | SQLite path for run/evaluation history |
-| `PROMPTATRON_CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON list) |
-| `PROMPTATRON_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of live Bedrock |
-| `PROMPTATRON_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
-| `PROMPTATRON_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
-| `PROMPTATRON_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
-| `PROMPTATRON_STACK_NAME` | `promptatron-config` | Name of the deployed `api/` stack to auto-discover settings from |
-| `PROMPTATRON_STACK_DISCOVERY` | `true` | Set `false` to disable CloudFormation-stack auto-discovery entirely |
+| `EVALHARNESS_AWS_REGION` | `us-east-1` | AWS region for Bedrock/Guardrails calls |
+| `EVALHARNESS_CONFIG_API_URL` | *(unset)* | Base URL of the deployed `api/` config store — auto-discovered from the stack's `ApiEndpoint` output; set to override |
+| `EVALHARNESS_CONFIG_API_KEY` | *(unset)* | `x-api-key` bearer token for the config store — auto-discovered from the stack's `ApiKeyId` output; set to override |
+| `EVALHARNESS_DB_PATH` | `./data/evalharness.db` | SQLite path for run/evaluation history |
+| `EVALHARNESS_CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON list) |
+| `EVALHARNESS_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of live Bedrock |
+| `EVALHARNESS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
+| `EVALHARNESS_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
+| `EVALHARNESS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
+| `EVALHARNESS_STACK_NAME` | `llm-eval-harness` | Name of the deployed `api/` stack to auto-discover settings from |
+| `EVALHARNESS_STACK_DISCOVERY` | `true` | Set `false` to disable CloudFormation-stack auto-discovery entirely |
 
 AWS credentials themselves are **not** a setting — they come from the standard boto3 credential
 chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, SSO, or an instance/task role).
-The same credentials are used to auto-discover `PROMPTATRON_CONFIG_API_URL`,
-`PROMPTATRON_CONFIG_API_KEY`, `PROMPTATRON_EVAL_TABLE`, and `PROMPTATRON_EVAL_RUNTIME_ARN` from
+The same credentials are used to auto-discover `EVALHARNESS_CONFIG_API_URL`,
+`EVALHARNESS_CONFIG_API_KEY`, `EVALHARNESS_EVAL_TABLE`, and `EVALHARNESS_EVAL_RUNTIME_ARN` from
 the deployed stack (`cloudformation:DescribeStacks` plus, when an API key is present,
 `apigateway:GET` on `/apikeys/{id}`); a missing stack or missing credentials just leaves those
 settings unconfigured, exactly as before this existed.
@@ -287,10 +292,10 @@ call during a run.
    description, input JSON schema) lives in the scenario config
    (`PUT /api/v1/scenarios/{id}/tools/{toolName}`), but the *handler* — the Python function that
    actually runs when the model calls the tool — is a `@tool` registered in
-   `server/promptatron/tools/registry.py`:
+   `server/evalharness/tools/registry.py`:
 
    ```python
-   # server/promptatron/tools/my_scenario.py
+   # server/evalharness/tools/my_scenario.py
    from strands import tool
 
    @tool(name="escalate_ticket")
@@ -306,8 +311,8 @@ call during a run.
    ```
 
    ```python
-   # server/promptatron/tools/registry.py
-   from promptatron.tools import my_scenario
+   # server/evalharness/tools/registry.py
+   from evalharness.tools import my_scenario
 
    _REGISTRY["customer-support"] = [my_scenario.escalate_ticket]
    ```
@@ -336,7 +341,7 @@ call during a run.
 The grader model, rubric, and system prompt are all configurable per request
 (`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.system_prompt`; `rubric`). Progress
 streams as NDJSON from `GET /api/v1/evaluations/{id}/events`; results and history live alongside
-runs in the server's SQLite database (`server/data/promptatron.db`).
+runs in the server's SQLite database (`server/data/evalharness.db`).
 
 ### Execution lanes: local vs cloud
 
@@ -353,7 +358,7 @@ Evals tab (`execution: "local" | "cloud"` on the API):
 
 To enable the cloud lane: `make deploy-worker` (packages the Python worker as an AgentCore
 CodeZip artifact, uploads it, and deploys the runtime alongside the config store). The server
-auto-discovers `PROMPTATRON_EVAL_RUNTIME_ARN` and `PROMPTATRON_EVAL_TABLE` from the stack's
+auto-discovers `EVALHARNESS_EVAL_RUNTIME_ARN` and `EVALHARNESS_EVAL_TABLE` from the stack's
 `EvalWorkerRuntimeArn`/`TableName` outputs on next use — nothing to copy by hand. The UI disables
 the cloud option until the server reports the lane configured (`GET /health`'s
 `cloud_evals.configured`); `cloud_evals.source` shows whether that came from the stack or from an
@@ -364,7 +369,7 @@ shapes: `docs/cloud-evals.md`; infrastructure notes and first-deploy verificatio
 
 ## Guardrails
 
-`server/promptatron/routers/guardrails.py` authors AWS Bedrock Guardrails directly: create/update
+`server/evalharness/routers/guardrails.py` authors AWS Bedrock Guardrails directly: create/update
 operate on a mutable `DRAFT` working copy, `POST /guardrails/{id}/versions` publishes the current
 draft as a new immutable numbered version, and any version (including `DRAFT`) can be applied to a
 run. `GET /guardrails/{id}/versions` lists the full version history for a guardrail.
@@ -372,12 +377,12 @@ run. `GET /guardrails/{id}/versions` lists the full version history for a guardr
 ## Repo layout
 
 ```
-promptatron-3000/
+llm-eval-harness/
 ├── app/                      # React + TypeScript SPA (Vite, :3000)
 │   ├── src/
 │   └── .env.example
 ├── server/                   # FastAPI + Strands Agents SDK (uvicorn, :8000)
-│   ├── promptatron/
+│   ├── evalharness/
 │   │   ├── routers/          # health, models, scenarios (proxy), runs, guardrails
 │   │   ├── engine/           # run execution, streaming, fake model
 │   │   ├── evals/            # determinism + grading engine, LLM-as-judge

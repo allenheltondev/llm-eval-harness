@@ -6,7 +6,7 @@
  * editable while a run is in flight and makes "re-run this exact config"
  * trivial.
  *
- * Persisted to localStorage under `promptatron.run-config.v1`. Everything in
+ * Persisted to localStorage under `evalharness.run-config.v1`. Everything in
  * the state is plain configuration (no credentials, no outputs), so
  * `partialize` keeps all of it and drops only the action functions.
  */
@@ -22,7 +22,7 @@ import type {
 } from '../api'
 
 /** localStorage key. Bump the suffix when the shape changes incompatibly. */
-export const RUN_CONFIG_STORAGE_KEY = 'promptatron.run-config.v1'
+export const RUN_CONFIG_STORAGE_KEY = 'evalharness.run-config.v1'
 
 /** The serializable half of the store (this is exactly what is persisted). */
 export interface RunConfigData {

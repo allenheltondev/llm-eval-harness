@@ -29,7 +29,7 @@ account:
 - `/workspace/readysetcloud/rsc-core/template.yaml` — a working CloudFront
   distribution in front of a non-S3 origin, and the source of the two managed
   policy ids used below.
-- This repository's own source (`server/promptatron/**`, `app/src/api/http.ts`)
+- This repository's own source (`server/evalharness/**`, `app/src/api/http.ts`)
   for every claim about what the application does.
 
 **Second-hand, from AWS documentation via search** — `docs.aws.amazon.com` is
@@ -52,7 +52,7 @@ Claims below are tagged **[lwa]**, **[rsc]**, **[repo]**, **[docs]**, or
 
 ## The adapter, and why the application is untouched
 
-`promptatron.main:app` runs on Lambda **unchanged** — no handler function, no
+`evalharness.main:app` runs on Lambda **unchanged** — no handler function, no
 Mangum, no ASGI-to-Lambda shim anywhere in `server/`. The AWS Lambda Web
 Adapter layer does the translation out of process:
 
@@ -102,7 +102,7 @@ PYTHONPATH="${PYTHONPATH:-}:${LAMBDA_TASK_ROOT}:/opt/python:${LAMBDA_RUNTIME_DIR
   exec python3 -m uvicorn \
     --host 127.0.0.1 \
     --port "${AWS_LWA_PORT:-${PORT:-8080}}" \
-    promptatron.main:app
+    evalharness.main:app
 ```
 
 Two deliberate deviations from AWS's example **[lwa]**:
@@ -221,7 +221,7 @@ pruned by default:
 All four arrive via `strands-agents-tools`, and the only modules that import
 them are `strands_tools/calculator.py`, `strands_tools/image_reader.py` and
 `strands_tools/use_computer.py` **[measured]** — none of which any
-`promptatron` module imports, directly or dynamically (the package contains no
+`evalharness` module imports, directly or dynamically (the package contains no
 `importlib.import_module` / `__import__` call at all **[measured]**).
 `strands_evals`, which *is* used, does not reference `strands_tools` anywhere
 **[measured]**.
@@ -244,11 +244,11 @@ template, exactly as `serverless-deploy.md` prefers:
 
 | Env var | Value |
 |---|---|
-| `PROMPTATRON_CONFIG_API_URL` | `!Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api` |
-| `PROMPTATRON_EVAL_TABLE` | `!Ref ScenariosTable` |
-| `PROMPTATRON_EVAL_RUNTIME_ARN` | `!GetAtt EvalWorkerRuntime.AgentRuntimeArn`, or absent when the worker is not deployed |
+| `EVALHARNESS_CONFIG_API_URL` | `!Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api` |
+| `EVALHARNESS_EVAL_TABLE` | `!Ref ScenariosTable` |
+| `EVALHARNESS_EVAL_RUNTIME_ARN` | `!GetAtt EvalWorkerRuntime.AgentRuntimeArn`, or absent when the worker is not deployed |
 
-The fourth, `PROMPTATRON_CONFIG_API_KEY`, **cannot** be: CloudFormation has no
+The fourth, `EVALHARNESS_CONFIG_API_KEY`, **cannot** be: CloudFormation has no
 way to read an `AWS::ApiGateway::ApiKey`'s value. There were two honest
 options.
 
@@ -260,8 +260,8 @@ notwithstanding for the CLI half), and it must be re-supplied on every deploy
 or it silently reverts to empty. The worker took this route only because it had
 no alternative.
 
-**Chosen: keep stack discovery ON for that one field.** `PROMPTATRON_STACK_DISCOVERY`
-is `true` and `PROMPTATRON_STACK_NAME` is `!Ref AWS::StackName`, so the server
+**Chosen: keep stack discovery ON for that one field.** `EVALHARNESS_STACK_DISCOVERY`
+is `true` and `EVALHARNESS_STACK_NAME` is `!Ref AWS::StackName`, so the server
 resolves the key from the stack itself at runtime. This costs exactly two
 read-only IAM actions on the function role, both narrowly scoped:
 
@@ -297,11 +297,11 @@ The rest of the environment:
 
 | Env var | Value | Why |
 |---|---|---|
-| `PROMPTATRON_DB_PATH` | `/tmp/promptatron.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
-| `PROMPTATRON_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
-| `PROMPTATRON_LOCAL_EVALS` | `off` | Same reasoning |
-| `PROMPTATRON_AWS_REGION` | `!Ref AWS::Region` | |
-| `PROMPTATRON_CORS_ORIGINS` | `[]` (parameter `ServerCorsOrigins`) | See below |
+| `EVALHARNESS_DB_PATH` | `/tmp/evalharness.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
+| `EVALHARNESS_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
+| `EVALHARNESS_LOCAL_EVALS` | `off` | Same reasoning |
+| `EVALHARNESS_AWS_REGION` | `!Ref AWS::Region` | |
+| `EVALHARNESS_CORS_ORIGINS` | `[]` (parameter `ServerCorsOrigins`) | See below |
 
 ### CORS: the empty list is the correct value
 
@@ -520,7 +520,7 @@ observed.
 
 - **`Handler: run.sh` + `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`.** Copied from
   an AWS-maintained example **[lwa]**, but that example is x86 and does not use
-  a package (`promptatron.main:app` vs `main:app`). The import of a *package*
+  a package (`evalharness.main:app` vs `main:app`). The import of a *package*
   from `$LAMBDA_TASK_ROOT` rather than a top-level module is the one untested
   step.
 - **The `python3` substitution.** Near-certain, but it is a deviation from the

@@ -1,7 +1,7 @@
 """One set of repository scenarios, run against **both** history backends.
 
-``promptatron.store.history`` (SQLite) is the spec and
-``promptatron.store.ddb_history`` (DynamoDB) is the second implementation of it,
+``evalharness.store.history`` (SQLite) is the spec and
+``evalharness.store.ddb_history`` (DynamoDB) is the second implementation of it,
 so the only honest way to test the second is to run the first one's scenarios
 against it: every test in the "contract" section below is parametrized over the
 ``repo`` fixture and executes twice, once per backend.
@@ -26,17 +26,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from promptatron.config import Settings
-from promptatron.engine import runner
-from promptatron.engine.fake_model import FakeModel, Text
-from promptatron.engine.schemas import RunRequest
-from promptatron.errors import BadRequestError, NotFoundError
-from promptatron.evals import engine as evals_engine
-from promptatron.evals.judge import FakeJudgeModel
-from promptatron.evals.schemas import EvaluationRequest
-from promptatron.store import db, ddb_items
-from promptatron.store.ddb_history import DynamoHistoryRepo
-from promptatron.store.repo import SqliteHistoryRepo
+from evalharness.config import Settings
+from evalharness.engine import runner
+from evalharness.engine.fake_model import FakeModel, Text
+from evalharness.engine.schemas import RunRequest
+from evalharness.errors import BadRequestError, NotFoundError
+from evalharness.evals import engine as evals_engine
+from evalharness.evals.judge import FakeJudgeModel
+from evalharness.evals.schemas import EvaluationRequest
+from evalharness.store import db, ddb_items
+from evalharness.store.ddb_history import DynamoHistoryRepo
+from evalharness.store.repo import SqliteHistoryRepo
 from tests.fake_table import FakeTable
 
 BASE_TS = datetime(2026, 8, 12, 9, 0, 0, tzinfo=UTC)
@@ -504,7 +504,7 @@ def test_an_evaluation_lands_in_the_contract_item_shape(ddb_repo, table):
 
 def test_a_run_the_worker_wrote_reads_back_through_the_repository(ddb_repo, table):
     """The whole point of reusing the shapes: one reader for both writers."""
-    from promptatron.worker.ddb import DynamoEvalStore, unwrap
+    from evalharness.worker.ddb import DynamoEvalStore, unwrap
 
     class _Client:
         def put_item(self, TableName, Item, **kwargs):  # noqa: N803 - boto3 spelling

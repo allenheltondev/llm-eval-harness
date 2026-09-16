@@ -1,4 +1,4 @@
-# Promptatron 3000 -- Config Store API (AWS SAM)
+# LLM Eval Harness -- Config Store API (AWS SAM)
 
 Serverless config store for scenarios: metadata, system/user prompts, tools, and
 datasets, backed by a single DynamoDB table and fronted by an API Gateway REST
@@ -56,7 +56,7 @@ sam build
 sam deploy
 ```
 
-`samconfig.toml` is checked into the repo (stack name `promptatron-config`, non-interactive
+`samconfig.toml` is checked into the repo (stack name `llm-eval-harness`, non-interactive
 deploy) -- edit its `region` before your first deploy. From the repo root, `make deploy-api` does
 `npm ci && sam build && sam deploy` and then seeds the table in one step; `sam deploy --guided`
 still works if you want to override a parameter interactively.

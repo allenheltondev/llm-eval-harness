@@ -8,16 +8,16 @@ without touching AWS.
 
 import pytest
 
-from promptatron.config import Settings
-from promptatron.engine.fake_model import Error, Text
-from promptatron.evals import grader, metrics, rubrics
-from promptatron.evals.judge import (
+from evalharness.config import Settings
+from evalharness.engine.fake_model import Error, Text
+from evalharness.evals import grader, metrics, rubrics
+from evalharness.evals.judge import (
     STRUCTURED_OUTPUT_TOOL_NAME,
     FakeJudgeModel,
     build_judge_model,
 )
-from promptatron.evals.outcomes import RunOutcome
-from promptatron.evals.schemas import GraderConfig
+from evalharness.evals.outcomes import RunOutcome
+from evalharness.evals.schemas import GraderConfig
 
 
 def outcome(index: int, output: str, transcript: list | None = None) -> RunOutcome:

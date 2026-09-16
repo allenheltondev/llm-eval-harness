@@ -1490,7 +1490,7 @@ wheels = [
 ]
 
 [[package]]
-name = "promptatron-server"
+name = "llm-eval-harness-server"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

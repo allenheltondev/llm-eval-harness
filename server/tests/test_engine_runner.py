@@ -1,4 +1,4 @@
-"""Tests for the run engine (promptatron.engine.runner).
+"""Tests for the run engine (evalharness.engine.runner).
 
 Everything runs against the scripted ``FakeModel`` driven through a *real*
 ``strands.Agent`` with the real ported tools -- no AWS calls anywhere.
@@ -16,10 +16,10 @@ from botocore.exceptions import ClientError
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
-from promptatron.config import Settings
-from promptatron.configstore.client import ConfigStoreClient
-from promptatron.engine import runner
-from promptatron.engine.events import (
+from evalharness.config import Settings
+from evalharness.configstore.client import ConfigStoreClient
+from evalharness.engine import runner
+from evalharness.engine.events import (
     ErrorEvent,
     MetricsEvent,
     RunCompleteEvent,
@@ -29,7 +29,7 @@ from promptatron.engine.events import (
     ToolResultEvent,
     ToolUseStartEvent,
 )
-from promptatron.engine.fake_model import (
+from evalharness.engine.fake_model import (
     Error,
     FakeModel,
     GuardrailTrace,
@@ -37,10 +37,10 @@ from promptatron.engine.fake_model import (
     Text,
     ToolUseStep,
 )
-from promptatron.engine.model_factory import build_model, classify_error
-from promptatron.engine.schemas import RunRequest
-from promptatron.errors import BadRequestError
-from promptatron.store import db, history
+from evalharness.engine.model_factory import build_model, classify_error
+from evalharness.engine.schemas import RunRequest
+from evalharness.errors import BadRequestError
+from evalharness.store import db, history
 
 CONFIG_BASE_URL = "https://configstore.test"
 
@@ -574,7 +574,7 @@ async def test_a_custom_session_factory_is_used_for_persistence(initialized_db, 
 
 
 # --------------------------------------------------------------------------- #
-# Tool-result content-block unwrapping (promptatron.engine.runner._tool_output
+# Tool-result content-block unwrapping (evalharness.engine.runner._tool_output
 # / _tool_error / _stringify): the mapping from a Strands ToolResult's content
 # blocks onto the flat value the transcript actually stores.
 # --------------------------------------------------------------------------- #

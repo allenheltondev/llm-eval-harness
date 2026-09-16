@@ -1,6 +1,6 @@
 /**
  * ModelPanel driven by a scripted `scenarioStore` — in particular the
- * error path (no AWS creds / PROMPTATRON_FAKE_MODEL dev runs), where the
+ * error path (no AWS creds / EVALHARNESS_FAKE_MODEL dev runs), where the
  * catalog never loads and a model id must be typeable by hand — and the
  * multi-provider grouping (unconfigured / unreachable sources).
  */

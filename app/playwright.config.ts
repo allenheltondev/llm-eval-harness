@@ -16,7 +16,7 @@ const PREINSTALLED_CHROMIUM = '/opt/pw-browsers/chromium'
  * `CONFIG_API_URL`): the Scenarios tab shows its "not reachable" notice and
  * scenario pickers stay empty, and `/api/v1/models` fails too (no AWS
  * credentials in this environment) — specs must not depend on scenario or
- * catalog data. `PROMPTATRON_FAKE_MODEL=1` gives full run/eval functionality
+ * catalog data. `EVALHARNESS_FAKE_MODEL=1` gives full run/eval functionality
  * with zero AWS calls (a scripted model *and* judge).
  *
  * Chromium is preinstalled in this environment at a revision `@playwright/test`
@@ -74,11 +74,11 @@ export default defineConfig({
       // open connections — a later pooled connection would reopen the
       // (now-recreated-empty) path and see "no such table". Deleting before
       // `uv run` even starts is the only ordering that is actually hermetic.
-      command: `rm -f ${E2E_DB_PATH} ${E2E_DB_PATH}-wal ${E2E_DB_PATH}-shm && uv run uvicorn promptatron.main:app --port 8000`,
+      command: `rm -f ${E2E_DB_PATH} ${E2E_DB_PATH}-wal ${E2E_DB_PATH}-shm && uv run uvicorn evalharness.main:app --port 8000`,
       cwd: '../server',
       env: {
-        PROMPTATRON_FAKE_MODEL: '1',
-        PROMPTATRON_DB_PATH: E2E_DB_PATH
+        EVALHARNESS_FAKE_MODEL: '1',
+        EVALHARNESS_DB_PATH: E2E_DB_PATH
       },
       url: 'http://localhost:8000/api/v1/health',
       reuseExistingServer: false,

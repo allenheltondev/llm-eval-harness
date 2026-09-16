@@ -14,20 +14,20 @@ from fastapi import FastAPI
 from sqlmodel import Session
 from strands.models.openai import OpenAIModel
 
-from promptatron.config import Settings
-from promptatron.configstore.client import ConfigStoreClient
-from promptatron.engine.fake_model import FakeModel, Text
-from promptatron.engine.schemas import RunRequest
-from promptatron.errors import BadRequestError, register_exception_handlers
-from promptatron.evals import engine as evals_engine
-from promptatron.evals import grader
-from promptatron.evals.judge import FakeJudgeModel, build_judge_model, call_judge_factory
-from promptatron.evals.outcomes import RunOutcome
-from promptatron.evals.schemas import EvaluationRequest, GraderConfig
-from promptatron.routers import runs
-from promptatron.routers.scenarios import get_config_store_client
-from promptatron.store import db, history
-from promptatron.worker import interfaces
+from evalharness.config import Settings
+from evalharness.configstore.client import ConfigStoreClient
+from evalharness.engine.fake_model import FakeModel, Text
+from evalharness.engine.schemas import RunRequest
+from evalharness.errors import BadRequestError, register_exception_handlers
+from evalharness.evals import engine as evals_engine
+from evalharness.evals import grader
+from evalharness.evals.judge import FakeJudgeModel, build_judge_model, call_judge_factory
+from evalharness.evals.outcomes import RunOutcome
+from evalharness.evals.schemas import EvaluationRequest, GraderConfig
+from evalharness.routers import runs
+from evalharness.routers.scenarios import get_config_store_client
+from evalharness.store import db, history
+from evalharness.worker import interfaces
 
 
 def settings(**overrides) -> Settings:

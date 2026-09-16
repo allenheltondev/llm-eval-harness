@@ -6,9 +6,9 @@ import httpx
 import pytest
 import respx
 
-from promptatron.configstore.client import ConfigStoreClient
-from promptatron.errors import BadRequestError, NotFoundError, UpstreamError
-from promptatron.schemas.scenario import (
+from evalharness.configstore.client import ConfigStoreClient
+from evalharness.errors import BadRequestError, NotFoundError, UpstreamError
+from evalharness.schemas.scenario import (
     DatasetCreateRequest,
     DatasetUpdateRequest,
     PromptUpdateRequest,
@@ -37,7 +37,7 @@ def _no_sleep(monkeypatch):
     async def _instant_sleep(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr("promptatron.configstore.client.asyncio.sleep", _instant_sleep)
+    monkeypatch.setattr("evalharness.configstore.client.asyncio.sleep", _instant_sleep)
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +164,7 @@ async def test_400_maps_to_bad_request_error(client: ConfigStoreClient):
         return_value=httpx.Response(400, json={"message": "name is required"})
     )
 
-    from promptatron.schemas.scenario import ScenarioCreateRequest
+    from evalharness.schemas.scenario import ScenarioCreateRequest
 
     with pytest.raises(BadRequestError) as exc_info:
         await client.create_scenario(ScenarioCreateRequest(name="x"))
@@ -236,7 +236,7 @@ async def test_get_scenario_cache_expires_after_the_ttl(client: ConfigStoreClien
 
     clock = {"now": 1000.0}
     monkeypatch.setattr(
-        "promptatron.configstore.client.time.monotonic", lambda: clock["now"]
+        "evalharness.configstore.client.time.monotonic", lambda: clock["now"]
     )
 
     await client.get_scenario("fraud-detection-comprehensive")
@@ -309,7 +309,7 @@ async def test_list_cache_invalidated_after_create_scenario(client: ConfigStoreC
     hydrated = _fixture("scenario-hydrated.json")
     respx.post(f"{BASE_URL}/scenarios").mock(return_value=httpx.Response(201, json=hydrated))
 
-    from promptatron.schemas.scenario import ScenarioCreateRequest
+    from evalharness.schemas.scenario import ScenarioCreateRequest
 
     await client.list_scenarios()
     await client.create_scenario(ScenarioCreateRequest(name="New Scenario"))
@@ -400,7 +400,7 @@ async def test_delete_prompt_round_trip_and_cache_invalidation(client: ConfigSto
 
 @respx.mock
 async def test_create_prompt_round_trip_and_cache_invalidation(client: ConfigStoreClient):
-    from promptatron.schemas.scenario import PromptCreateRequest
+    from evalharness.schemas.scenario import PromptCreateRequest
 
     fixture = _fixture("scenario-hydrated.json")
     get_route = respx.get(f"{BASE_URL}/scenarios/fraud-detection-comprehensive").mock(
@@ -553,7 +553,7 @@ async def test_create_scenario_actually_sends_the_payload_body(client: ConfigSto
         return_value=httpx.Response(201, json=hydrated)
     )
 
-    from promptatron.schemas.scenario import ScenarioCreateRequest
+    from evalharness.schemas.scenario import ScenarioCreateRequest
 
     await client.create_scenario(ScenarioCreateRequest(name="New One", description="desc"))
 

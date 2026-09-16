@@ -1,6 +1,6 @@
 /**
  * @fileoverview Chad, present at all times as a floating companion — a
- * Clippy for the Promptatron. He watches `runStore` and reacts: his face
+ * Clippy for the LLM Eval Harness. He watches `runStore` and reacts: his face
  * mirrors `selectRobotMood` (the same mood the header mascot renders) and he
  * pops a short quip in a speech bubble whenever the run status *changes*.
  *

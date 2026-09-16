@@ -70,14 +70,14 @@ acknowledgment. Exact async mechanics are the infra work item's to pin down and
 report (this is the one unproven-by-reference area — bedrock-agentcore Python SDK
 `@app.async_task` pattern or equivalent).
 
-The worker reuses `promptatron`'s existing engine/evals/tools code; the ONLY
+The worker reuses `evalharness`'s existing engine/evals/tools code; the ONLY
 behavioral difference is the emitter (DDB writes instead of asyncio queue) and
 the store (DDB items instead of SQLite). The eval engine gets an emitter/store
 seam to make that swap injectable.
 
 ## Configuration
 
-Server (pydantic-settings, `PROMPTATRON_` prefix):
+Server (pydantic-settings, `EVALHARNESS_` prefix):
 - `eval_runtime_arn: str | None` — AgentCore runtime ARN; None = cloud lane unavailable.
 - `eval_table: str | None` — DynamoDB table name (same table as the config store).
 

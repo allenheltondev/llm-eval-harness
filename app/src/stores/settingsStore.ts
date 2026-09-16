@@ -2,14 +2,14 @@
  * UI preferences. Nothing here is sent to the server — it only shapes what the
  * app renders and what it pre-fills forms with.
  *
- * Persisted to localStorage under `promptatron.settings.v1`.
+ * Persisted to localStorage under `evalharness.settings.v1`.
  */
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 /** localStorage key. Bump the suffix when the shape changes incompatibly. */
-export const SETTINGS_STORAGE_KEY = 'promptatron.settings.v1'
+export const SETTINGS_STORAGE_KEY = 'evalharness.settings.v1'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 

@@ -17,13 +17,13 @@ from fastapi import FastAPI
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
-from promptatron.engine.fake_model import Error, FakeModel, Text, ToolUseStep
-from promptatron.errors import register_exception_handlers
-from promptatron.evals import engine as evals_engine
-from promptatron.evals import jobs as evals_jobs
-from promptatron.evals.judge import FakeJudgeModel, get_judge_factory
-from promptatron.routers import runs
-from promptatron.store import db, history
+from evalharness.engine.fake_model import Error, FakeModel, Text, ToolUseStep
+from evalharness.errors import register_exception_handlers
+from evalharness.evals import engine as evals_engine
+from evalharness.evals import jobs as evals_jobs
+from evalharness.evals.judge import FakeJudgeModel, get_judge_factory
+from evalharness.routers import runs
+from evalharness.store import db, history
 
 STABLE_ANSWER = "Order B456 is delayed; escalate to the carrier."
 

@@ -76,7 +76,7 @@ jobs:
       - run: uv run ruff check .
 
       # fail_under=97 in pyproject.toml gates the step automatically
-      - run: uv run pytest --cov=promptatron --cov-report=term-missing
+      - run: uv run pytest --cov=evalharness --cov-report=term-missing
 
   # Mutation testing: advisory quality signal, one job per package so the
   # slow runs (~2-10 min each) parallelize and never block the fast gates.

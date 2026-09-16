@@ -1,12 +1,12 @@
-"""Tests for the run/evaluation history repository functions (promptatron.store.history)."""
+"""Tests for the run/evaluation history repository functions (evalharness.store.history)."""
 
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlmodel import Session
 
-from promptatron.errors import NotFoundError
-from promptatron.store import db, history
+from evalharness.errors import NotFoundError
+from evalharness.store import db, history
 
 
 @pytest.fixture
@@ -260,7 +260,7 @@ def test_list_evaluations_paginates_by_cursor(session):
 
 
 def test_clamp_limit_boundaries():
-    from promptatron.store.history import _clamp_limit
+    from evalharness.store.history import _clamp_limit
 
     assert _clamp_limit(1) == 1
     assert _clamp_limit(0) == 1
@@ -287,14 +287,14 @@ def test_evaluation_record_carries_progress_and_error(session):
 
 
 def test_an_invalid_run_cursor_is_a_bad_request(session):
-    from promptatron.errors import BadRequestError
+    from evalharness.errors import BadRequestError
 
     with pytest.raises(BadRequestError):
         history.list_runs(session, cursor="!!!not-base64!!!")
 
 
 def test_an_invalid_evaluation_cursor_is_a_bad_request(session):
-    from promptatron.errors import BadRequestError
+    from evalharness.errors import BadRequestError
 
     with pytest.raises(BadRequestError):
         history.list_evaluations(session, cursor="!!!not-base64!!!")

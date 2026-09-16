@@ -57,7 +57,7 @@ const creators = [
 
 const resources = {
   youtube: 'https://youtube.com/@nullchecktv',
-  github: 'https://github.com/andmoredev/promptatron-3000'
+  github: 'https://github.com/allenheltondev/llm-eval-harness'
 }
 
 export default function AboutPage() {

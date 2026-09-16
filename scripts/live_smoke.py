@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Gated, real-AWS smoke test for the Promptatron server.
+"""Gated, real-AWS smoke test for the LLM Eval Harness server.
 
 Exercises health, the model catalog, a streamed run, a determinism
 evaluation, and guardrail CRUD against a *live* server -- i.e. one started
-without ``PROMPTATRON_FAKE_MODEL``, with real AWS credentials in its
+without ``EVALHARNESS_FAKE_MODEL``, with real AWS credentials in its
 environment, that will make real (cheap, small) Amazon Bedrock calls and
 therefore cost real money.
 
@@ -20,7 +20,7 @@ Usage::
 Environment
 -----------
 RUN_LIVE_BEDROCK    Required, must be "1". The whole point of this script.
-PROMPTATRON_URL     Base URL of the running server. Default http://localhost:8000.
+EVALHARNESS_URL     Base URL of the running server. Default http://localhost:8000.
 LIVE_SMOKE_MODEL     Model id for the run + determinism steps.
                       Default "amazon.nova-lite-v1:0" (cheap, fast, streams).
 LIVE_SMOKE_GRADER     Judge model id for the determinism step.
@@ -112,7 +112,7 @@ def step_health(state: SmokeState, client: httpx.Client) -> None:
 
     creds = body.get("aws", {}).get("credentials")
     print(f"      aws.credentials={creds!r} (this script cannot detect fake-model mode remotely;")
-    print("      make sure the server was started WITHOUT PROMPTATRON_FAKE_MODEL=1)")
+    print("      make sure the server was started WITHOUT EVALHARNESS_FAKE_MODEL=1)")
 
 
 def step_models(state: SmokeState, client: httpx.Client) -> None:
@@ -273,7 +273,7 @@ def print_cost_estimate(state: SmokeState) -> None:
 def main() -> int:
     check_guard()
 
-    base_url = os.environ.get("PROMPTATRON_URL", "http://localhost:8000")
+    base_url = os.environ.get("EVALHARNESS_URL", "http://localhost:8000")
     model_id = os.environ.get("LIVE_SMOKE_MODEL", DEFAULT_MODEL_ID)
     grader_model_id = os.environ.get("LIVE_SMOKE_GRADER", DEFAULT_GRADER_MODEL_ID)
 

@@ -11,6 +11,6 @@ export interface Observability {
 export const createObservability = (serviceName: string): Observability => {
   const logger = new Logger({ serviceName });
   const tracer = new Tracer({ serviceName });
-  const metrics = new Metrics({ namespace: 'Promptatron3000', serviceName });
+  const metrics = new Metrics({ namespace: 'LlmEvalHarness', serviceName });
   return { logger, tracer, metrics };
 };

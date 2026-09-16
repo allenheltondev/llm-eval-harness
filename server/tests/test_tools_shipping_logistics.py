@@ -5,7 +5,7 @@ api/seed/fixtures/shipping-logistics/seed-data.json (order B456) and from
 app/src/scenarios/shipping-logistics/tool-usage-examples.md; where the two
 disagreed on response *shape*, the actual JS handler source
 (app/src/scenarios/shipping-logistics/tools/*.js) is authoritative -- see the
-module docstring in promptatron/tools/shipping_logistics.py for specifics.
+module docstring in evalharness/tools/shipping_logistics.py for specifics.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 import itertools
 import uuid
 
-from promptatron.tools import shipping_logistics as sl
+from evalharness.tools import shipping_logistics as sl
 
 ORDER_ID = "B456"
 
@@ -395,7 +395,7 @@ class TestFixtureLoading:
         fixture_file = tmp_path / "seed-data.json"
         fixture_file.write_text(json.dumps({"orders": {"Q123": {"carrier": {}}}}))
 
-        monkeypatch.setenv("PROMPTATRON_FIXTURES_DIR", str(tmp_path))
+        monkeypatch.setenv("EVALHARNESS_FIXTURES_DIR", str(tmp_path))
         monkeypatch.setattr(sl, "_orders_cache", None)
 
         orders = sl._load_orders()

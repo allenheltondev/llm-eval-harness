@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Serverless config store for Promptatron 3000 (scenarios, prompts, tools, datasets) --
+  Serverless config store for LLM Eval Harness (scenarios, prompts, tools, datasets) --
   API Gateway REST API + Lambda (Node.js 22, TypeScript via esbuild, Powertools for AWS Lambda) + single-table DynamoDB.
 
 Parameters:
@@ -17,7 +17,7 @@ Parameters:
     Type: String
     Default: ''
     Description: >
-      S3 key (within EvalWorkerArtifactBucket) of the eval worker's CodeZip
+      S3 key (within ArtifactBucket) of the eval worker's CodeZip
       artifact. Empty (the default) means the worker is not deployed and the
       cloud lane stays unavailable -- the rest of the stack is unaffected.
 
@@ -52,7 +52,7 @@ Parameters:
     Type: String
     Default: ''
     Description: >
-      S3 key (within EvalWorkerArtifactBucket, which doubles as this stack's
+      S3 key (within ArtifactBucket, which doubles as this stack's
       artifact bucket) of the FastAPI server's Lambda zip. Empty (the default)
       means the server is not deployed -- no Lambda, no bucket, no CloudFront --
       and the config store deploys exactly as it did before.
@@ -105,7 +105,7 @@ Parameters:
     Type: String
     Default: '[]'
     Description: >
-      JSON array for PROMPTATRON_CORS_ORIGINS. Default is the empty list: the
+      JSON array for EVALHARNESS_CORS_ORIGINS. Default is the empty list: the
       SPA and the API share one CloudFront origin, so the browser never makes a
       cross-origin request and no Access-Control-Allow-Origin is needed. An
       empty list is therefore the tightest correct value -- it also means a page
@@ -506,7 +506,16 @@ Resources:
   # Always created (not conditional) so the first `make deploy-worker` has
   # somewhere to upload before the runtime exists. Versioned because the
   # AgentCore runtime holds a reference to a specific key.
-  EvalWorkerArtifactBucket:
+  #
+  # Named ArtifactBucket (not EvalWorkerArtifactBucket): it holds both the
+  # eval worker's and the FastAPI server's Lambda zips, and the logical id
+  # must stay short -- CloudFormation's auto-generated bucket name is
+  # `{stack}-{logicalid}-{~13 char suffix}`, and S3 bucket names cap out at
+  # 63 characters. With the longest stack name in use
+  # (`llm-eval-harness-prod`, 27 chars) the old
+  # `EvalWorkerArtifactBucket` id (24 chars) produced a 66-character name --
+  # over the limit. `ArtifactBucket` (14 chars) keeps the worst case at 56.
+  ArtifactBucket:
     Type: AWS::S3::Bucket
     Condition: CreatesArtifactBucket
     Properties:
@@ -535,13 +544,13 @@ Resources:
     Properties:
       # AgentRuntimeName is matched against [a-zA-Z][a-zA-Z0-9_]{0,47} -- no
       # hyphens, so this cannot be derived from ${AWS::StackName}.
-      AgentRuntimeName: promptatron_eval_worker
-      Description: Executes Promptatron evaluations and persists them to DynamoDB
+      AgentRuntimeName: evalharness_eval_worker
+      Description: Executes LLM Eval Harness evaluations and persists them to DynamoDB
       AgentRuntimeArtifact:
         CodeConfiguration:
           Code:
             S3:
-              Bucket: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref EvalWorkerArtifactBucket]
+              Bucket: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
               Prefix: !Ref EvalWorkerArtifactKey
           # The zip's root-level entry module. AgentCore executes it; it starts
           # the bedrock-agentcore SDK's server on :8080 (/invocations + /ping).
@@ -559,16 +568,16 @@ Resources:
       EnvironmentVariables:
         # Worker-owned (docs/cloud-evals.md "Configuration").
         TABLE_NAME: !Ref ScenariosTable
-        # Consumed by promptatron.config.Settings (PROMPTATRON_ prefix), which
+        # Consumed by evalharness.config.Settings (EVALHARNESS_ prefix), which
         # evals.engine.default_deps() builds from the environment because the
         # worker has no FastAPI request to hang dependencies off.
-        PROMPTATRON_AWS_REGION: !Ref AWS::Region
+        EVALHARNESS_AWS_REGION: !Ref AWS::Region
         # The container filesystem is not a durable or necessarily writable
         # place; /tmp is. This SQLite file is scratch space for the run engine,
         # which writes each run there before save_run mirrors it to DynamoDB.
-        PROMPTATRON_DB_PATH: /tmp/promptatron-worker.db
-        PROMPTATRON_CONFIG_API_URL: !Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api
-        PROMPTATRON_CONFIG_API_KEY: !Ref EvalWorkerConfigApiKey
+        EVALHARNESS_DB_PATH: /tmp/evalharness-worker.db
+        EVALHARNESS_CONFIG_API_URL: !Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api
+        EVALHARNESS_CONFIG_API_KEY: !Ref EvalWorkerConfigApiKey
 
   EvalWorkerRole:
     Type: AWS::IAM::Role
@@ -594,10 +603,10 @@ Resources:
               # Read the CodeZip artifact at create/update time.
               - Effect: Allow
                 Action: s3:GetObject
-                Resource: !Sub ['arn:${AWS::Partition}:s3:::${B}/*', {B: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref EvalWorkerArtifactBucket]}]
+                Resource: !Sub ['arn:${AWS::Partition}:s3:::${B}/*', {B: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]}]
               - Effect: Allow
                 Action: s3:ListBucket
-                Resource: !Sub ['arn:${AWS::Partition}:s3:::${B}', {B: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref EvalWorkerArtifactBucket]}]
+                Resource: !Sub ['arn:${AWS::Partition}:s3:::${B}', {B: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]}]
               # The evaluation itself: the model under test, plus the judge.
               - Effect: Allow
                 Action:
@@ -672,7 +681,7 @@ Resources:
       SkipBuild: true
     Properties:
       CodeUri:
-        Bucket: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref EvalWorkerArtifactBucket]
+        Bucket: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
         Key: !Ref ServerArtifactKey
       # `run.sh` at the root of the zip, exec'd by the adapter's bootstrap.
       Handler: run.sh
@@ -703,35 +712,35 @@ Resources:
           # start pay for a config-store probe and a provider probe first.
           #
           # -- application --------------------------------------------------- #
-          PROMPTATRON_AWS_REGION: !Ref AWS::Region
+          EVALHARNESS_AWS_REGION: !Ref AWS::Region
           # /var/task is read-only. The run engine still opens a SQLite file for
           # scratch even when history lives in DynamoDB, so give it /tmp.
-          PROMPTATRON_DB_PATH: /tmp/promptatron.db
+          EVALHARNESS_DB_PATH: /tmp/evalharness.db
           # Deployed shape (docs/serverless-deploy.md): DynamoDB history, cloud
           # lane only. Both are explicit rather than left to `auto` so the
           # behaviour does not silently depend on Lambda env-var detection.
-          PROMPTATRON_HISTORY_BACKEND: dynamodb
-          PROMPTATRON_LOCAL_EVALS: 'off'
-          PROMPTATRON_EVAL_TABLE: !Ref ScenariosTable
-          PROMPTATRON_EVAL_RUNTIME_ARN: !If
+          EVALHARNESS_HISTORY_BACKEND: dynamodb
+          EVALHARNESS_LOCAL_EVALS: 'off'
+          EVALHARNESS_EVAL_TABLE: !Ref ScenariosTable
+          EVALHARNESS_EVAL_RUNTIME_ARN: !If
             - ServerHasEvalWorker
             - !GetAtt EvalWorkerRuntime.AgentRuntimeArn
             - !Ref AWS::NoValue
-          PROMPTATRON_CONFIG_API_URL: !Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api
+          EVALHARNESS_CONFIG_API_URL: !Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api
           # NOT set. CloudFormation cannot read an AWS::ApiGateway::ApiKey's
           # value, and routing the secret through a template parameter would put
           # it in the CLI history of every deploy for no gain. The server
           # already has a cached, fail-soft discovery path built for exactly
-          # this (promptatron.stack_discovery), so discovery stays ON and fills
+          # this (evalharness.stack_discovery), so discovery stays ON and fills
           # in this one field; the three values CloudFormation *does* know are
           # still injected above, so the hot path never depends on discovery
           # succeeding. Cost: two read-only IAM actions, granted narrowly below.
-          PROMPTATRON_STACK_DISCOVERY: 'true'
+          EVALHARNESS_STACK_DISCOVERY: 'true'
           # Discovery reads *this* stack, whatever it was named.
-          PROMPTATRON_STACK_NAME: !Ref AWS::StackName
+          EVALHARNESS_STACK_NAME: !Ref AWS::StackName
           # Empty by default: SPA and API share one CloudFront origin, so
           # nothing the browser does is cross-origin. See the parameter.
-          PROMPTATRON_CORS_ORIGINS: !Ref ServerCorsOrigins
+          EVALHARNESS_CORS_ORIGINS: !Ref ServerCorsOrigins
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -746,13 +755,13 @@ Resources:
               Resource:
                 - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
                 - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
-            # GET /api/v1/models -- promptatron.awscat.catalog.
+            # GET /api/v1/models -- evalharness.awscat.catalog.
             - Effect: Allow
               Action:
                 - bedrock:ListFoundationModels
                 - bedrock:ListInferenceProfiles
               Resource: '*'
-            # The guardrails router is full CRUD (promptatron/guardrails/service.py),
+            # The guardrails router is full CRUD (evalharness/guardrails/service.py),
             # unlike the worker, which only applies them.
             - Effect: Allow
               Action:
@@ -888,7 +897,7 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: !Sub Promptatron 3000 (${AWS::StackName}) -- SPA + API
+        Comment: !Sub LLM Eval Harness (${AWS::StackName}) -- SPA + API
         HttpVersion: http2and3
         DefaultRootObject: index.html
         Origins:
@@ -950,7 +959,7 @@ Resources:
     Type: AWS::ApiGateway::ApiKey
     Properties:
       Name: !Sub ${AWS::StackName}-key
-      Description: API key required by all Promptatron 3000 config-store endpoints (see openapi.yaml `security`).
+      Description: API key required by all LLM Eval Harness config-store endpoints (see openapi.yaml `security`).
       Enabled: true
       StageKeys:
         - RestApiId: !Ref Api
@@ -990,20 +999,23 @@ Outputs:
     Description: DynamoDB table name (pass to the seeder as --table or $TABLE_NAME)
     Value: !Ref ScenariosTable
   EvalWorkerArtifactBucket:
-    Description: S3 bucket the eval worker's CodeZip artifact is uploaded to
-    Value: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref EvalWorkerArtifactBucket]
+    Description: >
+      S3 bucket the eval worker's CodeZip artifact is uploaded to (same bucket
+      as the ArtifactBucket output below; kept under this name too because
+      `make deploy-worker` looks it up by it).
+    Value: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
   ArtifactBucket:
     Description: >
-      Alias of EvalWorkerArtifactBucket. The same bucket holds BOTH deployable
-      zips (eval-worker/<sha>.zip and server/<sha>.zip); the neutral name is
-      what `make deploy` looks up.
-    Value: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref EvalWorkerArtifactBucket]
+      S3 bucket this stack's deployable zips are uploaded to. It holds BOTH
+      (eval-worker/<sha>.zip and server/<sha>.zip); this neutral name is what
+      `make deploy` looks up.
+    Value: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
   EvalWorkerRuntimeArn:
     Condition: DeployEvalWorker
     Description: >
       AgentCore Runtime ARN for the cloud evaluation lane. Set this as
-      PROMPTATRON_EVAL_RUNTIME_ARN on the FastAPI server (with
-      PROMPTATRON_EVAL_TABLE=TableName) to enable the cloud lane.
+      EVALHARNESS_EVAL_RUNTIME_ARN on the FastAPI server (with
+      EVALHARNESS_EVAL_TABLE=TableName) to enable the cloud lane.
     Value: !GetAtt EvalWorkerRuntime.AgentRuntimeArn
   EvalWorkerRuntimeId:
     Condition: DeployEvalWorker

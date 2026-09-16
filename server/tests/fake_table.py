@@ -9,7 +9,7 @@ AWS.
 Shared by the cloud-lane tests (which read items the worker wrote) and the
 history-backend contract suite (which reads items the server itself wrote), for
 the same reason the production code shares
-:mod:`promptatron.store.ddb_items`: one table double, one set of item shapes.
+:mod:`evalharness.store.ddb_items`: one table double, one set of item shapes.
 
 What it does *not* model: consistency, capacity, transactions, projections, or
 any condition/update expression -- the server-side code uses none of those.
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from promptatron.store.ddb_items import GSI1_PK, GSI1_SK
+from evalharness.store.ddb_items import GSI1_PK, GSI1_SK
 
 
 def matches(condition: Any, item: dict[str, Any]) -> bool:

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the promptatron test suite."""
+"""Shared pytest fixtures for the evalharness test suite."""
 
 from collections.abc import AsyncIterator
 
@@ -6,19 +6,19 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from promptatron import models_catalog, stack_discovery
-from promptatron.errors import BadRequestError
-from promptatron.main import create_app
+from evalharness import models_catalog, stack_discovery
+from evalharness.errors import BadRequestError
+from evalharness.main import create_app
 
 #: Every env var that can switch a non-Bedrock provider on. Cleared for every
 #: test so the suite behaves identically on a laptop that happens to export
 #: ANTHROPIC_API_KEY or run an Ollama -- no test may reach the network.
 PROVIDER_ENV_VARS = (
-    "PROMPTATRON_ANTHROPIC_API_KEY",
+    "EVALHARNESS_ANTHROPIC_API_KEY",
     "ANTHROPIC_API_KEY",
-    "PROMPTATRON_OPENAI_API_KEY",
+    "EVALHARNESS_OPENAI_API_KEY",
     "OPENAI_API_KEY",
-    "PROMPTATRON_OLLAMA_BASE_URL",
+    "EVALHARNESS_OLLAMA_BASE_URL",
     "OLLAMA_HOST",
 )
 
@@ -37,14 +37,14 @@ def isolated_providers(monkeypatch):
 def isolated_stack_discovery(monkeypatch):
     """No test talks to CloudFormation/API Gateway unless it opts in.
 
-    ``PROMPTATRON_STACK_DISCOVERY`` defaults on in real usage, but every test
+    ``EVALHARNESS_STACK_DISCOVERY`` defaults on in real usage, but every test
     that doesn't explicitly enable it (via ``Settings(stack_discovery=True)``
     or by overriding this env var) must stay offline -- the sandbox's AWS
     credentials are real enough for boto3 to attempt a live call otherwise.
     The process-lifetime cache is also cleared on both sides so no test's
     discovery result leaks into another's.
     """
-    monkeypatch.setenv("PROMPTATRON_STACK_DISCOVERY", "false")
+    monkeypatch.setenv("EVALHARNESS_STACK_DISCOVERY", "false")
     stack_discovery.refresh()
     yield
     stack_discovery.refresh()
@@ -65,7 +65,7 @@ def isolated_tool_state():
     the same literal id. Clearing both before every test removes the
     dependency on process lifetime entirely.
     """
-    from promptatron.tools import fraud_detection, shipping_logistics
+    from evalharness.tools import fraud_detection, shipping_logistics
 
     fraud_detection._ACCOUNT_RISK.clear()
     shipping_logistics._ACTIONS.clear()

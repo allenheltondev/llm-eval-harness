@@ -7,7 +7,7 @@
 # independent stacks), so it MUST reach `sam deploy` itself -- samconfig.toml
 # carries its own stack_name and would otherwise win, silently deploying every
 # environment into the same stack. See SAM_DEPLOY_ARGS below.
-STACK_NAME ?= promptatron-config
+STACK_NAME ?= llm-eval-harness
 # Region for deploys. Empty means "whatever samconfig.toml/AWS_REGION says";
 # CI sets it explicitly so the stack can never land in a surprise region.
 DEPLOY_REGION ?=
@@ -50,15 +50,15 @@ DEPLOY_API_URL ?= /
 # rather run them in two separate terminals (e.g. to keep their logs apart).
 dev:
 	@trap 'kill 0' EXIT INT TERM; \
-	(cd server && uv run uvicorn promptatron.main:app --reload --port 8000) & \
+	(cd server && uv run uvicorn evalharness.main:app --reload --port 8000) & \
 	(cd app && npm run dev) & \
 	wait
 
 # Fake-model mode (zero AWS calls, scripted model + judge):
-#   PROMPTATRON_FAKE_MODEL=1 make dev
+#   EVALHARNESS_FAKE_MODEL=1 make dev
 
 dev-server:
-	cd server && uv run uvicorn promptatron.main:app --reload --port 8000
+	cd server && uv run uvicorn evalharness.main:app --reload --port 8000
 
 dev-app:
 	cd app && npm run dev
@@ -228,8 +228,8 @@ deploy-worker:
 	TABLE=$$(resolve_output TableName); \
 	echo; \
 	echo "Cloud eval lane deployed. Point the server at it:"; \
-	echo "  PROMPTATRON_EVAL_RUNTIME_ARN=$$ARN"; \
-	echo "  PROMPTATRON_EVAL_TABLE=$$TABLE"
+	echo "  EVALHARNESS_EVAL_RUNTIME_ARN=$$ARN"; \
+	echo "  EVALHARNESS_EVAL_TABLE=$$TABLE"
 
 # --------------------------------------------------------------------------- #
 # deployed server + SPA (docs/serverless-deploy-infra.md)
@@ -315,7 +315,7 @@ deploy:
 	echo "Deployed: $$APP_URL"
 
 # Runs just the seeder against an already-deployed table. Requires TABLE_NAME, e.g.:
-#   make seed-api TABLE_NAME=promptatron-config-ScenariosTable-XXXXXXXXXXXX
+#   make seed-api TABLE_NAME=llm-eval-harness-ScenariosTable-XXXXXXXXXXXX
 seed-api:
 	@if [ -z "$(TABLE_NAME)" ]; then \
 		echo "seed-api: TABLE_NAME is required, e.g. make seed-api TABLE_NAME=your-table-name" >&2; \

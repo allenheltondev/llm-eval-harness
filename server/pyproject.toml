@@ -1,7 +1,7 @@
 [project]
-name = "promptatron-server"
+name = "llm-eval-harness-server"
 version = "0.1.0"
-description = "Promptatron server - execution/eval engine for the model-evaluation harness"
+description = "LLM Eval Harness server - execution/eval engine for the model-evaluation harness"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,10 +16,10 @@ dependencies = [
     "aiosqlite>=0.20",
 ]
 
-# The cloud evaluation lane's AgentCore worker (server/promptatron/worker/).
+# The cloud evaluation lane's AgentCore worker (server/evalharness/worker/).
 # Deliberately an extra rather than a base dependency: the SDK drags in
 # OpenTelemetry + MCP + its own uvicorn pin, and only the deployment artifact
-# needs it. `promptatron.worker.agentcore_app` imports cleanly without it, so
+# needs it. `evalharness.worker.agentcore_app` imports cleanly without it, so
 # the test suite exercises the worker without every developer paying for the
 # SDK. Installed by scripts/package-eval-worker.sh into the artifact.
 [project.optional-dependencies]
@@ -42,7 +42,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["promptatron"]
+packages = ["evalharness"]
 
 [tool.ruff]
 line-length = 100
@@ -61,12 +61,12 @@ ignore = ["B008"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-# Coverage is opt-in via the CLI (`uv run pytest --cov=promptatron ...`), not
+# Coverage is opt-in via the CLI (`uv run pytest --cov=evalharness ...`), not
 # wired into addopts here, so a plain `uv run pytest` during local dev stays at
 # its normal (faster) speed. CI's coverage step passes --cov explicitly; see
 # docs/testing.md / the CI workflow for the exact invocation.
 [tool.coverage.run]
-source = ["promptatron"]
+source = ["evalharness"]
 
 [tool.coverage.report]
 # Ratchet, not a target: set to the actual post-gap-fill percentage (97.4%),
@@ -79,11 +79,11 @@ exclude_also = [
     # An abstract/unsupported-by-design method body; the interesting behavior
     # is that it raises, which is what a caller-side test (if any) covers.
     "raise NotImplementedError",
-    # The AgentCore SDK bootstrap in promptatron/worker/agentcore_app.py
+    # The AgentCore SDK bootstrap in evalharness/worker/agentcore_app.py
     # (module-level `app = BedrockAgentCoreApp()` / `@app.entrypoint` wiring
     # and the `if __name__ == "__main__":` boot path) cannot run without the
     # optional `worker` extra installed *and* a real AgentCore Runtime
-    # container -- promptatron.worker.agentcore_app imports cleanly without
+    # container -- evalharness.worker.agentcore_app imports cleanly without
     # either, and `dispatch`/`execute` (everything actually worth testing) are
     # exercised directly. That block is marked inline with the standard
     # `# pragma: no cover` comment (already covered by coverage.py's default
@@ -107,16 +107,16 @@ exclude_also = [
 # nine files generates ~2862 mutants and takes 6.5-8.5 minutes end to end
 # (measured twice; see the mutation-testing report for kill-rate history).
 [tool.mutmut]
-source_paths = ["promptatron"]
+source_paths = ["evalharness"]
 only_mutate = [
-    "promptatron/evals/metrics.py",
-    "promptatron/evals/rubrics.py",
-    "promptatron/engine/mapper.py",
-    "promptatron/engine/events.py",
-    "promptatron/store/history.py",
-    "promptatron/worker/ddb.py",
-    "promptatron/guardrails/translator.py",
-    "promptatron/models_catalog.py",
-    "promptatron/configstore/client.py",
+    "evalharness/evals/metrics.py",
+    "evalharness/evals/rubrics.py",
+    "evalharness/engine/mapper.py",
+    "evalharness/engine/events.py",
+    "evalharness/store/history.py",
+    "evalharness/worker/ddb.py",
+    "evalharness/guardrails/translator.py",
+    "evalharness/models_catalog.py",
+    "evalharness/configstore/client.py",
 ]
 pytest_add_cli_args_test_selection = ["tests/"]

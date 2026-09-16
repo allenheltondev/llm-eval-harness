@@ -5,9 +5,9 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     env: {
-      TABLE_NAME: 'promptatron-table',
+      TABLE_NAME: 'llm-eval-harness-table',
       ORIGIN: '*',
-      POWERTOOLS_SERVICE_NAME: 'promptatron-test',
+      POWERTOOLS_SERVICE_NAME: 'llm-eval-harness-test',
       POWERTOOLS_LOG_LEVEL: 'ERROR',
     },
     coverage: {

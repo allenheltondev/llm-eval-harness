@@ -1,4 +1,4 @@
-"""Tests for promptatron.guardrails.service.GuardrailService.
+"""Tests for evalharness.guardrails.service.GuardrailService.
 
 Uses botocore's Stubber against a real boto3 "bedrock" client so requests
 are validated against the actual service model, and error mapping is
@@ -11,9 +11,9 @@ import boto3
 import pytest
 from botocore.stub import ANY, Stubber
 
-from promptatron.errors import BadRequestError, NotFoundError, UpstreamError
-from promptatron.guardrails.schemas import ContentFilter, ContentPolicy, GuardrailConfig
-from promptatron.guardrails.service import GuardrailService
+from evalharness.errors import BadRequestError, NotFoundError, UpstreamError
+from evalharness.guardrails.schemas import ContentFilter, ContentPolicy, GuardrailConfig
+from evalharness.guardrails.service import GuardrailService
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

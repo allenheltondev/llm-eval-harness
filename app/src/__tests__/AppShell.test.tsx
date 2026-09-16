@@ -54,7 +54,7 @@ describe('AppShell', () => {
   it('renders the header, the mascot and all six tabs', () => {
     render(<AppShell />)
 
-    expect(screen.getByRole('heading', { name: 'Promptatron 3000' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'LLM Eval Harness' })).toBeInTheDocument()
     expect(screen.getByTestId('robot-graphic')).toBeInTheDocument()
 
     const tabs = screen.getAllByRole('tab')

@@ -1,4 +1,4 @@
-"""Tests for promptatron.stack_discovery.
+"""Tests for evalharness.stack_discovery.
 
 Uses botocore's Stubber against real boto3 ``cloudformation``/``apigateway``
 clients so requests are validated against the actual service models (the same
@@ -15,16 +15,16 @@ import boto3
 import pytest
 from botocore.stub import Stubber
 
-from promptatron import stack_discovery
-from promptatron.config import Settings
-from promptatron.stack_discovery import StackConfig, discover, refresh
+from evalharness import stack_discovery
+from evalharness.config import Settings
+from evalharness.stack_discovery import StackConfig, discover, refresh
 
-STACK_NAME = "promptatron-config"
+STACK_NAME = "llm-eval-harness"
 API_ENDPOINT = "https://abc123.execute-api.us-east-1.amazonaws.com/api"
 API_KEY_ID = "apikey123"
 API_KEY_VALUE = "secret-key-value"
-TABLE_NAME = "promptatron-config-store"
-RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/promptatron-evals-abc"
+TABLE_NAME = "llm-eval-harness-store"
+RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/llm-eval-harness-evals-abc"
 
 
 @pytest.fixture(autouse=True)
@@ -155,11 +155,11 @@ def test_stack_missing_degrades_to_all_none_with_one_log_line(monkeypatch, caplo
     stubber.activate()
     _stub_clients(monkeypatch, cfn_client=cfn)
 
-    with caplog.at_level(logging.INFO, logger="promptatron.stack_discovery"):
+    with caplog.at_level(logging.INFO, logger="evalharness.stack_discovery"):
         result = discover(_settings())
 
     assert result == StackConfig()
-    records = [r for r in caplog.records if r.name == "promptatron.stack_discovery"]
+    records = [r for r in caplog.records if r.name == "evalharness.stack_discovery"]
     assert len(records) == 1
     assert records[0].exc_info is None  # no traceback -- this is the normal state
 
@@ -173,11 +173,11 @@ def test_no_credentials_degrades_to_all_none_with_one_log_line(monkeypatch, capl
 
     monkeypatch.setattr(stack_discovery.boto3, "client", _raise_no_credentials)
 
-    with caplog.at_level(logging.INFO, logger="promptatron.stack_discovery"):
+    with caplog.at_level(logging.INFO, logger="evalharness.stack_discovery"):
         result = discover(_settings())
 
     assert result == StackConfig()
-    records = [r for r in caplog.records if r.name == "promptatron.stack_discovery"]
+    records = [r for r in caplog.records if r.name == "evalharness.stack_discovery"]
     assert len(records) == 1
     assert records[0].exc_info is None
 
@@ -226,7 +226,7 @@ def test_get_api_key_failure_degrades_only_that_one_field(monkeypatch, caplog):
 
     _stub_clients(monkeypatch, cfn_client=cfn, apigw_client=apigw)
 
-    with caplog.at_level(logging.WARNING, logger="promptatron.stack_discovery"):
+    with caplog.at_level(logging.WARNING, logger="evalharness.stack_discovery"):
         result = discover(_settings())
 
     assert result.config_api_key is None

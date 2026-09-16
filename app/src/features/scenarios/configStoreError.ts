@@ -2,8 +2,8 @@
  * Detects the one error condition every write path in this feature needs to
  * surface the same way: the FastAPI proxy answering `upstream_error` (502)
  * because the config store is unreachable or unconfigured
- * (`server/promptatron/configstore/client.py` raises `UpstreamError`, mapped
- * by `server/promptatron/errors.py` to `{code: "upstream_error"}`).
+ * (`server/evalharness/configstore/client.py` raises `UpstreamError`, mapped
+ * by `server/evalharness/errors.py` to `{code: "upstream_error"}`).
  *
  * `scenarioStore`'s own `scenariosError` / `detailError` already carry this
  * code for its reads (they run every thrown error through `toStoreError`);

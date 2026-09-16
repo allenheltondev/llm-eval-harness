@@ -2,7 +2,7 @@
 
 Nothing here reaches AWS. DynamoDB is :class:`tests.fake_table.FakeTable` -- an
 in-memory stand-in for a ``boto3`` resource ``Table`` that really does evaluate
-the ``Key(...)`` conditions :mod:`promptatron.evals.ddb_reader` builds, so the
+the ``Key(...)`` conditions :mod:`evalharness.evals.ddb_reader` builds, so the
 key schema and the query shapes are under test and not just mocked away. The one
 place the *real* AWS API shape matters, ``InvokeAgentRuntime``, is exercised
 through botocore's ``Stubber``, which validates parameters against the shipped
@@ -20,19 +20,19 @@ import pytest
 from botocore.stub import Stubber
 from fastapi import FastAPI
 
-from promptatron.config import Settings, get_settings
-from promptatron.errors import register_exception_handlers
-from promptatron.evals import cloud
-from promptatron.evals import jobs as evals_jobs
-from promptatron.evals.ddb_reader import GSI1_PK, GSI1_SK, EvalTable
-from promptatron.routers import health as health_router
-from promptatron.routers import runs
-from promptatron.store import db
-from promptatron.worker.interfaces import session_id_for
+from evalharness.config import Settings, get_settings
+from evalharness.errors import register_exception_handlers
+from evalharness.evals import cloud
+from evalharness.evals import jobs as evals_jobs
+from evalharness.evals.ddb_reader import GSI1_PK, GSI1_SK, EvalTable
+from evalharness.routers import health as health_router
+from evalharness.routers import runs
+from evalharness.store import db
+from evalharness.worker.interfaces import session_id_for
 from tests.fake_table import FakeTable
 
-RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/promptatron-evals-abc"
-TABLE_NAME = "promptatron-config-store"
+RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/llm-eval-harness-evals-abc"
+TABLE_NAME = "llm-eval-harness-store"
 
 
 # --------------------------------------------------------------------------- #
@@ -640,7 +640,7 @@ def test_get_invoker_reuses_the_same_instance_for_the_same_settings():
 
 def test_get_invoker_builds_a_distinct_instance_per_runtime_arn():
     settings_a = Settings(eval_runtime_arn=RUNTIME_ARN, aws_region="us-east-1")
-    other_arn = RUNTIME_ARN.replace("promptatron-evals-abc", "promptatron-evals-xyz")
+    other_arn = RUNTIME_ARN.replace("llm-eval-harness-evals-abc", "llm-eval-harness-evals-xyz")
     settings_b = Settings(eval_runtime_arn=other_arn, aws_region="us-east-1")
 
     first = cloud.get_invoker(settings_a)

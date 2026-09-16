@@ -1,6 +1,6 @@
 # Product Overview
 
-## Promptatron 3000
+## LLM Eval Harness
 
 A React-based test harness for experimenting with AWS Bedrock foundation models. The application enables developers and data scientists to test different AI models with various prompts and datasets, compare results, and maintain a complete history of experiments.
 

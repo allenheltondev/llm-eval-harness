@@ -28,7 +28,7 @@ const conditionalCheckFailed = () => {
   return err;
 };
 
-const TABLE_NAME = 'promptatron-table';
+const TABLE_NAME = 'llm-eval-harness-table';
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const ddbMock = mockClient(ddb);
 

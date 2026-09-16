@@ -22,7 +22,7 @@ import { upsertFixtures, upsertScenario } from '../../seed/lib/write.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_ROOT = path.join(__dirname, '../../seed/fixtures');
 
-const TABLE_NAME = 'promptatron-table';
+const TABLE_NAME = 'llm-eval-harness-table';
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const ddbMock = mockClient(ddb);
 
@@ -237,7 +237,7 @@ describe('buildScenarioItems: edge cases (synthetic fixtures)', () => {
   let tmpRoot: string;
 
   beforeEach(() => {
-    tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'promptatron-seed-test-'));
+    tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'llm-eval-harness-seed-test-'));
   });
 
   afterEach(() => rmSync(tmpRoot, { recursive: true, force: true }));
@@ -336,7 +336,7 @@ describe('buildScenarioItems: edge cases (synthetic fixtures)', () => {
 
 describe('discoverFixtureDirs: filters non-scenario directories', () => {
   it('ignores subdirectories that lack a scenario.json and sorts the rest', () => {
-    const tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'promptatron-discover-test-'));
+    const tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'llm-eval-harness-discover-test-'));
     try {
       mkdirSync(path.join(tmpRoot, 'zeta'));
       writeFileSync(path.join(tmpRoot, 'zeta', 'scenario.json'), JSON.stringify({ id: 'z', name: 'Z' }));

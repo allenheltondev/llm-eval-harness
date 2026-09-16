@@ -31,5 +31,5 @@ jobs:
     uses: ./.github/workflows/shared-deploy.yaml
     with:
       ENVIRONMENT: Staging
-      STACK_NAME: promptatron-staging
+      STACK_NAME: llm-eval-harness-staging
     secrets: inherit

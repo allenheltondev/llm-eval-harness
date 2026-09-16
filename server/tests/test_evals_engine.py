@@ -11,14 +11,14 @@ import pytest
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
-from promptatron.config import Settings
-from promptatron.engine.fake_model import Error, FakeModel, Text
-from promptatron.evals import engine as evals_engine
-from promptatron.evals import jobs as evals_jobs
-from promptatron.evals.events import EvalCompleteEvent, EvalStartEvent, RunStartedEvent
-from promptatron.evals.judge import FakeJudgeModel
-from promptatron.evals.schemas import EvaluationRequest
-from promptatron.store import db, history
+from evalharness.config import Settings
+from evalharness.engine.fake_model import Error, FakeModel, Text
+from evalharness.evals import engine as evals_engine
+from evalharness.evals import jobs as evals_jobs
+from evalharness.evals.events import EvalCompleteEvent, EvalStartEvent, RunStartedEvent
+from evalharness.evals.judge import FakeJudgeModel
+from evalharness.evals.schemas import EvaluationRequest
+from evalharness.store import db, history
 
 THROTTLE = [Error(ModelThrottledException("slow down"))]
 

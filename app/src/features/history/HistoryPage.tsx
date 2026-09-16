@@ -248,7 +248,7 @@ function ExportButton({ filters }: { filters: HistoryFilters }) {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = 'promptatron-runs.ndjson'
+      anchor.download = 'llm-eval-harness-runs.ndjson'
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()

@@ -1,6 +1,6 @@
 {
-  "name": "Promptatron 3000",
-  "short_name": "Promptatron",
+  "name": "LLM Eval Harness",
+  "short_name": "Eval Harness",
   "description": "Bedrock LLM Analyzer - Test and compare AI models",
   "icons": [
     {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Seeds the Promptatron 3000 DynamoDB table from api/seed/fixtures/**.
+ * Seeds the LLM Eval Harness DynamoDB table from api/seed/fixtures/**.
  *
  * Usage:
  *   node seed/seed.mjs [--table NAME] [--region REGION] [--dry-run]
@@ -55,7 +55,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Seed the Promptatron 3000 DynamoDB table from api/seed/fixtures/**.
+  console.log(`Seed the LLM Eval Harness DynamoDB table from api/seed/fixtures/**.
 
 Usage:
   node seed/seed.mjs [--table NAME] [--region REGION] [--dry-run]

@@ -30,7 +30,7 @@ CloudFormation cannot read an API key's value.
 | Piece | Deployed as |
 |---|---|
 | FastAPI server | One Lambda function (zip, arm64, Python 3.12) running the UNCHANGED
-  `promptatron.main:app` behind the **AWS Lambda Web Adapter** layer, exposed via a
+  `evalharness.main:app` behind the **AWS Lambda Web Adapter** layer, exposed via a
   **Function URL with `InvokeMode: RESPONSE_STREAM`** so `POST /runs` and the
   evaluation event streams keep their NDJSON semantics. `AWS_LWA_INVOKE_MODE=response_stream`. |
 | React SPA | Static build in S3 behind CloudFront. `VITE_API_URL` baked at build
@@ -44,12 +44,12 @@ Memory 1024MB default, parameterized.
 
 ## History backend
 
-`PROMPTATRON_HISTORY_BACKEND: "sqlite" | "dynamodb" | "auto"` (default `auto`:
+`EVALHARNESS_HISTORY_BACKEND: "sqlite" | "dynamodb" | "auto"` (default `auto`:
 dynamodb when running inside Lambda — detect via `AWS_LAMBDA_FUNCTION_NAME` —
 else sqlite).
 
 The DynamoDB backend implements the SAME repository surface as
-`promptatron/store/history.py` (create_run/update_run/get_run/delete_run/
+`evalharness/store/history.py` (create_run/update_run/get_run/delete_run/
 list_runs/iter_runs_export/create_evaluation/update_evaluation/get_evaluation/
 list_evaluations, identical signatures and cursor semantics) against the
 existing config-store table, REUSING the cloud-eval item shapes verbatim
@@ -62,7 +62,7 @@ post-page like the existing cloud listing. TTL: same 90-day `expiresAt`.
 Evaluations in the deployed server are cloud-lane only:
 - `POST /evaluations` with `execution: "local"` → 400
   `{"error": {"code": "local_lane_unavailable", ...}}` when the local lane is off.
-- Local lane availability is a setting: `PROMPTATRON_LOCAL_EVALS: bool` default
+- Local lane availability is a setting: `EVALHARNESS_LOCAL_EVALS: bool` default
   `auto` semantics — disabled when running in Lambda, enabled otherwise.
 - Health gains `"local_evals": {"available": bool}`; the UI's "This machine"
   option disables (with hint) when false, and the default flips to cloud.
@@ -92,8 +92,8 @@ protected in v1.
   `cloudformation:DescribeStacks` + `apigateway:GET` (self-discovery works
   in-Lambda too — or the template injects the values as env vars directly,
   which is PREFERRED deployed: no discovery latency; the infra item wires
-  PROMPTATRON_CONFIG_API_URL/KEY/EVAL_TABLE/EVAL_RUNTIME_ARN from
-  `!Ref`/`!GetAtt` and sets PROMPTATRON_STACK_DISCOVERY=false).
+  EVALHARNESS_CONFIG_API_URL/KEY/EVAL_TABLE/EVAL_RUNTIME_ARN from
+  `!Ref`/`!GetAtt` and sets EVALHARNESS_STACK_DISCOVERY=false).
 
 ## Out of scope (documented, not built)
 

@@ -1,4 +1,4 @@
-"""Tests for promptatron.tools.registry and Strands tool-spec fidelity.
+"""Tests for evalharness.tools.registry and Strands tool-spec fidelity.
 
 Cross-checks the registry against the actual scenario.json files so that if
 either scenario definition drifts from the ported tools, these tests fail
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from promptatron.tools import registry
+from evalharness.tools import registry
 from tests._repo_paths import find_upward
 
 FRAUD_SCENARIO = find_upward("api", "seed", "fixtures", "fraud-detection", "scenario.json")

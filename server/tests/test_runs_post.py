@@ -14,13 +14,13 @@ import respx
 from fastapi import FastAPI
 from sqlmodel import Session
 
-from promptatron.config import get_settings
-from promptatron.configstore.client import ConfigStoreClient
-from promptatron.engine.fake_model import Error, FakeModel, Text, ToolUseStep
-from promptatron.errors import register_exception_handlers
-from promptatron.routers import runs
-from promptatron.routers.scenarios import get_config_store_client
-from promptatron.store import db, history
+from evalharness.config import get_settings
+from evalharness.configstore.client import ConfigStoreClient
+from evalharness.engine.fake_model import Error, FakeModel, Text, ToolUseStep
+from evalharness.errors import register_exception_handlers
+from evalharness.routers import runs
+from evalharness.routers.scenarios import get_config_store_client
+from evalharness.store import db, history
 
 CONFIG_BASE_URL = "https://configstore.test"
 

@@ -25,5 +25,5 @@ jobs:
     uses: ./.github/workflows/shared-deploy.yaml
     with:
       ENVIRONMENT: Production
-      STACK_NAME: promptatron-production
+      STACK_NAME: llm-eval-harness-prod
     secrets: inherit

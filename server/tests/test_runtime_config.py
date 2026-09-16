@@ -1,6 +1,6 @@
-"""Tests for promptatron.runtime_config -- the precedence layer.
+"""Tests for evalharness.runtime_config -- the precedence layer.
 
-Resolution never talks to AWS directly here: :func:`promptatron.stack_discovery.discover`
+Resolution never talks to AWS directly here: :func:`evalharness.stack_discovery.discover`
 is monkeypatched to a canned :class:`StackConfig`, so these tests are pure
 precedence-logic tests (real discovery has its own coverage in
 ``test_stack_discovery.py``).
@@ -10,9 +10,9 @@ import httpx
 import pytest
 import respx
 
-from promptatron import runtime_config
-from promptatron.config import Settings, get_settings
-from promptatron.stack_discovery import StackConfig
+from evalharness import runtime_config
+from evalharness.config import Settings, get_settings
+from evalharness.stack_discovery import StackConfig
 
 STACK = StackConfig(
     config_api_url="https://stack.example.com/api",

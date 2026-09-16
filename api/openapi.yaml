@@ -1,9 +1,9 @@
 openapi: 3.0.0
 info:
-  title: Promptatron 3000 API
+  title: LLM Eval Harness API
   version: 2.0.0
   description: >
-    Config store for Promptatron 3000 scenarios. A scenario is a single-table
+    Config store for LLM Eval Harness scenarios. A scenario is a single-table
     item collection: metadata + system/user prompts + tools + datasets, all
     under one DynamoDB partition (`SCENARIO#{scenarioId}`).
 

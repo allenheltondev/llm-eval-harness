@@ -14,11 +14,11 @@ import json
 
 import pytest
 
-from promptatron.worker import agentcore_app, interfaces
-from promptatron.worker.ddb import DynamoEvalStore
+from evalharness.worker import agentcore_app, interfaces
+from evalharness.worker.ddb import DynamoEvalStore
 from tests.fake_dynamodb import FakeDynamoDBClient
 
-TABLE = "promptatron-config-ScenariosTable-TEST"
+TABLE = "llm-eval-harness-ScenariosTable-TEST"
 EVAL_ID = "0123456789abcdef0123456789abcdef"
 REQUEST = {"kind": "determinism", "n": 2, "run_config": {"model_id": "m", "user_prompt": "p"}}
 PAYLOAD = {"evaluation_id": EVAL_ID, "request": REQUEST}

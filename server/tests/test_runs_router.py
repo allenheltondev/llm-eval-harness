@@ -1,4 +1,4 @@
-"""Tests for the run/evaluation history read-side REST API (promptatron.routers.runs).
+"""Tests for the run/evaluation history read-side REST API (evalharness.routers.runs).
 
 Builds its own standalone FastAPI app (per shared-tree test conventions): includes
 only ``runs.router``, wires up the existing error handlers, and points the store at
@@ -13,10 +13,10 @@ import pytest
 from fastapi import FastAPI
 from sqlmodel import Session
 
-from promptatron.errors import register_exception_handlers
-from promptatron.routers import runs
-from promptatron.schemas.runs import RunDetail
-from promptatron.store import db, history
+from evalharness.errors import register_exception_handlers
+from evalharness.routers import runs
+from evalharness.schemas.runs import RunDetail
+from evalharness.store import db, history
 
 
 @pytest.fixture

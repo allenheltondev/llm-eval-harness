@@ -1,5 +1,5 @@
 /**
- * Wire types for the Promptatron FastAPI backend (`/api/v1`).
+ * Wire types for the LLM Eval Harness FastAPI backend (`/api/v1`).
  *
  * Every type here mirrors a server-side pydantic model or hand-written dict
  * response. Field *casing follows the wire*, which is not uniform across the
@@ -8,7 +8,7 @@
  * - runs / models / health / evaluations -> snake_case
  *   (plain `BaseModel`s and plain dicts; no alias generator).
  * - scenarios (+ prompts / datasets / tools) -> camelCase
- *   (`promptatron/schemas/scenario.py` uses `alias_generator=to_camel` and
+ *   (`evalharness/schemas/scenario.py` uses `alias_generator=to_camel` and
  *   FastAPI serializes with `response_model_by_alias=True`). The one exception
  *   is `handler_registered`, which `routers/scenarios.py` grafts onto each tool
  *   list item *after* `model_dump(by_alias=True)`, so it stays snake_case.
@@ -17,13 +17,13 @@
  *   Requests accept either casing (`populate_by_name=True`); we send camelCase.
  *
  * Source of truth:
- *   server/promptatron/engine/events.py     (run stream events)
- *   server/promptatron/engine/schemas.py    (RunRequest)
- *   server/promptatron/schemas/runs.py      (Page, RunSummary, RunDetail, EvaluationDetail)
- *   server/promptatron/schemas/scenario.py  (scenario/prompt/dataset/tool)
- *   server/promptatron/guardrails/schemas.py
- *   server/promptatron/routers/*.py
- *   server/promptatron/errors.py            (error envelope)
+ *   server/evalharness/engine/events.py     (run stream events)
+ *   server/evalharness/engine/schemas.py    (RunRequest)
+ *   server/evalharness/schemas/runs.py      (Page, RunSummary, RunDetail, EvaluationDetail)
+ *   server/evalharness/schemas/scenario.py  (scenario/prompt/dataset/tool)
+ *   server/evalharness/guardrails/schemas.py
+ *   server/evalharness/routers/*.py
+ *   server/evalharness/errors.py            (error envelope)
  */
 
 /* -------------------------------------------------------------------------- */
@@ -591,7 +591,7 @@ export interface ModelProviders {
  * `GET /api/v1/models`.
  *
  * `providers` is optional on the wire type: a server that has not yet shipped
- * multi-provider support (e.g. the `PROMPTATRON_FAKE_MODEL` dev server) omits
+ * multi-provider support (e.g. the `EVALHARNESS_FAKE_MODEL` dev server) omits
  * it entirely. Treat a missing `providers` as "only bedrock is configured"
  * rather than crashing — see `scenarioStore.resolveModelProviders`.
  *
@@ -623,7 +623,7 @@ export interface HealthResponse {
   }
   /**
    * Whether the server has an AgentCore runtime configured for the cloud eval
-   * lane (`PROMPTATRON_EVAL_RUNTIME_ARN`). `false` (never unset) once the
+   * lane (`EVALHARNESS_EVAL_RUNTIME_ARN`). `false` (never unset) once the
    * server ships this field; callers should still treat a missing/failed
    * health response as unconfigured.
    *

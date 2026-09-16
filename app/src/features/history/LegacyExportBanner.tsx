@@ -11,8 +11,8 @@
 import { useState } from 'react'
 
 export const LEGACY_HISTORY_KEY = 'bedrock-test-history'
-export const LEGACY_FORM_STATE_KEY = 'promptatron_form_state'
-export const LEGACY_SETTINGS_KEY = 'promptatron_app_settings'
+export const LEGACY_FORM_STATE_KEY = 'evalharness_form_state'
+export const LEGACY_SETTINGS_KEY = 'evalharness_app_settings'
 export const LEGACY_DB_NAMES = [
   'DeterminismEvaluationDB',
   'WorkflowTrackingDB',
@@ -47,7 +47,7 @@ function downloadLegacyBundle(): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = 'promptatron-legacy-history.json'
+  anchor.download = 'llm-eval-harness-legacy-history.json'
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()

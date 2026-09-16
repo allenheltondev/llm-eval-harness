@@ -1,7 +1,7 @@
-"""Router-level tests for promptatron.routers.scenarios.
+"""Router-level tests for evalharness.routers.scenarios.
 
 Builds a local FastAPI app (router + the shared exception handlers) rather than
-relying on `promptatron.main.create_app`, since router wiring into the main app
+relying on `evalharness.main.create_app`, since router wiring into the main app
 happens later, centrally. Upstream calls are respx-mocked with the real fixture
 bodies from api/tests/fixtures/.
 """
@@ -14,9 +14,9 @@ import pytest
 import respx
 from fastapi import FastAPI
 
-from promptatron.configstore.client import ConfigStoreClient
-from promptatron.errors import register_exception_handlers
-from promptatron.routers.scenarios import get_config_store_client, router
+from evalharness.configstore.client import ConfigStoreClient
+from evalharness.errors import register_exception_handlers
+from evalharness.routers.scenarios import get_config_store_client, router
 from tests._repo_paths import find_upward
 
 BASE_URL = "https://configstore.test"

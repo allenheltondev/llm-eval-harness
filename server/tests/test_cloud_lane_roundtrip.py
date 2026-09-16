@@ -1,7 +1,7 @@
 """Cross-implementation round trip: the worker's DynamoDB writer feeding the
 server's DynamoDB reader.
 
-The writer (``promptatron.worker.ddb``) and the reader (``promptatron.evals``)
+The writer (``evalharness.worker.ddb``) and the reader (``evalharness.evals``)
 were built independently against ``docs/cloud-evals.md``. Each has its own fake
 and its own unit suite; this module is the seam test that proves the items one
 side writes are the items the other side expects — attribute names, JSON-string
@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from promptatron.evals import cloud
-from promptatron.evals.ddb_reader import EvalTable
-from promptatron.worker.ddb import DynamoEvalStore, unwrap
+from evalharness.evals import cloud
+from evalharness.evals.ddb_reader import EvalTable
+from evalharness.worker.ddb import DynamoEvalStore, unwrap
 from tests.fake_dynamodb import FakeDynamoDBClient
 from tests.test_evals_cloud import FakeTable
 
@@ -60,7 +60,7 @@ def stores() -> tuple[DynamoEvalStore, FakeTable]:
     table hydrated from whatever the writer produced."""
     client = FakeDynamoDBClient()
     writer = DynamoEvalStore(
-        "promptatron-config-table",
+        "llm-eval-harness-table",
         EVALUATION_ID,
         client=client,
         clock=lambda: 1_770_000_000.0,

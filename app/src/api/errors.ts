@@ -2,7 +2,7 @@
  * The two error types this API layer throws.
  *
  * `ApiError` carries the server's uniform error envelope
- * (`{"error": {"code", "message", "detail"}}`, see server/promptatron/errors.py)
+ * (`{"error": {"code", "message", "detail"}}`, see server/evalharness/errors.py)
  * plus the HTTP status; `StreamAbortedError` marks a caller-initiated abort so
  * callers can tell "I cancelled this" apart from "the server/network failed".
  */
