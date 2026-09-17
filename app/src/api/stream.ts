@@ -9,7 +9,7 @@
  */
 
 import { ApiError, StreamAbortedError, isAbortError } from './errors'
-import { apiUrl, NDJSON_MEDIA_TYPE, type QueryParams } from './http'
+import { apiUrl, NDJSON_MEDIA_TYPE, noteResponseStatus, withAuthHeader, type QueryParams } from './http'
 
 /**
  * The subset of `fetch`'s init this module builds. Spelled out structurally
@@ -88,6 +88,8 @@ async function consume<T>(
   const { signal } = opts
   if (signal?.aborted) throw new StreamAbortedError()
 
+  init.headers = await withAuthHeader(init.headers)
+
   let response: Response
   try {
     response = await fetch(apiUrl(path, query), init)
@@ -99,6 +101,7 @@ async function consume<T>(
   }
 
   if (!response.ok) {
+    noteResponseStatus(response.status)
     let text: string | null = null
     try {
       text = await response.text()

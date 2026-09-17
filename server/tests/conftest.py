@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from evalharness import models_catalog, stack_discovery
+from evalharness import auth, models_catalog, stack_discovery
 from evalharness.errors import BadRequestError
 from evalharness.main import create_app
 
@@ -22,15 +22,22 @@ PROVIDER_ENV_VARS = (
     "OLLAMA_HOST",
 )
 
+#: The two settings that switch bearer-token auth on (evalharness.auth). Also
+#: cleared per test: a developer with a deployed stack's values exported must
+#: not see every router test fail with 401.
+AUTH_ENV_VARS = ("EVALHARNESS_AUTH_USER_POOL_ID", "EVALHARNESS_AUTH_CLIENT_ID")
+
 
 @pytest.fixture(autouse=True)
 def isolated_providers(monkeypatch):
     """No provider is configured, and no listing is carried between tests."""
-    for name in PROVIDER_ENV_VARS:
+    for name in PROVIDER_ENV_VARS + AUTH_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     models_catalog.catalog.clear()
+    auth.jwks_cache.clear()
     yield
     models_catalog.catalog.clear()
+    auth.jwks_cache.clear()
 
 
 @pytest.fixture(autouse=True)

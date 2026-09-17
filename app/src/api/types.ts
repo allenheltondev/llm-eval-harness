@@ -647,7 +647,27 @@ export interface HealthResponse {
   local_evals?: {
     available: boolean
   }
+  /**
+   * Whether every other route requires a bearer token, and — when it does —
+   * the Cognito user pool the SPA signs in against. `/health` is the one
+   * route a deployed server leaves open precisely so this can be read
+   * signed out. Optional for the same older-server reason as `local_evals`;
+   * absent reads as "no auth", which is what a local server means too.
+   *
+   * contract: server/evalharness/auth.py `health_block`.
+   */
+  auth?: HealthAuth
 }
+
+export type HealthAuth =
+  | { required: false }
+  | {
+      required: true
+      provider: 'cognito'
+      region: string
+      user_pool_id: string
+      client_id: string
+    }
 
 /* -------------------------------------------------------------------------- */
 /* Scenarios (camelCase wire) — schemas/scenario.py                           */

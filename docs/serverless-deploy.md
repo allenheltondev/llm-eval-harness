@@ -69,14 +69,45 @@ Evaluations in the deployed server are cloud-lane only:
 
 ## Auth (deployed)
 
-v1 is a personal deployment: the Function URL uses `AuthType: NONE` with CORS
-locked to the CloudFront origin, and the URL treated as a secret. CloudFront in
-front of BOTH the SPA (S3 origin) and the server (Function URL origin, path
-`/api/*`) so the browser sees one origin — no CORS in production at all, and
-`VITE_API_URL` can be relative. The template parameterizes an optional
-`AuthType: AWS_IAM` mode for later (documented, not wired to a login flow).
-The infra work item must state clearly in its report + docs what is and isn't
-protected in v1.
+The deployed server requires sign-in; the gate is the application, not the
+infrastructure. The Function URL keeps `AuthType: NONE` and CloudFront stays
+open (neither can be closed for a browser that POSTs — CloudFront OAC for
+function URLs needs a viewer-computed body hash; `serverless-deploy-infra.md`
+"Auth"). CloudFront fronts BOTH the SPA (S3 origin) and the server (Function
+URL origin, path `/api/*`) so the browser sees one origin — no CORS in
+production, and `VITE_API_URL` stays relative.
+
+The shape follows `readysetcloud/rsc-core` (Cognito user pool + app client in
+the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
+
+- **Template** (`api/template.yaml`, condition `DeployServer`): `UserPool`
+  (email usernames, admin-only user creation, `${AWS::StackName}-users`) and
+  `UserPoolClient` (`USER_PASSWORD_AUTH` + `REFRESH_TOKEN_AUTH`, no secret,
+  1h id/access tokens, 30-day refresh). Outputs `UserPoolId`,
+  `UserPoolClientId`. The server function gets
+  `EVALHARNESS_AUTH_USER_POOL_ID` / `EVALHARNESS_AUTH_CLIENT_ID`.
+- **Server** (`evalharness/auth.py`): with both settings present, every router
+  except `/health` carries a `require_auth` dependency. It accepts
+  `Authorization: Bearer <jwt>` where the JWT is an ID token (`aud` = client)
+  or an access token (`client_id` = client), RS256-signed by the pool's JWKS
+  (fetched once per process, re-fetched on an unknown `kid`), with `iss`,
+  `exp` and `token_use` checked. Failure is `401 {"error": {"code":
+  "unauthorized"}}`; an unreachable JWKS is `502 upstream_error`. Neither
+  setting present (every local run, the E2E suite) means no gate.
+- **Health**: `GET /health` stays open and gains
+  `"auth": {"required": false}` or `{"required": true, "provider":
+  "cognito", "region", "user_pool_id", "client_id"}` — the SPA's only source
+  of auth configuration, so nothing is baked in at build time.
+- **SPA** (`app/src/auth/`): `AuthGate` reads `/health`; when auth is
+  required it configures the core, installs a token provider on the HTTP
+  layer (`setAuthTokenProvider`, so every JSON request and NDJSON stream
+  carries the bearer header) and renders `LoginPage` until a session exists.
+  A `401` from the API drops the session and returns to sign-in with a
+  notice. Sign-in, the `NEW_PASSWORD_REQUIRED` first-login step, forgot /
+  reset password, silent refresh and revoke-on-sign-out are the rsc-core
+  core, minus sign-up and the cross-subdomain cookie bridge.
+- **Users**: `make create-user EMAIL=...` (`admin-create-user` against the
+  stack's `UserPoolId` output). Cognito emails a temporary password.
 
 ## Deploy flow
 
@@ -97,6 +128,7 @@ protected in v1.
 
 ## Out of scope (documented, not built)
 
-Multi-user auth (Cognito), custom domains, WAF, provider API keys for
-non-Bedrock models in the deployed server (same Bedrock-only caveat as the
-worker; add SSM-parameter wiring later if wanted).
+Custom domains, WAF, self sign-up / per-user data isolation (the pool gates
+access; the data behind it is still one shared workspace), provider API keys
+for non-Bedrock models in the deployed server (same Bedrock-only caveat as
+the worker; add SSM-parameter wiring later if wanted).

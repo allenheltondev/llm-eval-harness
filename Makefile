@@ -1,6 +1,6 @@
 .PHONY: dev dev-server dev-app lint lint-app lint-server test test-app test-api test-server \
 	install install-app install-api install-server deploy-api seed-api e2e smoke \
-	package-eval-worker deploy-worker package-server deploy
+	package-eval-worker deploy-worker package-server deploy create-user
 
 # CloudFormation stack the api/ SAM template deploys into. Overriding this is
 # what makes multiple environments possible (Staging and Production are two
@@ -313,6 +313,37 @@ deploy:
 	aws cloudfront create-invalidation --distribution-id "$$DIST_ID" --paths '/*' >/dev/null; \
 	echo; \
 	echo "Deployed: $$APP_URL"
+
+# --------------------------------------------------------------------------- #
+# users
+#
+# The deployed app's Cognito pool is invitation-only (api/template.yaml
+# `UserPool`). This invites one user: Cognito emails them a temporary password
+# and the app's sign-in screen walks them through choosing a real one.
+#   make create-user EMAIL=you@example.com [STACK_NAME=llm-eval-harness-staging]
+# --------------------------------------------------------------------------- #
+
+create-user:
+	@set -e; \
+	if [ -z "$(EMAIL)" ]; then \
+		echo "create-user: EMAIL is required, e.g. make create-user EMAIL=you@example.com" >&2; \
+		exit 1; \
+	fi; \
+	POOL_ID=$$(aws cloudformation describe-stacks --stack-name $(STACK_NAME) \
+		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
+		--query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+		--output text 2>/dev/null || true); \
+	if [ -z "$$POOL_ID" ] || [ "$$POOL_ID" = "None" ]; then \
+		echo "create-user: stack '$(STACK_NAME)' has no UserPoolId output -- is the server deployed (make deploy)?" >&2; \
+		exit 1; \
+	fi; \
+	aws cognito-idp admin-create-user \
+		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
+		--user-pool-id "$$POOL_ID" \
+		--username "$(EMAIL)" \
+		--user-attributes Name=email,Value="$(EMAIL)" Name=email_verified,Value=true \
+		--desired-delivery-mediums EMAIL >/dev/null; \
+	echo "create-user: invited $(EMAIL) to pool $$POOL_ID -- a temporary password is on its way by email"
 
 # Runs just the seeder against an already-deployed table. Requires TABLE_NAME, e.g.:
 #   make seed-api TABLE_NAME=llm-eval-harness-ScenariosTable-XXXXXXXXXXXX

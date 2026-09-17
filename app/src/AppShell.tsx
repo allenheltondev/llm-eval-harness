@@ -8,6 +8,7 @@
  */
 
 import { useState } from 'react'
+import { useAuth } from './auth/react'
 import FloatingChad from './components/FloatingChad'
 import RobotMascot from './components/RobotMascot'
 import AboutPage from './features/about/AboutPage'
@@ -55,6 +56,9 @@ export default function AppShell() {
   const [activeTab, setActiveTab] = useState<TabId>('workbench')
   const chadEnabled = useSettingsStore((state) => state.chadEnabled)
   const setChadEnabled = useSettingsStore((state) => state.setChadEnabled)
+  // Outside an AuthProvider (every local run) `required` is false and no
+  // sign-out control renders; behind AuthGate it is the signed-in user's.
+  const { required: authRequired, signedIn, user, signOut } = useAuth()
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-tertiary-50 to-secondary-100">
@@ -101,6 +105,17 @@ export default function AppShell() {
                   )
                 })}
               </nav>
+
+              {authRequired && signedIn && (
+                <button
+                  type="button"
+                  onClick={() => void signOut()}
+                  title={typeof user.email === 'string' ? `Signed in as ${user.email}` : 'Sign out'}
+                  className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50 hover:text-gray-900"
+                >
+                  Sign out
+                </button>
+              )}
 
               {!chadEnabled && (
                 <button

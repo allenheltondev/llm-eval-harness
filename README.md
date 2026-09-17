@@ -117,14 +117,36 @@ https://d1234abcd.cloudfront.net/            → the app
 https://d1234abcd.cloudfront.net/api/v1/...  → the server
 ```
 
-> **Read this before you deploy.** v1 has **no authentication**. The Lambda Function URL is
-> `AuthType: NONE`, and CloudFront in front of it is a second unauthenticated front door, not a
-> gate. Anyone who learns either URL can run models on your Bedrock account, read and delete run
-> history, and create and delete guardrails. The only protection is that the URL is unguessable
-> and unpublished. This is a personal-deployment posture — see
-> [`docs/serverless-deploy-infra.md`](docs/serverless-deploy-infra.md) for why `AWS_IAM` +
-> CloudFront OAC is not a drop-in replacement (browsers cannot send the required request-body
-> hash) and what the realistic hardening paths are.
+### Sign-in (Cognito)
+
+The deployed app requires sign-in. The stack creates a **Cognito user pool** and app client, the
+server verifies a bearer token from that pool on every route except `/api/v1/health`, and the SPA
+shows a sign-in screen until it has one. Nothing is baked into the build: the SPA learns from
+`/health` whether sign-in is required and which pool to use, so the same `app/dist` works
+locally (no pool, no gate) and deployed (pool, gate).
+
+The pool is **invitation-only** — there is no sign-up form, because an account here can spend
+your Bedrock budget. Create each user from the CLI; Cognito emails them a temporary password and
+the app walks them through choosing a real one on first sign-in:
+
+```bash
+make create-user EMAIL=you@example.com          # STACK_NAME=... for another stack
+```
+
+Sign-in talks to `cognito-idp.<region>.amazonaws.com` straight from the browser (no Hosted UI,
+no redirect); the resulting ID token is sent as `Authorization: Bearer` and refreshed silently
+for as long as the refresh token lasts (30 days). Sign out from the header. This is the same
+pattern as [`readysetcloud/rsc-core`](https://github.com/readysetcloud/rsc-core)'s
+`@readysetcloud/ui/auth`, trimmed to what this app needs.
+
+> **What the gate is, and is not.** The Lambda Function URL stays `AuthType: NONE` and CloudFront
+> stays open, because neither can be closed for a browser that POSTs (CloudFront OAC for
+> function URLs needs a request-body hash browsers cannot send — see
+> [`docs/serverless-deploy-infra.md`](docs/serverless-deploy-infra.md)). The gate is the
+> application: every request through either door hits the same token check, and the `/health`
+> endpoint is the one deliberate exception (it publishes nothing secret — region, pool id and
+> public client id). Locally, with no pool configured, there is no gate at all; that is the
+> intended local-first posture, not an oversight.
 
 ### Continuous deployment (GitHub Actions + OIDC)
 
@@ -226,6 +248,7 @@ exact IAM, and the list of things only a real deploy can prove — are in
 | `make seed-api TABLE_NAME=...` | Re-runs just the seeder against an already-deployed table |
 | `make package-server` | Builds the FastAPI server's arm64 Lambda zip. No AWS calls |
 | `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): package + upload + `sam deploy` + seed + build SPA + S3 sync + CloudFront invalidation |
+| `make create-user EMAIL=...` | Invites a user to the deployed stack's Cognito pool ([Sign-in](#sign-in-cognito)); Cognito emails them a temporary password |
 
 `make dev` runs both processes as background jobs of one recipe with a `trap ... EXIT INT TERM`
 so `Ctrl-C` (or any exit) tears down both — no orphaned `uvicorn`/`vite` process left behind. If
@@ -249,6 +272,8 @@ terminals instead; they run the exact same commands.
 | `EVALHARNESS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
 | `EVALHARNESS_STACK_NAME` | `llm-eval-harness` | Name of the deployed `api/` stack to auto-discover settings from |
 | `EVALHARNESS_STACK_DISCOVERY` | `true` | Set `false` to disable CloudFormation-stack auto-discovery entirely |
+| `EVALHARNESS_AUTH_USER_POOL_ID` | *(unset)* | Cognito user pool to verify bearer tokens against. With `EVALHARNESS_AUTH_CLIENT_ID`, every route but `/health` requires a token; unset locally means no gate. The deployed stack injects both |
+| `EVALHARNESS_AUTH_CLIENT_ID` | *(unset)* | The pool's app client id — what the SPA signs in with and what every accepted token's `aud`/`client_id` must equal |
 
 AWS credentials themselves are **not** a setting — they come from the standard boto3 credential
 chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, SSO, or an instance/task role).

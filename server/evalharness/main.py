@@ -2,10 +2,11 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from evalharness import deployment
+from evalharness.auth import require_auth
 from evalharness.config import get_settings
 from evalharness.errors import register_exception_handlers
 from evalharness.routers import guardrails, health, models, runs, scenarios
@@ -49,11 +50,15 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
 
+    # /health stays open: it is where the SPA learns whether sign-in is
+    # required and which user pool to use (evalharness.auth). Everything
+    # else needs a bearer token whenever a pool is configured.
     app.include_router(health.router, prefix=API_PREFIX)
-    app.include_router(models.router, prefix=API_PREFIX)
-    app.include_router(scenarios.router, prefix=API_PREFIX)
-    app.include_router(runs.router, prefix=API_PREFIX)
-    app.include_router(guardrails.router, prefix=API_PREFIX)
+    protected = [Depends(require_auth)]
+    app.include_router(models.router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(scenarios.router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(runs.router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(guardrails.router, prefix=API_PREFIX, dependencies=protected)
 
     return app
 

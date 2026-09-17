@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends
 
-from evalharness import deployment, runtime_config
+from evalharness import auth, deployment, runtime_config
 from evalharness.config import Settings, get_settings
 from evalharness.evals import cloud as evals_cloud
 from evalharness.models_catalog import catalog as provider_catalog
@@ -106,4 +106,8 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
         "local_evals": {
             "available": deployment.local_evals_available(settings),
         },
+        # Whether every other route wants a bearer token, and (when it does)
+        # the Cognito pool the SPA signs in against. This endpoint is the one
+        # deliberately left open so that a signed-out browser can read it.
+        "auth": auth.health_block(settings),
     }

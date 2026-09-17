@@ -93,8 +93,10 @@ Parameters:
     Default: NONE
     AllowedValues: [NONE, AWS_IAM]
     Description: >
-      Function URL auth. v1 is NONE: the URL is public-but-unguessable and the
-      real front door is CloudFront (docs/serverless-deploy.md "Auth").
+      Function URL auth. NONE: the URL is public-but-unguessable, the real
+      front door is CloudFront, and the application itself is the gate -- the
+      server requires a Cognito bearer token (UserPool below) on every route
+      but /health (docs/serverless-deploy.md "Auth").
       AWS_IAM is wired here for later, but note it is NOT a drop-in with
       CloudFront: origin access control for Lambda function URLs requires the
       *viewer* to send an x-amz-content-sha256 body hash on POST/PUT, which a
@@ -741,6 +743,12 @@ Resources:
           # Empty by default: SPA and API share one CloudFront origin, so
           # nothing the browser does is cross-origin. See the parameter.
           EVALHARNESS_CORS_ORIGINS: !Ref ServerCorsOrigins
+          # -- authentication (evalharness.auth) ---------------------------- #
+          # Both set => every route but /health demands a bearer token minted
+          # by this pool for this client. This is THE gate: the Function URL
+          # and CloudFront are both open doors (see the UserPool comment).
+          EVALHARNESS_AUTH_USER_POOL_ID: !Ref UserPool
+          EVALHARNESS_AUTH_CLIENT_ID: !Ref UserPoolClient
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -811,6 +819,79 @@ Resources:
         # matching AWS::Lambda::Permission (FunctionUrlAuthType: NONE) itself.
         AuthType: !Ref ServerFunctionUrlAuthType
         InvokeMode: RESPONSE_STREAM
+
+  # ---------------------------------------------------------------------------
+  # Authentication: a Cognito user pool + app client, verified by the server.
+  #
+  # The Function URL stays AuthType NONE and CloudFront stays open, because
+  # neither can be closed for a browser that POSTs (CloudFront OAC for
+  # function URLs needs the viewer to send an x-amz-content-sha256 body hash
+  # -- docs/serverless-deploy-infra.md "Auth"). So the gate is the application
+  # itself: evalharness.auth verifies `Authorization: Bearer <id token>` on
+  # every route but /health, identically through both doors.
+  #
+  # Same shape as readysetcloud/rsc-core: email usernames, USER_PASSWORD_AUTH
+  # (the SPA calls cognito-idp directly, no Hosted UI, no SDK), refresh tokens.
+  # Deliberate differences: no self sign-up (an account here can spend the AWS
+  # bill, so the operator creates users -- `make create-user`), and no OAuth /
+  # hosted domain (nothing uses it).
+  #
+  # Both resources are named explicitly, so the auto-name length landmine
+  # (CloudFormation's {stack}-{logicalid}-{random} suffixes) does not apply.
+  # ---------------------------------------------------------------------------
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Condition: DeployServer
+    Properties:
+      UserPoolName: !Sub ${AWS::StackName}-users
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        # Invitation-only. Sign-up from the SPA is not offered.
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          # Days an admin-set temporary password stays usable.
+          TemporaryPasswordValidityDays: 7
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: DeployServer
+    Properties:
+      ClientName: !Sub ${AWS::StackName}-app
+      UserPoolId: !Ref UserPool
+      # A browser client cannot keep a secret.
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      # "Incorrect email or password" for unknown users too.
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      # An ID token lives an hour; the SPA refreshes it silently (rsc-core's
+      # getFreshIdToken) for as long as the refresh token lasts.
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
 
   # ---------------------------------------------------------------------------
   # SPA hosting: private S3 bucket + one CloudFront distribution with two
@@ -1021,12 +1102,21 @@ Outputs:
     Condition: DeployEvalWorker
     Description: AgentCore Runtime id (useful for CLI calls that take an id, not an ARN)
     Value: !GetAtt EvalWorkerRuntime.AgentRuntimeId
+  UserPoolId:
+    Condition: DeployServer
+    Description: Cognito user pool the deployed server verifies bearer tokens against (`make create-user` reads this)
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Condition: DeployServer
+    Description: The pool's app client id -- the SPA signs in with it (published by GET /api/v1/health)
+    Value: !Ref UserPoolClient
   ServerFunctionUrl:
     Condition: DeployServer
     Description: >
-      Direct Lambda Function URL for the FastAPI server. AuthType NONE in v1 --
-      public but unguessable. The supported front door is AppUrl; this is here
-      for curl-level debugging and for pointing a local vite at the deployed
+      Direct Lambda Function URL for the FastAPI server. AuthType NONE, but
+      the server itself requires a bearer token from UserPoolId on every route
+      except /health. The supported front door is AppUrl; this is here for
+      curl-level debugging and for pointing a local vite at the deployed
       server (which also needs ServerCorsOrigins set).
     Value: !GetAtt ServerFunctionUrl.FunctionUrl
   AppUrl:

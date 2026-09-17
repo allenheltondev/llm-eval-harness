@@ -82,7 +82,18 @@ class Settings(BaseSettings):
     #: server has no durable place to run a multi-minute job.
     local_evals: Literal["auto", "on", "off"] = "auto"
 
-    @field_validator("anthropic_api_key", "openai_api_key")
+    # -- authentication (evalharness.auth) ---------------------------------- #
+    #: Cognito user pool the deployed server verifies bearer tokens against.
+    #: The deployed template injects both of these from its own resources;
+    #: unset (the local default) means every route is open.
+    auth_user_pool_id: str | None = None
+    #: The pool's app client id -- what the SPA signs in with, and the
+    #: ``aud``/``client_id`` every accepted token must carry.
+    auth_client_id: str | None = None
+
+    @field_validator(
+        "anthropic_api_key", "openai_api_key", "auth_user_pool_id", "auth_client_id"
+    )
     @classmethod
     def _blank_key_is_unset(cls, value: str | None) -> str | None:
         """``FOO_API_KEY=`` in a shell profile means unset, not "empty key"."""

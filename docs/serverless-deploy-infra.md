@@ -28,7 +28,11 @@ account:
   RESPONSE_STREAM`. This is what makes the shape a fact rather than a hope.
 - `/workspace/readysetcloud/rsc-core/template.yaml` — a working CloudFront
   distribution in front of a non-S3 origin, and the source of the two managed
-  policy ids used below.
+  policy ids used below. Its `CognitoUserPool` / `CognitoUserPoolClient` are
+  the model for this stack's `UserPool` / `UserPoolClient`, and
+  `ui/src/auth/core.ts` (the published `@readysetcloud/ui/auth`) is the model
+  for `app/src/auth/core.ts` — the `cognito-idp` calls, the session document
+  and the refresh/revoke behaviour were ported from it, not designed here.
 - This repository's own source (`server/evalharness/**`, `app/src/api/http.ts`)
   for every claim about what the application does.
 
@@ -44,6 +48,13 @@ summaries, not fetched pages. Strong hints, not verified:
 - [Restrict access to an AWS Lambda function URL origin](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-lambda.html)
   — CloudFront OAC for Lambda function URLs, and its POST/PUT body-hash
   requirement.
+- [Control origin requests with a policy](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/controlling-origin-requests.html)
+  — the `Authorization` header rule (forwarded when the cache policy names
+  it, or under the managed `CachingDisabled` policy via the origin request
+  policy). Recalled, not fetched: the page is behind the same proxy block.
+- [Verifying a JSON web token](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html)
+  — the JWKS URL shape and the `iss` / `aud` / `client_id` / `token_use` /
+  `exp` checks `evalharness/auth.py` implements. Same caveat.
 
 Claims below are tagged **[lwa]**, **[rsc]**, **[repo]**, **[docs]**, or
 **[measured]** (something actually run on this branch).
@@ -409,39 +420,77 @@ covers the entire API surface including the NDJSON streams **[repo]**.
 
 ---
 
-## Auth: what is and is not protected in v1
+## Auth: where the gate is, and where it is not
 
 Stated plainly, because it is the thing most likely to be misremembered.
 
-**Not protected.** The Lambda Function URL is `AuthType: NONE`. Anyone who
-learns the URL can call the API directly: run models on your Bedrock account,
-read and delete run history, create and delete guardrails. There is no login,
-no API key, no IP restriction, no WAF. The only thing standing between the
-internet and the API is that the URL is a random 32-character subdomain that is
-not published anywhere. **This is a personal deployment posture, and it is a bad
-fit for anything with real data or a real bill.**
+**The gate is the application.** With `EVALHARNESS_AUTH_USER_POOL_ID` and
+`EVALHARNESS_AUTH_CLIENT_ID` set — the template injects both from its own
+`UserPool` / `UserPoolClient` — `evalharness.auth.require_auth` sits on every
+router except `/health`. A request without `Authorization: Bearer <jwt>`, or
+with a token the pool did not sign for this client, gets `401
+{"error": {"code": "unauthorized"}}` before its body is even parsed
+**[repo]**. Because the check is in the ASGI app, it is identical through
+both doors: the Function URL and the CloudFront distribution.
 
-The CloudFront distribution does not change that: it is a second, *also*
-unauthenticated front door onto the same function, not a gate in front of the
-first.
+**Not gated, on purpose.** `GET /api/v1/health` stays open. It is where the
+SPA learns that sign-in is required and which pool to sign in against
+(`auth.region`, `auth.user_pool_id`, `auth.client_id`), and none of that is
+secret — a pool id and a *public* app client id are visible to every browser
+that signs in. It also still reports whether AWS credentials are present and
+which providers are configured (booleans), as it always has.
 
-**Why not `AWS_IAM` + CloudFront OAC**, which is the obvious hardening?
-CloudFront supports origin access control for Lambda function URLs, and it
-would make the function reachable only through the distribution. But with OAC,
-requests carrying a body require the **viewer** to compute the SHA-256 of the
-request body and send it in `x-amz-content-sha256` — Lambda does not accept
-unsigned payloads **[docs]**. A browser cannot do that. Since this application
-POSTs to start every run and every evaluation, OAC would break the app's
-primary path. It is viable only for SigV4-signing non-browser clients.
+**Still open at the infrastructure layer.** The Lambda Function URL is
+`AuthType: NONE` and CloudFront has no viewer restriction. Anyone who learns
+either URL can reach the *server*; they cannot get past the gate, but they
+can make it verify tokens (a JWKS fetch on cold start, then in-memory) and,
+in principle, run up invocation and egress charges. Neither door can be
+closed for a browser that POSTs, which is the whole reason the gate lives in
+the application:
 
-`ServerFunctionUrlAuthType` is parameterized to `AWS_IAM` for that case and
-documented as not being a drop-in.
+**Why not `AWS_IAM` + CloudFront OAC.** CloudFront supports origin access
+control for Lambda function URLs, and it would make the function reachable
+only through the distribution. But with OAC, requests carrying a body require
+the **viewer** to compute the SHA-256 of the request body and send it in
+`x-amz-content-sha256` — Lambda does not accept unsigned payloads **[docs]**.
+A browser cannot do that. Since this application POSTs to start every run and
+every evaluation, OAC would break the app's primary path. It is viable only
+for SigV4-signing non-browser clients; `ServerFunctionUrlAuthType` is
+parameterized to `AWS_IAM` for that case and documented as not being a drop-in.
 
-**Realistic hardening paths, in increasing order of work:** a CloudFront
-Function checking a shared secret header on `/api/*` (weak but cheap, and
-keeps browsers working); CloudFront + WAF with an IP allow-list; Cognito with
-a hosted UI and a Lambda@Edge/CloudFront Function verifier — which is the
-Multi-user auth item `serverless-deploy.md` puts out of scope.
+**The token path, hop by hop.** The browser holds the ID token in
+`localStorage` (`evalharness.auth.v1`) and the SPA's HTTP layer adds the
+bearer header to every JSON request and NDJSON stream **[repo]**. The `/api/*`
+behaviour uses the managed `CachingDisabled` cache policy with the managed
+`AllViewerExceptHostHeader` origin request policy. CloudFront ordinarily
+forwards `Authorization` to a custom origin only when the *cache policy*
+names it, with `CachingDisabled` documented as the exception under which an
+origin request policy's headers — `Authorization` included — go through
+**[docs]**. That is the combination this template already used before auth
+existed, so nothing changed here; it is still listed under open risks
+because "the header reached the function" is exactly the kind of thing only
+a real request proves. The Function URL with `AuthType: NONE` passes the
+`Authorization` header to the function untouched (it is consumed by Lambda
+only under `AWS_IAM`, where it carries the SigV4 signature) **[docs]**.
+
+**Why Cognito this way, and not the Hosted UI.** This is the
+`readysetcloud/rsc-core` shape: the SPA calls `cognito-idp` directly with
+`USER_PASSWORD_AUTH`, keeps `{idToken, refreshToken, expiresAt}` locally,
+refreshes with `REFRESH_TOKEN_AUTH` and revokes on sign-out **[rsc]**.
+No OAuth flows, no `UserPoolDomain`, no redirect round-trip, no SDK in the
+bundle. Two deliberate deviations from rsc-core: the pool is
+`AllowAdminCreateUserOnly` (an account here spends the AWS bill, so the
+operator invites users with `make create-user`), and there is no
+cross-subdomain cookie bridge (one origin).
+
+**Verification, exactly.** RS256 against the pool's JWKS
+(`https://cognito-idp.<region>.amazonaws.com/<pool>/.well-known/jwks.json`),
+cached per process and re-fetched once when a token names an unknown `kid`
+(rotation); `iss` must be the pool; `exp` is enforced; `token_use` must be
+`id` (then `aud` = client id) or `access` (then `client_id` = client id).
+These are the checks Cognito documents for verifying its JWTs **[docs]**.
+An unreachable JWKS is a `502 upstream_error`, not a `401` — the server, not
+the caller, is what is broken.
 
 ### IAM added, exactly
 
@@ -545,6 +594,31 @@ observed.
   CORS.
 - **The 60 s inter-packet timeout.** Whether real runs ever go a full minute
   between events is unknown.
+
+**Auth**
+
+- **`Authorization` reaches the function through CloudFront.** Reasoned from
+  the `CachingDisabled` + `AllViewerExceptHostHeader` pairing above
+  **[docs]**; if a deployed `GET /api/v1/runs` through `AppUrl` answers `401`
+  with a token that works against `ServerFunctionUrl` directly, this is the
+  first thing to check, and the fix is a custom cache policy that lists
+  `Authorization` rather than anything in the application.
+- **The Function URL forwards `Authorization` under `AuthType: NONE`.** Read,
+  not observed; same symptom, checked with `curl -H "Authorization: Bearer
+  ..."` against `ServerFunctionUrl`.
+- **The JWKS fetch on cold start.** `evalharness.auth` fetches the pool's keys
+  with a 5 s timeout from inside the Lambda over the public internet — there
+  is no VPC, so this is a plain outbound HTTPS call, but it is one more thing
+  the first authenticated request after a cold start pays for.
+- **Cognito `admin-create-user` email delivery.** The pool uses Cognito's
+  default email sender (50 messages/day/account, no SES). Enough for
+  inviting a handful of users; not enough for anything else, and the reason
+  `make create-user` says "a temporary password is on its way" rather than
+  printing one.
+- **The SPA's direct call to `cognito-idp.<region>.amazonaws.com`.** Cognito's
+  user-pool API is CORS-enabled for browsers by design (it is how rsc-core's
+  consumers work today **[rsc]**), but this deployment has not made that
+  call from a CloudFront-served origin yet.
 
 **CloudFront and CFN mechanics**
 

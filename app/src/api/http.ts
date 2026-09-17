@@ -55,6 +55,52 @@ export function apiUrl(path: string, params?: QueryParams): string {
   return `${baseUrl()}${API_PREFIX}${suffix}${buildQuery(params)}`
 }
 
+/* -------------------------------------------------------------------------- */
+/* Bearer tokens                                                              */
+/* -------------------------------------------------------------------------- */
+
+export interface AuthTokenProvider {
+  /** A valid token to send, or `null` to send the request unauthenticated. */
+  getToken: () => Promise<string | null>
+  /**
+   * Called when the server answers 401 — the session is gone as far as the
+   * server is concerned (revoked user, rotated pool). The request still
+   * rejects with the `ApiError`; this is the hook the auth layer uses to
+   * drop the local session and show the sign-in screen.
+   */
+  onUnauthorized?: () => void
+}
+
+let tokenProvider: AuthTokenProvider | null = null
+
+/**
+ * Install (or, with `null`, remove) the provider every request asks for a
+ * bearer token. Set by `AuthGate` once `/health` says the deployment
+ * requires sign-in; never set locally, so requests stay exactly as before.
+ */
+export function setAuthTokenProvider(provider: AuthTokenProvider | null): void {
+  tokenProvider = provider
+}
+
+/** `headers` plus `authorization` when a provider hands back a token. */
+export async function withAuthHeader(
+  headers: Record<string, string>
+): Promise<Record<string, string>> {
+  if (!tokenProvider || 'authorization' in headers) return headers
+  let token: string | null = null
+  try {
+    token = await tokenProvider.getToken()
+  } catch {
+    token = null
+  }
+  return token ? { ...headers, authorization: `Bearer ${token}` } : headers
+}
+
+/** Let the auth layer know the server rejected the session. */
+export function noteResponseStatus(status: number): void {
+  if (status === 401) tokenProvider?.onUnauthorized?.()
+}
+
 export interface RequestOptions {
   /** Query string parameters. */
   query?: QueryParams
@@ -71,13 +117,14 @@ export async function request<T>(
   path: string,
   options: RequestOptions = {}
 ): Promise<T> {
-  const headers: Record<string, string> = { accept: 'application/json', ...options.headers }
+  let headers: Record<string, string> = { accept: 'application/json', ...options.headers }
   let body: string | undefined
 
   if (options.body !== undefined) {
     headers['content-type'] = headers['content-type'] ?? 'application/json'
     body = JSON.stringify(options.body)
   }
+  headers = await withAuthHeader(headers)
 
   let response: Response
   try {
@@ -95,6 +142,7 @@ export async function request<T>(
   }
 
   if (!response.ok) {
+    noteResponseStatus(response.status)
     throw ApiError.fromBody(response.status, response.statusText, await readText(response))
   }
 

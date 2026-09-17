@@ -10,6 +10,8 @@ export {
   buildQuery,
   http,
   request,
+  setAuthTokenProvider,
+  type AuthTokenProvider,
   type QueryParams,
   type QueryValue,
   type RequestOptions
