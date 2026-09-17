@@ -57,10 +57,7 @@ export interface GuardrailActions {
   /** `GET /guardrails/{id}/versions` (includes DRAFT). */
   loadVersions(guardrailId: string, force?: boolean): Promise<GuardrailVersionSummary[]>
   /** `POST /guardrails/{id}/versions` — publish the current DRAFT. */
-  publishVersion(
-    guardrailId: string,
-    description?: string
-  ): Promise<GuardrailVersionSummary | null>
+  publishVersion(guardrailId: string, description?: string): Promise<GuardrailVersionSummary | null>
   /** Drop a cached detail (and its versions) so the next load refetches. */
   invalidateGuardrail(guardrailId: string): void
   clear(): void
@@ -121,16 +118,16 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
       if (cached) return cached
     }
 
-    set((state) => ({ detailLoading: { ...state.detailLoading, [key]: true } }))
+    set(state => ({ detailLoading: { ...state.detailLoading, [key]: true } }))
     try {
       const detail = await api.guardrails.get(guardrailId, { version })
-      set((state) => ({
+      set(state => ({
         details: { ...state.details, [key]: detail },
         detailLoading: { ...state.detailLoading, [key]: false }
       }))
       return detail
     } catch (error) {
-      set((state) => ({
+      set(state => ({
         detailLoading: { ...state.detailLoading, [key]: false },
         error: isAborted(error) ? state.error : toStoreError(error)
       }))
@@ -138,11 +135,11 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
     }
   },
 
-  createGuardrail: async (config) => {
+  createGuardrail: async config => {
     set({ saving: true, saveError: null })
     try {
       const detail = await api.guardrails.create(config)
-      set((state) => ({
+      set(state => ({
         saving: false,
         details: { ...state.details, [guardrailCacheKey(detail.id)]: detail },
         guardrails: [...state.guardrails, toSummary(detail)]
@@ -158,12 +155,10 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
     set({ saving: true, saveError: null })
     try {
       const detail = await api.guardrails.update(guardrailId, config)
-      set((state) => ({
+      set(state => ({
         saving: false,
         details: { ...state.details, [guardrailCacheKey(guardrailId)]: detail },
-        guardrails: state.guardrails.map((row) =>
-          row.id === guardrailId ? toSummary(detail) : row
-        )
+        guardrails: state.guardrails.map(row => (row.id === guardrailId ? toSummary(detail) : row))
       }))
       return detail
     } catch (error) {
@@ -180,7 +175,7 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
       set({ saving: false, saveError: toStoreError(error) })
       return false
     }
-    set((state) => {
+    set(state => {
       const details = { ...state.details }
       const versions = { ...state.versions }
       if (version) {
@@ -197,7 +192,7 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
         saving: false,
         details,
         versions,
-        guardrails: state.guardrails.filter((row) => row.id !== guardrailId)
+        guardrails: state.guardrails.filter(row => row.id !== guardrailId)
       }
     })
     return true
@@ -210,7 +205,7 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
     }
     try {
       const response = await api.guardrails.versions.list(guardrailId)
-      set((state) => ({
+      set(state => ({
         versions: { ...state.versions, [guardrailId]: response.versions }
       }))
       return response.versions
@@ -224,7 +219,7 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
     set({ saving: true, saveError: null })
     try {
       const version = await api.guardrails.versions.create(guardrailId, { description })
-      set((state) => {
+      set(state => {
         const existing = state.versions[guardrailId] ?? []
         return {
           saving: false,
@@ -240,8 +235,8 @@ export const useGuardrailStore = create<GuardrailStore>()((set, get) => ({
     }
   },
 
-  invalidateGuardrail: (guardrailId) => {
-    set((state) => {
+  invalidateGuardrail: guardrailId => {
+    set(state => {
       const details = { ...state.details }
       for (const key of Object.keys(details)) {
         if (key === guardrailId || key.startsWith(`${guardrailId}@`)) delete details[key]
@@ -286,5 +281,5 @@ export const selectGuardrailDetail =
  * check. Select `state.guardrails` and call this in render.
  */
 export function readyGuardrails(guardrails: GuardrailSummary[]): GuardrailSummary[] {
-  return guardrails.filter((row) => row.status === 'READY')
+  return guardrails.filter(row => row.status === 'READY')
 }

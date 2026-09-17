@@ -41,7 +41,7 @@ export default function AuthGate({ children, fallback = null }: AuthGateProps) {
       .then(health => {
         if (cancelled) return
         const auth = health.auth
-        if (auth?.required && auth.region && auth.client_id) {
+        if (auth.required) {
           configureAuth({ region: auth.region, clientId: auth.client_id })
           setAuthTokenProvider({
             getToken: getFreshIdToken,

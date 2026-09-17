@@ -17,9 +17,7 @@ describe('OutputPane', () => {
     render(<OutputPane />)
 
     expect(screen.getByTestId('run-status-badge')).toHaveTextContent('Idle')
-    expect(screen.getByTestId('output-text')).toHaveTextContent(
-      'Run a prompt to see output here.'
-    )
+    expect(screen.getByTestId('output-text')).toHaveTextContent('Run a prompt to see output here.')
   })
 
   it('accumulates text deltas and walks the status badge to Completed', () => {
@@ -78,14 +76,12 @@ describe('OutputPane', () => {
     render(<OutputPane />)
 
     act(() => {
-      useRunStore
-        .getState()
-        .handleEvent({
-          type: 'error',
-          code: 'throttled',
-          message: 'Slow down.',
-          retryable: true
-        })
+      useRunStore.getState().handleEvent({
+        type: 'error',
+        code: 'throttled',
+        message: 'Slow down.',
+        retryable: true
+      })
     })
 
     expect(screen.getByTestId('run-status-badge')).toHaveTextContent('Error')

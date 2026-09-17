@@ -110,20 +110,6 @@ describe('RunControls tools select', () => {
     expect(screen.getByLabelText('Max tool iterations')).toBeDisabled()
   })
 
-  it('keeps a persisted toolset the server no longer lists selectable, with a warning', async () => {
-    useRunConfigStore.setState({ toolset: 'retired-set' })
-    await renderSettled()
-
-    const select = screen.getByLabelText('Tools') as HTMLSelectElement
-    expect(select.value).toBe('retired-set')
-    expect(screen.getByRole('option', { name: 'retired-set' })).toBeInTheDocument()
-    expect(screen.getByTestId('toolset-unlisted')).toHaveTextContent(
-      'This toolset is not offered by the server.'
-    )
-    expect(screen.queryByTestId('toolset-tools')).not.toBeInTheDocument()
-    expect(useRunConfigStore.getState().toolset).toBe('retired-set')
-  })
-
   it('surfaces a GET /tools failure inline and still offers "None"', async () => {
     toolsMock.mockReset()
     toolsMock.mockRejectedValue(new Error('tools unavailable'))

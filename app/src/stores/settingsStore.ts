@@ -2,14 +2,14 @@
  * UI preferences. Nothing here is sent to the server — it only shapes what the
  * app renders and what it pre-fills forms with.
  *
- * Persisted to localStorage under `evalharness.settings.v1`.
+ * Persisted to localStorage under `evalharness.settings`.
  */
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-/** localStorage key. Bump the suffix when the shape changes incompatibly. */
-export const SETTINGS_STORAGE_KEY = 'evalharness.settings.v1'
+/** localStorage key. */
+export const SETTINGS_STORAGE_KEY = 'evalharness.settings'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 
@@ -66,15 +66,6 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: SETTINGS_STORAGE_KEY,
-      // `defaultEvalExecution` was added without a version bump: zustand's
-      // default `merge` is `{ ...currentState, ...persistedState }`, so a
-      // payload that predates it (and therefore doesn't mention it) simply
-      // falls through to the freshly-created store's default rather than
-      // clobbering it with `undefined`. Keys a payload carries for settings
-      // that no longer exist are ignored by `partialize` on the next write.
-      // A version bump + `migrate` would only be needed if an *existing*
-      // field's meaning or shape changed.
-      version: 1,
       partialize: (state): SettingsData => ({
         theme: state.theme,
         defaultGraderModelId: state.defaultGraderModelId,

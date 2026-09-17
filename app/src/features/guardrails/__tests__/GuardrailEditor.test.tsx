@@ -72,7 +72,9 @@ describe('GuardrailEditor content filters', () => {
     expect(createGuardrail).toHaveBeenCalledWith({
       name: 'my-guardrail',
       description: undefined,
-      contentPolicy: { filters: [{ type: 'HATE', inputStrength: 'MEDIUM', outputStrength: 'HIGH' }] },
+      contentPolicy: {
+        filters: [{ type: 'HATE', inputStrength: 'MEDIUM', outputStrength: 'HIGH' }]
+      },
       deniedTopics: undefined,
       wordPolicy: null,
       piiPolicy: null,
@@ -192,7 +194,9 @@ describe('GuardrailEditor denied topics', () => {
     })
 
     // Remove row 1 instead of filling it in, to also exercise removeDeniedTopic.
-    fireEvent.click(within(screen.getByTestId('denied-topic-row-1')).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(
+      within(screen.getByTestId('denied-topic-row-1')).getByRole('button', { name: 'Remove' })
+    )
     expect(screen.queryByTestId('denied-topic-row-1')).not.toBeInTheDocument()
 
     fillName('topic-guardrail')
@@ -243,7 +247,9 @@ describe('GuardrailEditor edit mode', () => {
     expect(loadGuardrail).toHaveBeenCalledWith('gr-1')
     expect(screen.getByLabelText(/Name/)).toHaveValue('existing-guardrail')
     expect(screen.getByLabelText('Description')).toHaveValue('An existing guardrail')
-    expect(within(screen.getByTestId('filter-row-SEXUAL')).getByTestId('filter-enable-SEXUAL')).toBeChecked()
+    expect(
+      within(screen.getByTestId('filter-row-SEXUAL')).getByTestId('filter-enable-SEXUAL')
+    ).toBeChecked()
   })
 
   it('submits an update with the guardrail id', () => {

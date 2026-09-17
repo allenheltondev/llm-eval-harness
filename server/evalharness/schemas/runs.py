@@ -66,7 +66,7 @@ class EvaluationDetail(BaseModel):
     result: Any | None = None
     progress: Any | None = None
     error: Any | None = None
-    #: Which lane ran this evaluation. SQLite rows carry no such column, so a
-    #: local row (including every row that predates the cloud lane) falls back
-    #: to the default. See ``docs/cloud-evals.md``.
+    #: Which lane ran this evaluation. SQLite is the local lane's store and
+    #: carries no such column, so a local row takes the default; cloud rows
+    #: set it explicitly. See ``docs/cloud-evals.md``.
     execution: Literal["local", "cloud"] = "local"

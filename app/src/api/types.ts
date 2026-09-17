@@ -335,14 +335,8 @@ export interface EvaluationDetail {
   result: EvaluationResult | null
   progress: unknown | null
   error: unknown | null
-  /**
-   * Which lane this evaluation ran in. Optional on the wire type because
-   * pre-existing rows predate the field; treat a missing value as `'local'`.
-   *
-   * contract: docs/cloud-evals.md "Request" — "EvaluationDetail gains
-   * execution: local|cloud (default local for pre-existing rows)".
-   */
-  execution?: EvaluationExecution
+  /** Which lane this evaluation ran in (docs/cloud-evals.md "Request"). */
+  execution: EvaluationExecution
 }
 
 /** The `config` JSON persisted on an evaluation row (`stored_config`). */
@@ -549,13 +543,9 @@ export interface ModelInfo {
   kind: ModelKind
   /**
    * Which backend serves this model — the machine-readable counterpart to
-   * `provider`. Optional on the wire type because pre-existing/fake-mode
-   * payloads predate the field; treat a missing value as `'bedrock'` (see
-   * `modelStore.groupModelsBySource`).
-   *
-   * contract: multi-provider model selection doc — `GET /models` row shape.
+   * `provider`, and the value to send back as `RunRequest.provider`.
    */
-  source?: ModelSource
+  source: ModelSource
 }
 
 /** `GET /api/v1/models` -> `providers[source]`. */
@@ -577,20 +567,10 @@ export interface ModelProviders {
   ollama: OllamaProviderStatus
 }
 
-/**
- * `GET /api/v1/models`.
- *
- * `providers` is optional on the wire type: a server that has not yet shipped
- * multi-provider support (e.g. the `EVALHARNESS_FAKE_MODEL` dev server) omits
- * it entirely. Treat a missing `providers` as "only bedrock is configured"
- * rather than crashing — see `modelStore.resolveModelProviders`.
- *
- * contract: multi-provider model selection doc — `GET /models` response
- * shape.
- */
+/** `GET /api/v1/models`: every model across every provider, plus which providers are configured. */
 export interface ModelListResponse {
   models: ModelInfo[]
-  providers?: ModelProviders
+  providers: ModelProviders
   cached: boolean
 }
 
@@ -624,8 +604,8 @@ export interface HealthResponse {
   }
   /**
    * Whether the server has an AgentCore runtime configured for the cloud eval
-   * lane (`EVALHARNESS_EVAL_RUNTIME_ARN`). Callers should still treat a
-   * missing/failed health response as unconfigured.
+   * lane (`EVALHARNESS_EVAL_RUNTIME_ARN`). A failed health check reads as
+   * unconfigured.
    */
   cloud_evals: {
     configured: boolean
@@ -635,25 +615,21 @@ export interface HealthResponse {
    * on a deployed (Lambda) server, where the cloud lane is the only one — the
    * launcher disables "This machine" and defaults to cloud when it is.
    *
-   * Optional so a health response from an older server (or a failed check)
-   * reads as "local is fine", which is the safe answer for a local-first tool.
-   *
    * contract: docs/serverless-deploy.md — "Health gains "local_evals":
    * {"available": bool}".
    */
-  local_evals?: {
+  local_evals: {
     available: boolean
   }
   /**
    * Whether every other route requires a bearer token, and — when it does —
    * the Cognito user pool the SPA signs in against. `/health` is the one
    * route a deployed server leaves open precisely so this can be read
-   * signed out. Optional for the same older-server reason as `local_evals`;
-   * absent reads as "no auth", which is what a local server means too.
+   * signed out.
    *
    * contract: server/evalharness/auth.py `health_block`.
    */
-  auth?: HealthAuth
+  auth: HealthAuth
 }
 
 export type HealthAuth =

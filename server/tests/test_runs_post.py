@@ -283,16 +283,19 @@ async def test_missing_required_fields_is_a_422_envelope(client):
     assert response.json()["error"]["code"] == "validation_error"
 
 
-async def test_unknown_body_fields_are_ignored(client, model_holder):
-    model_holder["model"] = FakeModel(script=[Text("ok")])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"mystery_field": 42},
+        {"tools_enabled": True},
+        {"inference": {"temperature": 0.5, "nope": 1}},
+    ],
+)
+async def test_unknown_body_fields_are_a_422(client, extra):
+    response = await client.post("/api/v1/runs", json=body(stream=False, **extra))
 
-    response = await client.post(
-        "/api/v1/runs",
-        json=body(stream=False, mystery_field=42, inference={"temperature": 0.5, "nope": 1}),
-    )
-
-    assert response.status_code == 200
-    assert response.json()["config"]["inference"] == {"temperature": 0.5}
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
 
 
 async def test_out_of_range_inference_values_are_rejected(client):

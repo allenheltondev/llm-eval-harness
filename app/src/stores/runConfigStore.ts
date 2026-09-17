@@ -6,7 +6,7 @@
  * editable while a run is in flight and makes "re-run this exact config"
  * trivial.
  *
- * Persisted to localStorage under `evalharness.run-config.v2`. Everything in
+ * Persisted to localStorage under `evalharness.run-config`. Everything in
  * the state is plain configuration (no credentials, no outputs), so
  * `partialize` keeps all of it and drops only the action functions.
  */
@@ -15,12 +15,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { InferenceConfig, ModelSource, RunGuardrailConfig, RunRequest } from '../api'
 
-/**
- * localStorage key. Bump the suffix when the shape changes incompatibly —
- * `.v2` replaced `tools_enabled: boolean` with `toolset: string | null` and
- * dropped the scenario/dataset/prompt-library fields.
- */
-export const RUN_CONFIG_STORAGE_KEY = 'evalharness.run-config.v2'
+/** localStorage key. */
+export const RUN_CONFIG_STORAGE_KEY = 'evalharness.run-config'
 
 /** The serializable half of the store (this is exactly what is persisted). */
 export interface RunConfigData {
@@ -153,11 +149,6 @@ export const useRunConfigStore = create<RunConfigStore>()(
     }),
     {
       name: RUN_CONFIG_STORAGE_KEY,
-      // zustand's default `merge` is `{ ...currentState, ...persistedState }`,
-      // so a payload that predates a field (and therefore doesn't mention it)
-      // falls through to the freshly-created store's default rather than
-      // being clobbered with `undefined`. Same pattern as `settingsStore`.
-      version: 2,
       partialize: (state): RunConfigData => ({
         model_id: state.model_id,
         provider: state.provider,

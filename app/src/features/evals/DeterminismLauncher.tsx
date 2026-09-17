@@ -116,8 +116,8 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
       .health()
       .then(health => {
         if (cancelled) return
-        setCloudConfigured(Boolean(health.cloud_evals?.configured))
-        setLocalAvailable(health.local_evals?.available !== false)
+        setCloudConfigured(health.cloud_evals.configured)
+        setLocalAvailable(health.local_evals.available)
       })
       .catch(() => {
         if (!cancelled) setCloudConfigured(false)

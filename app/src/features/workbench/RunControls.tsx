@@ -8,9 +8,7 @@
  * from `selectCanRun`.
  *
  * Toolsets come from `GET /tools`, fetched once on mount and held locally: the
- * list is static for the life of the server and nothing else reads it. A
- * persisted `toolset` the server no longer lists is kept selectable rather
- * than silently reset, so the form never disagrees with what it will send.
+ * list is static for the life of the server and nothing else reads it.
  *
  * Guardrails only run against the `bedrock` provider (a guardrail + a
  * non-bedrock provider is a server-side 400), so the guardrail select is
@@ -89,7 +87,6 @@ export default function RunControls() {
 
   const toolsEnabled = toolset !== null
   const selectedToolset = toolsets.find(entry => entry.name === toolset) ?? null
-  const unlistedToolset = toolset !== null && selectedToolset === null
 
   function handleRun() {
     void startRun(toRunRequest(useRunConfigStore.getState()))
@@ -118,18 +115,12 @@ export default function RunControls() {
                 {entry.name}
               </option>
             ))}
-            {unlistedToolset && <option value={toolset}>{toolset}</option>}
           </select>
           {selectedToolset && (
             <p className="mt-1 text-xs text-gray-500" data-testid="toolset-tools">
               {selectedToolset.tools.length > 0
                 ? selectedToolset.tools.join(', ')
                 : 'No tools in this toolset'}
-            </p>
-          )}
-          {unlistedToolset && (
-            <p className="mt-1 text-xs text-amber-700" data-testid="toolset-unlisted">
-              This toolset is not offered by the server.
             </p>
           )}
           {toolsError && (

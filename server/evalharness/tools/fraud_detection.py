@@ -1,34 +1,13 @@
-"""Strands `@tool` port of the legacy JS fraud-detection scenario handlers.
+"""The example toolset: a small in-memory fraud-detection workflow.
 
-Source (read-only reference during the port):
-    app/src/scenarios/fraud-detection/scenario.json          (tool defs)
-    app/src/scenarios/fraud-detection/tools/*.js              (handlers)
+Four Strands ``@tool`` handlers (freeze an account, flag a transaction, open an
+alert, update a risk profile) that return realistic structured payloads without
+any backing service. They exist to exercise tool-use runs and evaluations end
+to end; real tools belong to whoever authors the evaluation.
 
-Behavior notes / deviations from the JS source
------------------------------------------------
-* None of the four legacy handlers (``createAlert.js``, ``flagTransaction.js``,
-  ``freezeAccount.js``, ``updateRisk.js``) perform explicit input validation --
-  they trust the caller (the LLM tool-calling layer) to already respect the
-  JSON Schema in scenario.json (patterns, enums, minLength, minItems). This
-  port preserves that: there is no hand-rolled validation here either, only
-  the JSON-schema-shaped surface Strands derives from the type hints below.
-* The JS handlers persisted every request to an IndexedDB-backed
-  ``HandlerUtils`` store (accounts/transactions/alerts), but *none* of that
-  stored data ever flows back into a response -- with exactly one exception:
-  ``updateRiskProfile`` reads the account's previously-stored ``risk_level``
-  to compute ``previous_risk_level`` / ``risk_change``. That is the only
-  place where cross-call state actually matters, so it is the only place we
-  keep an in-memory store here (``_ACCOUNT_RISK``, a trivial module-level
-  dict). Everything else in ``freezeAccount``, ``flagTransaction`` and
-  ``createAlert`` (e.g. ``updateAccountRiskFromTransaction`` in
-  flagTransaction.js) mutated storage that no handler ever reads back, so it
-  is dropped entirely as dead state.
-* Momento caching and rate limiting were never used by these four handlers
-  in the first place (that machinery lives only in the shipping-logistics
-  scenario's sharedUtils.js), so dropping it here changes nothing.
-* IDs and timestamps are generated the same way as the JS
-  (``HandlerUtils.generateId`` / ``new Date().toISOString()``); see
-  ``evalharness.tools._common``.
+The only cross-call state that affects a response is the most recently set
+risk level per account (``_ACCOUNT_RISK``), read by ``update_risk_profile`` to
+report ``previous_risk_level`` / ``risk_change``. Everything else is stateless.
 """
 
 from __future__ import annotations
@@ -44,10 +23,8 @@ from evalharness.tools._common import generate_id, iso_now, iso_offset
 # In-memory state
 # ---------------------------------------------------------------------------
 
-# The only piece of cross-call state that actually affects a response: the
-# most recently set risk_level per account, read by update_risk_profile to
-# compute previous_risk_level / risk_change. Mirrors the one observable use
-# of HandlerUtils' storage across these four handlers.
+# The most recently set risk_level per account, read by update_risk_profile
+# to compute previous_risk_level / risk_change.
 _ACCOUNT_RISK: dict[str, str] = {}
 
 FraudIndicator = Literal[

@@ -47,11 +47,6 @@ function statusClasses(status: string): string {
   return STATUS_CLASSES[status] ?? 'bg-gray-100 text-gray-700'
 }
 
-/** `EvaluationDetail.execution` is optional on the wire; pre-existing rows are local. */
-function executionOf(row: EvaluationDetail): EvaluationExecution {
-  return row.execution ?? 'local'
-}
-
 function isCancellable(status: EvaluationStatus | string): boolean {
   return status === 'pending' || status === 'running'
 }
@@ -62,19 +57,19 @@ function formatTs(ts: string): string {
 }
 
 export default function EvalsPage() {
-  const evaluations = useEvalStore((state) => state.evaluations)
-  const listLoading = useEvalStore((state) => state.listLoading)
-  const listError = useEvalStore((state) => state.listError)
-  const nextCursor = useEvalStore((state) => state.nextCursor)
-  const loadEvaluations = useEvalStore((state) => state.loadEvaluations)
-  const loadMoreEvaluations = useEvalStore((state) => state.loadMoreEvaluations)
-  const refreshEvaluation = useEvalStore((state) => state.refreshEvaluation)
+  const evaluations = useEvalStore(state => state.evaluations)
+  const listLoading = useEvalStore(state => state.listLoading)
+  const listError = useEvalStore(state => state.listError)
+  const nextCursor = useEvalStore(state => state.nextCursor)
+  const loadEvaluations = useEvalStore(state => state.loadEvaluations)
+  const loadMoreEvaluations = useEvalStore(state => state.loadMoreEvaluations)
+  const refreshEvaluation = useEvalStore(state => state.refreshEvaluation)
 
-  const activeEvaluationId = useEvalStore((state) => state.activeEvaluationId)
-  const activeStatus = useEvalStore((state) => state.status)
-  const activeResult = useEvalStore((state) => state.result)
-  const followEvaluation = useEvalStore((state) => state.followEvaluation)
-  const cancelEvaluation = useEvalStore((state) => state.cancelEvaluation)
+  const activeEvaluationId = useEvalStore(state => state.activeEvaluationId)
+  const activeStatus = useEvalStore(state => state.status)
+  const activeResult = useEvalStore(state => state.result)
+  const followEvaluation = useEvalStore(state => state.followEvaluation)
+  const cancelEvaluation = useEvalStore(state => state.cancelEvaluation)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [cloudFilter, setCloudFilter] = useState(false)
@@ -100,16 +95,19 @@ export default function EvalsPage() {
     await refreshEvaluation(row.id)
   }
 
-  const selectedRow = evaluations.find((row) => row.id === selectedId) ?? null
+  const selectedRow = evaluations.find(row => row.id === selectedId) ?? null
   const isSelectedActive = selectedId !== null && selectedId === activeEvaluationId
   const showLiveProgress =
-    isSelectedActive && (activeStatus === 'starting' || activeStatus === 'running' || activeStatus === 'grading')
-  const resultToShow = isSelectedActive ? (activeResult ?? selectedRow?.result ?? null) : (selectedRow?.result ?? null)
+    isSelectedActive &&
+    (activeStatus === 'starting' || activeStatus === 'running' || activeStatus === 'grading')
+  const resultToShow = isSelectedActive
+    ? (activeResult ?? selectedRow?.result ?? null)
+    : (selectedRow?.result ?? null)
 
   return (
     <div className="space-y-6" data-testid="evals-page">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
-        <DeterminismLauncher onStarted={(id) => setSelectedId(id)} />
+        <DeterminismLauncher onStarted={id => setSelectedId(id)} />
 
         <section className="card" aria-labelledby="eval-results-heading">
           <h2 id="eval-results-heading" className="text-base font-semibold text-gray-900 mb-3">
@@ -151,7 +149,7 @@ export default function EvalsPage() {
               data-testid="eval-cloud-filter"
               className="h-4 w-4 rounded border-gray-300 text-primary-600"
               checked={cloudFilter}
-              onChange={(event) => setCloudFilter(event.target.checked)}
+              onChange={event => setCloudFilter(event.target.checked)}
             />
             Cloud
           </label>
@@ -173,7 +171,7 @@ export default function EvalsPage() {
 
         {evaluations.length > 0 && (
           <ul className="divide-y divide-gray-200" data-testid="eval-list">
-            {evaluations.map((row) => (
+            {evaluations.map(row => (
               <li key={row.id}>
                 {/* A `div[role=button]`, not a real `<button>`: a Cancel button lives inside
                     it, and nesting interactive controls inside a `<button>` is invalid HTML. */}
@@ -182,7 +180,7 @@ export default function EvalsPage() {
                   tabIndex={0}
                   data-testid={`eval-row-${row.id}`}
                   onClick={() => handleSelectRow(row)}
-                  onKeyDown={(event) => {
+                  onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
                       handleSelectRow(row)
@@ -195,10 +193,10 @@ export default function EvalsPage() {
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-xs font-medium text-gray-700 uppercase">{row.kind}</span>
                     <span
-                      className={`px-2 py-0.5 rounded-full text-xs font-medium uppercase ${EXECUTION_CLASSES[executionOf(row)]}`}
+                      className={`px-2 py-0.5 rounded-full text-xs font-medium uppercase ${EXECUTION_CLASSES[row.execution]}`}
                       data-testid={`eval-lane-${row.id}`}
                     >
-                      {executionOf(row)}
+                      {row.execution}
                     </span>
                     <span
                       className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClasses(row.status)}`}
@@ -210,7 +208,9 @@ export default function EvalsPage() {
 
                   <div className="flex items-center gap-2">
                     {row.result?.grade && (
-                      <span className="text-sm font-semibold text-gray-900">{row.result.grade}</span>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {row.result.grade}
+                      </span>
                     )}
                     {row.result?.score !== null && row.result?.score !== undefined && (
                       <span className="text-xs text-gray-500">{row.result.score}/100</span>
@@ -219,7 +219,7 @@ export default function EvalsPage() {
                       <button
                         type="button"
                         className="btn-secondary py-1 px-2 text-xs"
-                        onClick={(event) => void handleCancelRow(row, event)}
+                        onClick={event => void handleCancelRow(row, event)}
                       >
                         Cancel
                       </button>

@@ -11,7 +11,7 @@ from evalharness.providers import DEFAULT_PROVIDER, Provider
 class InferenceConfig(BaseModel):
     """Sampling knobs forwarded to the model provider (all optional)."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -33,13 +33,9 @@ class GuardrailConfig(BaseModel):
 
 
 class RunRequest(BaseModel):
-    """Body of ``POST /api/v1/runs``.
+    """Body of ``POST /api/v1/runs``. Unknown fields are a 422."""
 
-    Unknown fields are ignored rather than rejected, so a newer client can post
-    additional keys against an older server without a 422.
-    """
-
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(min_length=1)
     #: Which SDK executes this run. ``model_id`` is interpreted in that

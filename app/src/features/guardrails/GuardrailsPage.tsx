@@ -38,9 +38,7 @@ const STATUS_CLASSES: Record<GuardrailLifecycleStatus, string> = {
 
 function StatusBadge({ status }: { status: GuardrailLifecycleStatus }) {
   return (
-    <span
-      className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_CLASSES[status]}`}
-    >
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_CLASSES[status]}`}>
       {STATUS_LABELS[status]}
     </span>
   )
@@ -61,8 +59,8 @@ function GuardrailRow({
   onVersions: () => void
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
-  const removeGuardrail = useGuardrailStore((state) => state.removeGuardrail)
-  const saving = useGuardrailStore((state) => state.saving)
+  const removeGuardrail = useGuardrailStore(state => state.removeGuardrail)
+  const saving = useGuardrailStore(state => state.saving)
 
   async function handleDelete() {
     const removed = await removeGuardrail(guardrail.id)
@@ -165,9 +163,7 @@ function GuardrailList({
         </p>
       )}
 
-      {loading && guardrails.length === 0 && (
-        <LoadingSpinner text="Loading guardrails…" />
-      )}
+      {loading && guardrails.length === 0 && <LoadingSpinner text="Loading guardrails…" />}
 
       {loaded && !loading && guardrails.length === 0 && !error && (
         <p className="text-sm text-gray-600" data-testid="guardrails-empty">
@@ -188,7 +184,7 @@ function GuardrailList({
               </tr>
             </thead>
             <tbody>
-              {guardrails.map((guardrail) => (
+              {guardrails.map(guardrail => (
                 <GuardrailRow
                   key={guardrail.id}
                   guardrail={guardrail}
@@ -207,11 +203,11 @@ function GuardrailList({
 export default function GuardrailsPage() {
   const [view, setView] = useState<View>({ mode: 'list' })
 
-  const guardrails = useGuardrailStore((state) => state.guardrails)
-  const loading = useGuardrailStore((state) => state.loading)
-  const loaded = useGuardrailStore((state) => state.loaded)
-  const error = useGuardrailStore((state) => state.error)
-  const loadGuardrails = useGuardrailStore((state) => state.loadGuardrails)
+  const guardrails = useGuardrailStore(state => state.guardrails)
+  const loading = useGuardrailStore(state => state.loading)
+  const loaded = useGuardrailStore(state => state.loaded)
+  const error = useGuardrailStore(state => state.error)
+  const loadGuardrails = useGuardrailStore(state => state.loadGuardrails)
 
   useEffect(() => {
     void loadGuardrails()
@@ -219,10 +215,7 @@ export default function GuardrailsPage() {
 
   if (view.mode === 'editor') {
     return (
-      <GuardrailEditor
-        guardrailId={view.guardrailId}
-        onClose={() => setView({ mode: 'list' })}
-      />
+      <GuardrailEditor guardrailId={view.guardrailId} onClose={() => setView({ mode: 'list' })} />
     )
   }
 
@@ -244,8 +237,8 @@ export default function GuardrailsPage() {
         loaded={loaded}
         error={error}
         onNew={() => setView({ mode: 'editor', guardrailId: null })}
-        onEdit={(id) => setView({ mode: 'editor', guardrailId: id })}
-        onVersions={(guardrail) =>
+        onEdit={id => setView({ mode: 'editor', guardrailId: id })}
+        onVersions={guardrail =>
           setView({ mode: 'versions', guardrailId: guardrail.id, name: guardrail.name })
         }
       />

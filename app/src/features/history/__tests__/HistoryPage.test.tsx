@@ -175,7 +175,8 @@ describe('HistoryPage: filters', () => {
           name: 'Model One',
           provider: 'Amazon',
           supports_streaming: true,
-          kind: 'foundation-model'
+          kind: 'foundation-model',
+          source: 'bedrock'
         }
       ]
     })

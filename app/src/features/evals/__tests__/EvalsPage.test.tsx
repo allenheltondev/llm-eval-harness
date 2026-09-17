@@ -42,6 +42,7 @@ const rows: EvaluationDetail[] = [
     ts: '2026-08-10T12:00:00Z',
     kind: 'determinism',
     status: 'completed',
+    execution: 'local',
     config: {
       kind: 'determinism',
       n: 4,
@@ -180,7 +181,7 @@ describe('EvalsPage', () => {
     expect(followEvaluation).toHaveBeenCalledWith('eval-running')
   })
 
-  it('renders a lane badge per row, defaulting to local when execution is absent', () => {
+  it('renders a lane badge per row', () => {
     render(<EvalsPage />)
 
     expect(screen.getByTestId('eval-lane-eval-completed')).toHaveTextContent('local')

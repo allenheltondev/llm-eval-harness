@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { HealthResponse, ModelInfo } from '../../../api'
+import type { HealthResponse, ModelInfo, ModelProviders } from '../../../api'
 
 /**
  * The launcher fetches `api.health()` on mount to decide which run locations
@@ -20,7 +20,8 @@ function health(configured: boolean, localAvailable = true): HealthResponse {
     status: 'ok',
     aws: { region: 'us-east-1', credentials: 'ok' },
     cloud_evals: { configured },
-    local_evals: { available: localAvailable }
+    local_evals: { available: localAvailable },
+    auth: { required: false }
   }
 }
 
@@ -40,20 +41,29 @@ const {
   useSettingsStore
 } = await import('../../../stores')
 
+const ALL_PROVIDERS: ModelProviders = {
+  bedrock: { configured: true },
+  anthropic: { configured: true },
+  openai: { configured: true },
+  ollama: { configured: true, reachable: true }
+}
+
 const MODELS: ModelInfo[] = [
   {
     model_id: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
     name: 'Claude 3.5 Sonnet',
     provider: 'Anthropic',
     supports_streaming: true,
-    kind: 'foundation-model'
+    kind: 'foundation-model',
+    source: 'bedrock'
   },
   {
     model_id: 'amazon.nova-pro-v1:0',
     name: 'Nova Pro',
     provider: 'Amazon',
     supports_streaming: true,
-    kind: 'foundation-model'
+    kind: 'foundation-model',
+    source: 'bedrock'
   }
 ]
 
@@ -70,6 +80,7 @@ beforeEach(() => {
   useModelStore.setState({
     models: MODELS,
     modelsLoaded: true,
+    modelProviders: ALL_PROVIDERS,
     loadModels: vi.fn().mockResolvedValue(undefined)
   })
 })
@@ -178,6 +189,7 @@ describe('DeterminismLauncher', () => {
   it('sends the grader provider matching the chosen grader model source', async () => {
     useRunConfigStore.setState({ model_id: MODELS[0].model_id, user_prompt: 'go' })
     useModelStore.setState({
+      modelProviders: ALL_PROVIDERS,
       models: [
         ...MODELS,
         {
@@ -342,17 +354,6 @@ describe('DeterminismLauncher', () => {
           expect.objectContaining({ execution: 'cloud' })
         )
       })
-    })
-
-    it('keeps "This machine" available when health omits local_evals', async () => {
-      healthMock.mockReset()
-      healthMock.mockResolvedValue({ ...health(true), local_evals: undefined })
-      render(<DeterminismLauncher />)
-      await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
-
-      const local = screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement
-      expect(local.disabled).toBe(false)
-      expect(local.checked).toBe(true)
     })
   })
 })

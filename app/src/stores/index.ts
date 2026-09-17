@@ -57,8 +57,6 @@ export {
   useModelStore,
   findModel,
   groupModelsBySource,
-  resolveModelProviders,
-  DEFAULT_MODEL_PROVIDERS,
   INITIAL_MODEL_STATE,
   type ModelStateData,
   type ModelActions,

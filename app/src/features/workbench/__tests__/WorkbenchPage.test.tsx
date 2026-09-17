@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { ModelInfo, ToolsResponse } from '../../../api'
+import type { ModelInfo, ToolsResponse, ModelProviders } from '../../../api'
 
 const toolsMock = vi.fn<() => Promise<ToolsResponse>>()
 
@@ -28,6 +28,13 @@ const {
   useRunConfigStore,
   useRunStore
 } = await import('../../../stores')
+
+const ALL_PROVIDERS: ModelProviders = {
+  bedrock: { configured: true },
+  anthropic: { configured: true },
+  openai: { configured: true },
+  ollama: { configured: true, reachable: true }
+}
 
 const MODELS: ModelInfo[] = [
   {
@@ -68,6 +75,7 @@ beforeEach(() => {
   useModelStore.setState({
     models: MODELS,
     modelsLoaded: true,
+    modelProviders: ALL_PROVIDERS,
     loadModels: vi.fn().mockResolvedValue(undefined)
   })
   useGuardrailStore.setState({

@@ -48,7 +48,7 @@ export default function ModelPanel() {
 
   function handleSelect(id: string) {
     const model = id === '' ? null : findModel(models, id)
-    if (model) selectModel(model.model_id, model.source ?? 'bedrock')
+    if (model) selectModel(model.model_id, model.source)
     else setModelId(id)
   }
 

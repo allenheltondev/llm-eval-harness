@@ -20,12 +20,7 @@ export interface ModelStateData {
   modelsError: StoreError | null
   /** `ModelListResponse.cached` — the server served this from its catalog cache. */
   modelsCached: boolean
-  /**
-   * `ModelListResponse.providers`, as last fetched. `null` until `loadModels`
-   * resolves *or* when the server response omitted it (older/fake-mode
-   * servers) — either way, read it through `resolveModelProviders` /
-   * `groupModelsBySource` rather than indexing it directly.
-   */
+  /** `ModelListResponse.providers`, as last fetched; `null` until `loadModels` resolves. */
   modelProviders: ModelProviders | null
 }
 
@@ -65,7 +60,7 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
         set({
           models: response.models,
           modelsCached: response.cached,
-          modelProviders: response.providers ?? null,
+          modelProviders: response.providers,
           modelsLoading: false,
           modelsLoaded: true
         })
@@ -96,25 +91,6 @@ export function findModel(models: ModelInfo[], modelId: string): ModelInfo | nul
 /* -------------------------------------------------------------------------- */
 /* Model source grouping — shared by ModelPanel and DeterminismLauncher       */
 /* -------------------------------------------------------------------------- */
-
-/**
- * Fallback `providers` used whenever `GET /models` omitted the field (older
- * or fake-mode servers): only bedrock is treated as usable, matching the
- * server's pre-multi-provider behavior.
- */
-export const DEFAULT_MODEL_PROVIDERS: ModelProviders = {
-  bedrock: { configured: true },
-  anthropic: { configured: false },
-  openai: { configured: false },
-  ollama: { configured: false, reachable: null }
-}
-
-/** Never crash on a missing `providers` object — fall back defensively. */
-export function resolveModelProviders(
-  providers: ModelProviders | null | undefined
-): ModelProviders {
-  return providers ?? DEFAULT_MODEL_PROVIDERS
-}
 
 const SOURCE_ORDER: ModelSource[] = ['bedrock', 'anthropic', 'openai', 'ollama']
 
@@ -163,21 +139,22 @@ export interface GroupedModels {
 /**
  * Group a flat model catalog into per-source buckets (Bedrock / Anthropic /
  * OpenAI / Ollama (local)), in that fixed order, folding in `providers` to
- * mark unconfigured/unreachable sources. A model with no `source` (older/
- * fake-mode payloads) is treated as `'bedrock'`.
+ * mark unconfigured/unreachable sources. With `providers` still `null` (the
+ * catalog has not loaded) there is nothing to group and nothing to report.
  *
  * Pure and framework-free so `ModelPanel` and `DeterminismLauncher` share one
  * implementation instead of two ad hoc `<select>` groupings.
  */
 export function groupModelsBySource(
   models: ModelInfo[],
-  providers?: ModelProviders | null
+  providers: ModelProviders | null
 ): GroupedModels {
-  const resolved = resolveModelProviders(providers)
+  if (providers === null) return { groups: [], unavailable: [] }
+  const resolved = providers
 
   const bySource = new Map<ModelSource, ModelInfo[]>()
   for (const model of models) {
-    const source = model.source ?? 'bedrock'
+    const source = model.source
     const existing = bySource.get(source)
     if (existing) existing.push(model)
     else bySource.set(source, [model])

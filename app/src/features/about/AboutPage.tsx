@@ -73,7 +73,7 @@ export default function AboutPage() {
         </p>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
-          {aiPrinciples.map((principle) => (
+          {aiPrinciples.map(principle => (
             <article
               key={principle.id}
               className="flex items-start space-x-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors duration-200"

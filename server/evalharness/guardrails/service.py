@@ -1,9 +1,7 @@
 """Server-side Bedrock guardrail service.
 
-Consolidates the CRUD/version flows previously spread across the frontend's
-``guardrailService.js`` (create/list/get/delete) and
-``guardrailConfigurationManager.js`` (update) into a single boto3-backed
-service. DRAFT is always the working copy: reads/updates/deletes default to
+One boto3-backed service for the CRUD/version flows. DRAFT is always the
+working copy: reads/updates/deletes default to
 ``guardrailVersion="DRAFT"``, and "publishing" a guardrail is modeled as
 ``create_version``, which snapshots DRAFT into a new immutable numbered
 version (``CreateGuardrailVersion``), matching AWS's own DRAFT semantics.
@@ -30,8 +28,6 @@ logger = logging.getLogger(__name__)
 
 DRAFT_VERSION = "DRAFT"
 
-# Ported from guardrailService.js's generateGuardrailTags (scenario/created-by
-# tags are dropped since this service is no longer scenario-scoped).
 _DEFAULT_TAGS = [{"key": "source", "value": "evalharness"}]
 
 

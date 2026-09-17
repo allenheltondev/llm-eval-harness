@@ -229,11 +229,8 @@ describe('toRunRequest', () => {
 })
 
 describe('persistence', () => {
-  it('uses a v2 key, so a v1 payload with the old shape is never read', () => {
-    expect(RUN_CONFIG_STORAGE_KEY).toBe('evalharness.run-config.v2')
-  })
-
-  it('writes every config field to localStorage under the v2 key', () => {
+  it('writes every config field to localStorage under the run-config key', () => {
+    expect(RUN_CONFIG_STORAGE_KEY).toBe('evalharness.run-config')
     const state = useRunConfigStore.getState()
     state.setModelId('anthropic.claude-3-sonnet')
     state.setSystemPrompt('be terse')
@@ -246,7 +243,6 @@ describe('persistence', () => {
     expect(raw).not.toBeNull()
 
     const parsed = JSON.parse(raw as string)
-    expect(parsed.version).toBe(2)
     expect(parsed.state).toEqual({
       model_id: 'anthropic.claude-3-sonnet',
       provider: 'bedrock',
@@ -266,7 +262,7 @@ describe('persistence', () => {
     localStorage.setItem(
       RUN_CONFIG_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: 0,
         state: {
           ...DEFAULT_RUN_CONFIG,
           model_id: 'amazon.nova-pro-v1:0',
@@ -290,29 +286,5 @@ describe('persistence', () => {
     expect(state.stream).toBe(false)
     // actions survive rehydration
     expect(typeof state.setToolset).toBe('function')
-  })
-
-  it('a payload predating a field rehydrates with that field at its default', async () => {
-    // Simulates a persisted payload with no `toolset` key at all (not even
-    // `undefined`), the way real old localStorage looks.
-    const withoutToolset: Record<string, unknown> = { ...DEFAULT_RUN_CONFIG }
-    delete withoutToolset.toolset
-    localStorage.setItem(
-      RUN_CONFIG_STORAGE_KEY,
-      JSON.stringify({
-        version: 2,
-        state: {
-          ...withoutToolset,
-          model_id: 'amazon.nova-pro-v1:0',
-          user_prompt: 'restored prompt'
-        }
-      })
-    )
-
-    await useRunConfigStore.persist.rehydrate()
-
-    const state = useRunConfigStore.getState()
-    expect(state.model_id).toBe('amazon.nova-pro-v1:0')
-    expect(state.toolset).toBeNull()
   })
 })

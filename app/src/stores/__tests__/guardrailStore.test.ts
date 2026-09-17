@@ -11,7 +11,7 @@ const removeMock = vi.fn()
 const versionsListMock = vi.fn()
 const versionsCreateMock = vi.fn()
 
-vi.mock('../../api', async (importOriginal) => {
+vi.mock('../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../api')>()
   return {
     ...actual,
@@ -31,9 +31,8 @@ vi.mock('../../api', async (importOriginal) => {
 })
 
 const { ApiError, StreamAbortedError } = await import('../../api')
-const { useGuardrailStore, guardrailCacheKey, toSummary, readyGuardrails } = await import(
-  '../guardrailStore'
-)
+const { useGuardrailStore, guardrailCacheKey, toSummary, readyGuardrails } =
+  await import('../guardrailStore')
 
 const detail: GuardrailDetail = {
   id: 'gr-1',
@@ -62,7 +61,7 @@ const publishedVersion: GuardrailVersionSummary = {
 /** A promise plus its resolver, so a test can inspect mid-flight state. */
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((r) => {
+  const promise = new Promise<T>(r => {
     resolve = r
   })
   return { promise, resolve }
@@ -105,8 +104,11 @@ describe('list', () => {
   })
 
   it('readyGuardrails filters to attachable rows', () => {
-    const rows = [toSummary(detail), { ...toSummary(detail), id: 'gr-2', status: 'CREATING' as const }]
-    expect(readyGuardrails(rows).map((row) => row.id)).toEqual(['gr-1'])
+    const rows = [
+      toSummary(detail),
+      { ...toSummary(detail), id: 'gr-2', status: 'CREATING' as const }
+    ]
+    expect(readyGuardrails(rows).map(row => row.id)).toEqual(['gr-1'])
   })
 
   it('tolerates an abort, clearing loading without recording an error', async () => {
@@ -178,7 +180,7 @@ describe('CRUD', () => {
 
     expect(created).toBe(detail)
     const state = useGuardrailStore.getState()
-    expect(state.guardrails.map((row) => row.id)).toEqual(['gr-1'])
+    expect(state.guardrails.map(row => row.id)).toEqual(['gr-1'])
     expect(state.details['gr-1']).toBe(detail)
     expect(state.saving).toBe(false)
   })
@@ -228,7 +230,7 @@ describe('CRUD', () => {
     expect(state.versions).toEqual({})
   })
 
-  it('removing a single version drops only that version\'s cache entry, keeping the guardrail row', async () => {
+  it("removing a single version drops only that version's cache entry, keeping the guardrail row", async () => {
     createMock.mockResolvedValueOnce(detail)
     await useGuardrailStore.getState().createGuardrail({ name: 'pii-blocker' })
     getMock.mockResolvedValueOnce({ ...detail, version: '2' })
@@ -244,7 +246,7 @@ describe('CRUD', () => {
     const state = useGuardrailStore.getState()
     // The guardrail row itself and its DRAFT detail survive; only @2 and the
     // versions list entry are gone.
-    expect(state.guardrails.map((row) => row.id)).toEqual(['gr-1'])
+    expect(state.guardrails.map(row => row.id)).toEqual(['gr-1'])
     expect(state.details[guardrailCacheKey('gr-1')]).toBeDefined()
     expect(state.details[guardrailCacheKey('gr-1', '2')]).toBeUndefined()
     expect(state.versions['gr-1']).toBeUndefined()
@@ -261,7 +263,7 @@ describe('CRUD', () => {
     const state = useGuardrailStore.getState()
     expect(state.saving).toBe(false)
     expect(state.saveError).toEqual({ code: 'conflict', message: 'in use' })
-    expect(state.guardrails.map((row) => row.id)).toEqual(['gr-1'])
+    expect(state.guardrails.map(row => row.id)).toEqual(['gr-1'])
   })
 
   it('records an update failure as saveError without touching the cached detail', async () => {
@@ -423,8 +425,8 @@ describe('CRUD cache precision', () => {
     await useGuardrailStore.getState().updateGuardrail('gr-1', { name: 'pii-blocker' })
 
     const rows = useGuardrailStore.getState().guardrails
-    expect(rows.find((r) => r.id === 'gr-1')?.description).toBe('updated')
-    expect(rows.find((r) => r.id === 'gr-2')?.name).toBe('other-guardrail')
+    expect(rows.find(r => r.id === 'gr-1')?.description).toBe('updated')
+    expect(rows.find(r => r.id === 'gr-2')?.name).toBe('other-guardrail')
   })
 
   it("removeGuardrail's whole-guardrail delete does not touch a different guardrail whose id is a prefix collision", async () => {
@@ -442,7 +444,7 @@ describe('CRUD cache precision', () => {
     expect(useGuardrailStore.getState().details[guardrailCacheKey('gr-1')]).toBeUndefined()
   })
 
-  it('removing a single version does not touch a different guardrail\'s versions list', async () => {
+  it("removing a single version does not touch a different guardrail's versions list", async () => {
     versionsListMock.mockResolvedValueOnce({ versions: [publishedVersion] })
     await useGuardrailStore.getState().loadVersions('gr-1')
     versionsListMock.mockResolvedValueOnce({ versions: [{ ...publishedVersion, id: 'gr-2' }] })
@@ -507,10 +509,10 @@ describe('cache selectivity across multiple guardrails', () => {
     removeMock.mockResolvedValueOnce(undefined)
     await useGuardrailStore.getState().removeGuardrail('gr-1')
 
-    expect(useGuardrailStore.getState().guardrails.map((r) => r.id)).toEqual(['gr-2'])
+    expect(useGuardrailStore.getState().guardrails.map(r => r.id)).toEqual(['gr-2'])
   })
 
-  it('invalidateGuardrail only drops keys for the targeted guardrail, keeping another guardrail\'s cache', async () => {
+  it("invalidateGuardrail only drops keys for the targeted guardrail, keeping another guardrail's cache", async () => {
     getMock.mockResolvedValueOnce(detail)
     await useGuardrailStore.getState().loadGuardrail('gr-1')
     getMock.mockResolvedValueOnce({ ...detail, id: 'gr-2' })

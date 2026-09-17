@@ -17,14 +17,8 @@ vi.mock('../../api', async importOriginal => {
 })
 
 const { ApiError, StreamAbortedError } = await import('../../api')
-const {
-  useModelStore,
-  findModel,
-  groupModelsBySource,
-  resolveModelProviders,
-  DEFAULT_MODEL_PROVIDERS,
-  INITIAL_MODEL_STATE
-} = await import('../modelStore')
+const { useModelStore, findModel, groupModelsBySource, INITIAL_MODEL_STATE } =
+  await import('../modelStore')
 
 const modelProviders: ModelProviders = {
   bedrock: { configured: true },
@@ -94,13 +88,6 @@ describe('loadModels', () => {
     expect(findModel(models, 'nope')).toBeNull()
   })
 
-  it('stores modelProviders as null when the server omits it (older/fake-mode)', async () => {
-    modelsListMock.mockResolvedValue({ models: modelsResponse.models, cached: false })
-    await useModelStore.getState().loadModels()
-
-    expect(useModelStore.getState().modelProviders).toBeNull()
-  })
-
   it('tolerates an abort, clearing loading without recording an error', async () => {
     modelsListMock.mockRejectedValueOnce(new StreamAbortedError())
 
@@ -161,22 +148,11 @@ describe('loadModels', () => {
   })
 })
 
-describe('resolveModelProviders', () => {
-  it('passes through a real providers object unchanged', () => {
-    expect(resolveModelProviders(modelProviders)).toBe(modelProviders)
-  })
-
-  it('falls back to "only bedrock configured" for null/undefined', () => {
-    expect(resolveModelProviders(null)).toEqual(DEFAULT_MODEL_PROVIDERS)
-    expect(resolveModelProviders(undefined)).toEqual(DEFAULT_MODEL_PROVIDERS)
-    expect(DEFAULT_MODEL_PROVIDERS.bedrock.configured).toBe(true)
-    expect(DEFAULT_MODEL_PROVIDERS.anthropic.configured).toBe(false)
-    expect(DEFAULT_MODEL_PROVIDERS.openai.configured).toBe(false)
-    expect(DEFAULT_MODEL_PROVIDERS.ollama).toEqual({ configured: false, reachable: null })
-  })
-})
-
 describe('groupModelsBySource', () => {
+  it('reports nothing at all before the catalog (and its providers) has loaded', () => {
+    expect(groupModelsBySource([], null)).toEqual({ groups: [], unavailable: [] })
+  })
+
   const models: ModelInfo[] = [
     {
       model_id: 'm-bedrock',
@@ -201,14 +177,6 @@ describe('groupModelsBySource', () => {
       supports_streaming: false,
       kind: 'foundation-model',
       source: 'ollama'
-    },
-    {
-      model_id: 'm-no-source',
-      name: 'Legacy model',
-      provider: 'Amazon',
-      supports_streaming: true,
-      kind: 'foundation-model'
-      // no `source` — pre-multi-provider / fake-mode row
     }
   ]
 
@@ -221,8 +189,7 @@ describe('groupModelsBySource', () => {
     })
 
     expect(groups.map(g => g.source)).toEqual(['bedrock', 'anthropic', 'ollama'])
-    // the sourceless row folds into bedrock
-    expect(groups[0].models.map(m => m.model_id)).toEqual(['m-bedrock', 'm-no-source'])
+    expect(groups[0].models.map(m => m.model_id)).toEqual(['m-bedrock'])
     expect(groups.some(g => g.disabled)).toBe(false)
   })
 
@@ -282,16 +249,6 @@ describe('groupModelsBySource', () => {
     })
 
     expect(groups.some(g => g.source === 'openai')).toBe(false)
-    expect(unavailable).toEqual([{ source: 'openai', label: 'OpenAI' }])
-  })
-
-  it('treats a missing providers object as bedrock-only, without crashing', () => {
-    const { groups, unavailable } = groupModelsBySource(models, undefined)
-
-    const bedrockGroup = groups.find(g => g.source === 'bedrock')
-    const anthropicGroup = groups.find(g => g.source === 'anthropic')
-    expect(bedrockGroup?.disabled).toBe(false)
-    expect(anthropicGroup?.disabled).toBe(true)
     expect(unavailable).toEqual([{ source: 'openai', label: 'OpenAI' }])
   })
 })

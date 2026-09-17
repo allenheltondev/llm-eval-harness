@@ -24,8 +24,7 @@ Everything else in `EvaluationRequest` is unchanged. When `execution: "cloud"`
 and the server is not configured for the cloud lane, respond 400
 `{"error": {"code": "cloud_lane_unavailable", ...}}`.
 
-`EvaluationDetail` gains `"execution": "local" | "cloud"` (default local for
-pre-existing rows).
+`EvaluationDetail` gains `"execution": "local" | "cloud"`.
 
 ## DynamoDB item shapes (existing table: pk/sk + GSI1)
 

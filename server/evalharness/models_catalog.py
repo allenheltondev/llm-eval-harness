@@ -11,11 +11,10 @@ provider that *is* configured but fails -- expired key, 401, a laptop's Ollama
 that isn't running -- contributes an empty list and is logged, never an error:
 one dead provider must not take the model picker down for the other three.
 
-The one exception is Bedrock, which keeps its pre-existing behaviour of
-surfacing a ``ClientError`` as a ``502`` from the endpoint. Bedrock is the
-default provider and a silent empty list there reads as "your account has no
-models" rather than "your credentials expired", which is the more expensive
-mistake.
+The one exception is Bedrock, which surfaces a ``ClientError`` as a ``502``
+from the endpoint. Bedrock is the default provider and a silent empty list
+there reads as "your account has no models" rather than "your credentials
+expired", which is the more expensive mistake.
 
 Caching
 -------

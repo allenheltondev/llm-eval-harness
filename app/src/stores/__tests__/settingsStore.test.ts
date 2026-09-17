@@ -57,13 +57,13 @@ describe('setters', () => {
 })
 
 describe('persistence', () => {
-  it('writes only the preference fields under the v1 key', () => {
+  it('writes only the preference fields under the settings key', () => {
     useSettingsStore.getState().setTheme('light')
 
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY)
     expect(raw).not.toBeNull()
     const parsed = JSON.parse(raw as string)
-    expect(parsed.version).toBe(1)
+    expect(parsed.version).toBe(0)
     expect(parsed.state).toEqual({
       theme: 'light',
       defaultGraderModelId: 'amazon.nova-pro-v1:0',
@@ -76,7 +76,7 @@ describe('persistence', () => {
     localStorage.setItem(
       SETTINGS_STORAGE_KEY,
       JSON.stringify({
-        version: 1,
+        version: 0,
         state: { ...DEFAULT_SETTINGS, theme: 'dark', defaultN: 3 }
       })
     )
@@ -87,42 +87,6 @@ describe('persistence', () => {
       theme: 'dark',
       defaultN: 3
     })
-  })
-
-  it('a pre-defaultEvalExecution payload merges cleanly, defaulting it to local', async () => {
-    // Simulates a payload persisted before `defaultEvalExecution` existed: the
-    // key is simply absent, not `undefined`-valued.
-    const legacyState: Record<string, unknown> = {
-      theme: 'dark',
-      defaultGraderModelId: 'amazon.nova-pro-v1:0',
-      defaultN: 10
-    }
-    expect('defaultEvalExecution' in legacyState).toBe(false)
-
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ version: 1, state: legacyState }))
-
-    await useSettingsStore.persist.rehydrate()
-
-    expect(useSettingsStore.getState().defaultEvalExecution).toBe('local')
-    expect(useSettingsStore.getState().theme).toBe('dark')
-  })
-
-  it('drops the retired mascot settings from a legacy payload on the next write', async () => {
-    localStorage.setItem(
-      SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: { ...DEFAULT_SETTINGS, robotEnabled: false, chadEnabled: false }
-      })
-    )
-
-    await useSettingsStore.persist.rehydrate()
-    useSettingsStore.getState().setDefaultN(4)
-
-    const parsed = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) as string)
-    expect(parsed.state).not.toHaveProperty('robotEnabled')
-    expect(parsed.state).not.toHaveProperty('chadEnabled')
-    expect(parsed.state.defaultN).toBe(4)
   })
 })
 

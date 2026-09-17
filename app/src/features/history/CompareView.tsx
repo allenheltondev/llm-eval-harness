@@ -38,7 +38,7 @@ function diffHighlight(a: RunDetail | undefined, b: RunDetail | undefined): RunD
 
 export default function CompareView({ runIds, onClose }: CompareViewProps) {
   const [leftId, rightId] = runIds
-  const details = useHistoryStore((state) => state.details)
+  const details = useHistoryStore(state => state.details)
   const left = details[leftId]
   const right = details[rightId]
 

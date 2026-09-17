@@ -268,25 +268,4 @@ describe('ModelPanel', () => {
       'Not shown: OpenAI (not configured), Ollama (local) (not configured)'
     )
   })
-
-  it('treats a missing providers object as "only bedrock is usable" without crashing', () => {
-    useModelStore.setState({
-      models: MULTI_PROVIDER_MODELS,
-      modelsLoaded: true,
-      modelProviders: null
-    })
-
-    render(<ModelPanel />)
-
-    const select = screen.getByRole('combobox', { name: 'Model' })
-    const bedrockGroup = within(select)
-      .getAllByRole('group')
-      .find(group => group.getAttribute('label') === 'Bedrock')
-    const anthropicGroup = within(select)
-      .getAllByRole('group')
-      .find(group => group.getAttribute('label')?.startsWith('Anthropic'))
-
-    expect(bedrockGroup).not.toBeDisabled()
-    expect(anthropicGroup).toBeDisabled()
-  })
 })
