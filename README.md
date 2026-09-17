@@ -250,18 +250,18 @@ validated but not deployed, since they never receive environment secrets.
 
 #### Setup owed by the human
 
-Two GitHub **environments** on the repo, each holding an IAM user's access key for its account:
+Two GitHub **environments** on the repo, `stage` and `prod`, each holding one secret,
+`PIPELINE_EXECUTION_ROLE`: the ARN of an IAM role in that environment's account that GitHub
+Actions assumes through the OIDC connector. No access keys anywhere.
 
-| Environment | Secrets |
-| --- | --- |
-| `stage` | `STAGE_ACCESS_KEY`, `STAGE_SECRET_KEY` |
-| `prod` | `PROD_ACCESS_KEY`, `PROD_SECRET_KEY` |
-
-The user needs enough to run `sam deploy` for this template (CloudFormation, Lambda, IAM roles,
-DynamoDB, S3, CloudFront, Cognito, Bedrock AgentCore) plus the three things `make deploy` does
-outside CloudFormation: upload the zips to the stack's artifact bucket, sync the SPA with
-`--delete`, and `cloudfront:CreateInvalidation` (which cannot be resource-scoped). `make
-create-user` additionally needs `cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
+The role's trust policy must allow `token.actions.githubusercontent.com` with a subject condition
+covering this repo, e.g. `repo:allenheltondev/llm-eval-harness:environment:stage` (or `:prod`, or
+`repo:allenheltondev/llm-eval-harness:*` to cover both). Its permissions need enough to run
+`sam deploy` for this template (CloudFormation, Lambda, IAM roles, DynamoDB, S3, CloudFront,
+Cognito, Bedrock AgentCore) plus the three things `make deploy` does outside CloudFormation: upload
+the zips to the stack's artifact bucket, sync the SPA with `--delete`, and
+`cloudfront:CreateInvalidation` (which cannot be resource-scoped). `make create-user` additionally
+needs `cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
 
 One sharp edge: `ServerArtifactKey` and `EvalWorkerArtifactKey` are CloudFormation parameters with
 empty defaults, and an empty value deletes the corresponding resource. `make deploy-backend`

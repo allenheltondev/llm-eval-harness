@@ -132,18 +132,22 @@ jobs:
     environment: prod
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
+      # OIDC: the job's identity token is exchanged for the role held in the
+      # environment's PIPELINE_EXECUTION_ROLE secret. No long-lived keys.
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-region: us-east-1
-          aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
+          role-to-assume: ${{ secrets.PIPELINE_EXECUTION_ROLE }}
       # The same target a developer runs locally: one deploy definition.
       - name: Package and deploy the stack
         run: make deploy-backend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1
@@ -160,6 +164,9 @@ jobs:
     environment: prod
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -167,11 +174,12 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: app/package-lock.json
+      # OIDC: the job's identity token is exchanged for the role held in the
+      # environment's PIPELINE_EXECUTION_ROLE secret. No long-lived keys.
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-region: us-east-1
-          aws-access-key-id: ${{ secrets.PROD_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.PROD_SECRET_KEY }}
+          role-to-assume: ${{ secrets.PIPELINE_EXECUTION_ROLE }}
       - name: Build and publish the SPA
         run: make deploy-frontend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1
