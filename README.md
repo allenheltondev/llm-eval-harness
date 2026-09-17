@@ -272,13 +272,44 @@ Production is scoped to `main`:
 ```
 
 Attach a deploy policy that grants CloudFormation, S3 (the SAM-managed bucket, the stack's artifact
-bucket **and** the SPA bucket, including `s3:DeleteObject` for the `--delete` sync), Lambda (and
-the Lambda Web Adapter layer's `lambda:GetLayerVersion`), IAM (role creation and `iam:PassRole`),
-DynamoDB, CloudFront (distributions, origin access controls, functions, and
-`cloudfront:CreateInvalidation`, which cannot be resource-scoped), Cognito user pools, and Bedrock
-AgentCore runtimes (`bedrock-agentcore:*` on runtimes plus `iam:CreateServiceLinkedRole` for its
-first use). `make create-user` additionally needs `cognito-idp:AdminCreateUser` on the pool, for
-whoever runs it.
+bucket **and** the SPA bucket, including `s3:DeleteObject` for the `--delete` sync), Lambda, IAM
+(role creation and `iam:PassRole`), DynamoDB, CloudFront (distributions, origin access controls,
+functions, and `cloudfront:CreateInvalidation`, which cannot be resource-scoped), Cognito user
+pools, and Bedrock AgentCore runtimes (`bedrock-agentcore:*` on runtimes plus
+`iam:CreateServiceLinkedRole` for its first use). `make create-user` additionally needs
+`cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
+
+Two grants are easy to miss because nothing else in a typical SAM stack needs them, and **both
+have already broken a real deploy**:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadTheLambdaWebAdapterLayer",
+      "Effect": "Allow",
+      "Action": "lambda:GetLayerVersion",
+      "Resource": "arn:aws:lambda:*:753240598075:layer:LambdaAdapterLayerArm64:*"
+    },
+    {
+      "Sid": "DeployDiagnostics",
+      "Effect": "Allow",
+      "Action": ["cloudformation:ListChangeSets", "cloudformation:DescribeChangeSet"],
+      "Resource": "arn:aws:cloudformation:*:*:stack/llm-eval-harness/*"
+    }
+  ]
+}
+```
+
+The first is the one that matters: the server Lambda attaches the AWS-published **Lambda Web
+Adapter** layer, which lives in AWS's own account (`753240598075`), not yours. Without this grant
+`ServerFunction` fails to create with `AccessDenied` on `lambda:GetLayerVersion` and the whole
+stack rolls back — and because a Node-only SAM stack never attaches a cross-account layer, a
+deploy role shared with other services will not already have it. (`LambdaAdapterLayerArn` is the
+escape hatch if you would rather mirror the layer into your own account.) The second is only used
+by the workflows' "Diagnose failed deploy" step; without it that step still runs but prints an
+`AccessDenied` instead of the change-set detail.
 
 One sharp edge: `ServerArtifactKey` and `EvalWorkerArtifactKey` are CloudFormation parameters with
 empty defaults, and an empty value deletes the corresponding resource. `make deploy-backend`
