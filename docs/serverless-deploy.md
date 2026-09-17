@@ -17,13 +17,12 @@ normative.
 The infra half is built. See
 [`serverless-deploy-infra.md`](./serverless-deploy-infra.md) for how it is
 packaged and wired, with citations and the list of things only a real deploy
-can prove — including three places where the implementation deliberately
+can prove — including two places where the implementation deliberately
 diverges from the sketch below: CORS is the empty list rather than the
 CloudFront domain (same-origin needs none, and deriving it would be circular),
-SPA fallback is a per-behaviour CloudFront Function rather than
+and SPA fallback is a per-behaviour CloudFront Function rather than
 distribution-wide `CustomErrorResponses` (which would corrupt the API's own
-403/404s), and stack discovery stays **on** for `config_api_key` alone, since
-CloudFormation cannot read an API key's value.
+403/404s).
 
 ## Compute shape
 
@@ -35,7 +34,6 @@ CloudFormation cannot read an API key's value.
   evaluation event streams keep their NDJSON semantics. `AWS_LWA_INVOKE_MODE=response_stream`. |
 | React SPA | Static build in S3 behind CloudFront. `VITE_API_URL` baked at build
   time pointing at the server's URL. |
-| Config store | Existing SAM Lambdas + DynamoDB (unchanged). |
 | Eval execution | Existing AgentCore Runtime worker (unchanged). |
 | History | DynamoDB (below). SQLite never runs in Lambda. |
 
@@ -52,11 +50,11 @@ The DynamoDB backend implements the SAME repository surface as
 `evalharness/store/history.py` (create_run/update_run/get_run/delete_run/
 list_runs/iter_runs_export/create_evaluation/update_evaluation/get_evaluation/
 list_evaluations, identical signatures and cursor semantics) against the
-existing config-store table, REUSING the cloud-eval item shapes verbatim
+stack's `EvalTable`, REUSING the cloud-eval item shapes verbatim
 (docs/cloud-evals.md): `RUN#{id}/META` with `GSI1PK="RUN", GSI1SK={ts}`,
 `EVAL#{id}/META` with `GSI1PK="EVAL"`. One deliberate consequence: deployed-server
 runs and cloud-lane worker runs land in the same partitions and read back
-through one code path. Filters (model_id/scenario_id/status/since) apply
+through one code path. Filters (model_id/status/since) apply
 post-page like the existing cloud listing. TTL: same 90-day `expiresAt`.
 
 Evaluations in the deployed server are cloud-lane only:
@@ -80,7 +78,7 @@ production, and `VITE_API_URL` stays relative.
 The shape follows `readysetcloud/rsc-core` (Cognito user pool + app client in
 the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
 
-- **Template** (`api/template.yaml`, condition `DeployServer`): `UserPool`
+- **Template** (`infra/template.yaml`, condition `DeployServer`): `UserPool`
   (email usernames, admin-only user creation, `${AWS::StackName}-users`) and
   `UserPoolClient` (`USER_PASSWORD_AUTH` + `REFRESH_TOKEN_AUTH`, no secret,
   1h id/access tokens, 30-day refresh). Outputs `UserPoolId`,
@@ -119,12 +117,9 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
 - Stack outputs added: `ServerFunctionUrl`, `AppUrl` (CloudFront domain),
   `AppBucket`.
 - IAM for the server function role: Bedrock invoke + guardrails, DynamoDB on the
-  table, `bedrock-agentcore:InvokeAgentRuntime` on the worker runtime,
-  `cloudformation:DescribeStacks` + `apigateway:GET` (self-discovery works
-  in-Lambda too — or the template injects the values as env vars directly,
-  which is PREFERRED deployed: no discovery latency; the infra item wires
-  EVALHARNESS_CONFIG_API_URL/KEY/EVAL_TABLE/EVAL_RUNTIME_ARN from
-  `!Ref`/`!GetAtt` and sets EVALHARNESS_STACK_DISCOVERY=false).
+  table, `bedrock-agentcore:InvokeAgentRuntime` on the worker runtime. The
+  template injects EVALHARNESS_EVAL_TABLE / EVAL_RUNTIME_ARN / AUTH_* directly
+  from `!Ref`/`!GetAtt`; there is no runtime discovery of anything.
 
 ## Out of scope (documented, not built)
 

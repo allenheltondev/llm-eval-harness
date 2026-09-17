@@ -78,7 +78,10 @@ function MetricStat({ label, value, highlighted }: MetricStatProps) {
 
 function ToolTranscriptRow({ entry }: { entry: ToolTranscriptEntry }) {
   return (
-    <li className="rounded-lg border border-gray-200 bg-white p-3" data-testid="run-detail-tool-row">
+    <li
+      className="rounded-lg border border-gray-200 bg-white p-3"
+      data-testid="run-detail-tool-row"
+    >
       <div className="flex items-center justify-between gap-2 mb-2">
         <span className="font-mono text-sm font-medium text-gray-900">{entry.name}</span>
         <span className="flex items-center gap-2">
@@ -115,9 +118,9 @@ function ToolTranscriptRow({ entry }: { entry: ToolTranscriptEntry }) {
 }
 
 export default function RunDetailView({ runId, highlight, className = '' }: RunDetailViewProps) {
-  const detail = useHistoryStore((state) => state.details[runId])
-  const getRunDetail = useHistoryStore((state) => state.getRunDetail)
-  const error = useHistoryStore((state) => state.error)
+  const detail = useHistoryStore(state => state.details[runId])
+  const getRunDetail = useHistoryStore(state => state.getRunDetail)
+  const error = useHistoryStore(state => state.error)
 
   useEffect(() => {
     void getRunDetail(runId)
@@ -136,9 +139,7 @@ export default function RunDetailView({ runId, highlight, className = '' }: RunD
     )
   }
 
-  return (
-    <RunDetailBody detail={detail} highlight={highlight} className={className} />
-  )
+  return <RunDetailBody detail={detail} highlight={highlight} className={className} />
 }
 
 function RunDetailBody({
@@ -153,7 +154,11 @@ function RunDetailBody({
   const transcript = detail.tool_transcript ?? []
 
   return (
-    <div className={`card space-y-4 ${className}`} data-testid="run-detail-view" data-run-id={detail.id}>
+    <div
+      className={`card space-y-4 ${className}`}
+      data-testid="run-detail-view"
+      data-run-id={detail.id}
+    >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-xs text-gray-500">{formatTs(detail.ts)}</p>
@@ -166,7 +171,11 @@ function RunDetailBody({
           >
             {detail.model_id}
           </p>
-          {detail.scenario_id && <p className="text-xs text-gray-600">Scenario: {detail.scenario_id}</p>}
+          {detail.config?.toolset && (
+            <p className="text-xs text-gray-600" data-testid="run-detail-toolset">
+              Toolset: {detail.config.toolset}
+            </p>
+          )}
         </div>
         <span
           data-testid="run-detail-status-badge"
@@ -180,7 +189,11 @@ function RunDetailBody({
       </div>
 
       {detail.error != null && (
-        <div className="p-3 rounded-lg bg-red-50 border border-red-200" role="alert" data-testid="run-detail-error">
+        <div
+          className="p-3 rounded-lg bg-red-50 border border-red-200"
+          role="alert"
+          data-testid="run-detail-error"
+        >
           <pre className="text-xs font-mono text-red-800 whitespace-pre-wrap break-words">
             {prettyJson(detail.error)}
           </pre>
@@ -188,7 +201,9 @@ function RunDetailBody({
       )}
 
       <details>
-        <summary className="cursor-pointer text-xs font-medium text-gray-700">System prompt</summary>
+        <summary className="cursor-pointer text-xs font-medium text-gray-700">
+          System prompt
+        </summary>
         <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words">
           {detail.system_prompt || '—'}
         </pre>
@@ -219,7 +234,7 @@ function RunDetailBody({
           <p className="text-xs text-gray-500">No tools were called.</p>
         ) : (
           <ul className="space-y-2">
-            {transcript.map((entry) => (
+            {transcript.map(entry => (
               <ToolTranscriptRow key={entry.tool_use_id} entry={entry} />
             ))}
           </ul>
@@ -259,7 +274,9 @@ function RunDetailBody({
 
       {detail.guardrail_trace != null && (
         <details>
-          <summary className="cursor-pointer text-xs font-medium text-gray-700">Guardrail trace</summary>
+          <summary className="cursor-pointer text-xs font-medium text-gray-700">
+            Guardrail trace
+          </summary>
           <pre
             data-testid="run-detail-guardrail-trace"
             className="mt-2 max-h-72 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800"

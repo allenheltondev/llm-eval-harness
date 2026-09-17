@@ -1,1 +1,1 @@
-"""Pydantic schemas mirroring the upstream config store API."""
+"""Pydantic schemas for the HTTP surface (runs, evaluations, guardrails)."""

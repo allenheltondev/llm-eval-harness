@@ -7,7 +7,7 @@ name: Deploy
 #   ARTIFACTS_BUCKET_NAME         - shared bucket for SAM packaging artifacts
 # The bucket is not optional: the pipeline role is scoped to it, so a
 # `--resolve-s3` managed bucket gets AccessDenied when SAM uploads the
-# AWS::Include openapi.yaml.
+# packaged template.
 # Callers pass `secrets: inherit`.
 on:
   workflow_call:
@@ -42,9 +42,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: |
-            app/package-lock.json
-            api/package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       # Packages the FastAPI server's arm64 Lambda zip.
       - uses: astral-sh/setup-uv@v5
@@ -59,15 +57,9 @@ jobs:
           aws-region: us-east-1
           role-to-assume: ${{ secrets.PIPELINE_EXECUTION_ROLE }}
 
-      # The api/ functions build with `BuildMethod: esbuild`, and SAM's esbuild
-      # builder needs the binary on PATH -- it looks in the CodeUri directory
-      # (api/functions), which has no package.json of its own to resolve it from.
-      - name: Install esbuild
-        run: npm install -g esbuild
-
       # One deploy definition, shared with local `make deploy`: package the
-      # server zip, upload it, deploy the stack, seed the config store, build
-      # the SPA, sync it to S3, invalidate CloudFront.
+      # server zip, upload it, deploy the stack, build the SPA, sync it to S3,
+      # invalidate CloudFront.
       - name: Deploy stack
         id: deploy
         env:

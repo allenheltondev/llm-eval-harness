@@ -43,11 +43,8 @@ class RunRecord:
     id: str
     ts: datetime
     model_id: str
-    scenario_id: str | None
     system_prompt: str
     user_prompt: str
-    dataset_id: str | None
-    dataset_hash: str | None
     config: dict[str, Any]
     output: str | None
     tool_transcript: Any | None
@@ -108,11 +105,8 @@ def _run_to_record(run: Run) -> RunRecord:
         id=run.id,
         ts=run.ts,
         model_id=run.model_id,
-        scenario_id=run.scenario_id,
         system_prompt=run.system_prompt,
         user_prompt=run.user_prompt,
-        dataset_id=run.dataset_id,
-        dataset_hash=run.dataset_hash,
         config=_load(run.config) or {},
         output=run.output,
         tool_transcript=_load(run.tool_transcript),
@@ -148,9 +142,6 @@ def create_run(
     model_id: str,
     system_prompt: str,
     user_prompt: str,
-    scenario_id: str | None = None,
-    dataset_id: str | None = None,
-    dataset_hash: str | None = None,
     config: dict[str, Any] | None = None,
     output: str | None = None,
     tool_transcript: Any | None = None,
@@ -166,9 +157,6 @@ def create_run(
         model_id=model_id,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        scenario_id=scenario_id,
-        dataset_id=dataset_id,
-        dataset_hash=dataset_hash,
         config=json.dumps(config or {}),
         output=output,
         tool_transcript=_dump(tool_transcript),
@@ -192,11 +180,8 @@ def update_run(
     run_id: str,
     *,
     model_id: str = _UNSET,
-    scenario_id: str | None = _UNSET,
     system_prompt: str = _UNSET,
     user_prompt: str = _UNSET,
-    dataset_id: str | None = _UNSET,
-    dataset_hash: str | None = _UNSET,
     config: dict[str, Any] = _UNSET,
     output: str | None = _UNSET,
     tool_transcript: Any = _UNSET,
@@ -215,16 +200,10 @@ def update_run(
 
     if model_id is not _UNSET:
         run.model_id = model_id
-    if scenario_id is not _UNSET:
-        run.scenario_id = scenario_id
     if system_prompt is not _UNSET:
         run.system_prompt = system_prompt
     if user_prompt is not _UNSET:
         run.user_prompt = user_prompt
-    if dataset_id is not _UNSET:
-        run.dataset_id = dataset_id
-    if dataset_hash is not _UNSET:
-        run.dataset_hash = dataset_hash
     if config is not _UNSET:
         run.config = json.dumps(config)
     if output is not _UNSET:
@@ -267,7 +246,6 @@ def list_runs(
     session: Session,
     *,
     model_id: str | None = None,
-    scenario_id: str | None = None,
     status: str | None = None,
     since: datetime | None = None,
     cursor: str | None = None,
@@ -282,17 +260,13 @@ def list_runs(
     stmt = select(Run)
     if model_id is not None:
         stmt = stmt.where(Run.model_id == model_id)
-    if scenario_id is not None:
-        stmt = stmt.where(Run.scenario_id == scenario_id)
     if status is not None:
         stmt = stmt.where(Run.status == status)
     if since is not None:
         stmt = stmt.where(Run.ts >= since)
     if cursor is not None:
         cursor_ts, cursor_id = _decode_cursor(cursor)
-        stmt = stmt.where(
-            or_(Run.ts < cursor_ts, and_(Run.ts == cursor_ts, Run.id < cursor_id))
-        )
+        stmt = stmt.where(or_(Run.ts < cursor_ts, and_(Run.ts == cursor_ts, Run.id < cursor_id)))
     stmt = stmt.order_by(Run.ts.desc(), Run.id.desc()).limit(limit + 1)
 
     rows = list(session.exec(stmt))
@@ -306,7 +280,6 @@ def iter_runs_export(
     session: Session,
     *,
     model_id: str | None = None,
-    scenario_id: str | None = None,
     status: str | None = None,
     since: datetime | None = None,
 ) -> Iterator[RunRecord]:
@@ -314,8 +287,6 @@ def iter_runs_export(
     stmt = select(Run)
     if model_id is not None:
         stmt = stmt.where(Run.model_id == model_id)
-    if scenario_id is not None:
-        stmt = stmt.where(Run.scenario_id == scenario_id)
     if status is not None:
         stmt = stmt.where(Run.status == status)
     if since is not None:

@@ -30,10 +30,6 @@ export type EvalExecutionPreference = 'local' | 'cloud'
 
 export interface SettingsData {
   theme: ThemePreference
-  /** Whether the robot mascot is rendered at all. */
-  robotEnabled: boolean
-  /** Whether the floating Chad companion is rendered. */
-  chadEnabled: boolean
   defaultGraderModelId: string
   defaultN: number
   /** Which lane the determinism launcher's "Run location" toggle starts on. */
@@ -42,8 +38,6 @@ export interface SettingsData {
 
 export interface SettingsActions {
   setTheme(theme: ThemePreference): void
-  setRobotEnabled(enabled: boolean): void
-  setChadEnabled(enabled: boolean): void
   setDefaultGraderModelId(modelId: string): void
   setDefaultN(n: number): void
   setDefaultEvalExecution(execution: EvalExecutionPreference): void
@@ -54,8 +48,6 @@ export type SettingsStore = SettingsData & SettingsActions
 
 export const DEFAULT_SETTINGS: SettingsData = {
   theme: 'system',
-  robotEnabled: true,
-  chadEnabled: true,
   defaultGraderModelId: DEFAULT_GRADER_MODEL_ID,
   defaultN: DEFAULT_EVAL_N,
   defaultEvalExecution: 'local'
@@ -63,32 +55,28 @@ export const DEFAULT_SETTINGS: SettingsData = {
 
 export const useSettingsStore = create<SettingsStore>()(
   persist(
-    (set) => ({
+    set => ({
       ...DEFAULT_SETTINGS,
 
-      setTheme: (theme) => set({ theme }),
-      setRobotEnabled: (enabled) => set({ robotEnabled: enabled }),
-      setChadEnabled: (enabled) => set({ chadEnabled: enabled }),
-      setDefaultGraderModelId: (modelId) => set({ defaultGraderModelId: modelId }),
-      setDefaultN: (n) => set({ defaultN: n }),
-      setDefaultEvalExecution: (execution) => set({ defaultEvalExecution: execution }),
+      setTheme: theme => set({ theme }),
+      setDefaultGraderModelId: modelId => set({ defaultGraderModelId: modelId }),
+      setDefaultN: n => set({ defaultN: n }),
+      setDefaultEvalExecution: execution => set({ defaultEvalExecution: execution }),
       reset: () => set({ ...DEFAULT_SETTINGS })
     }),
     {
       name: SETTINGS_STORAGE_KEY,
-      // `chadEnabled` (and, since, `defaultEvalExecution`) were added without
-      // a version bump: zustand's default `merge` is
-      // `{ ...currentState, ...persistedState }`, so a payload that predates
-      // one of these fields (and therefore doesn't mention it) simply falls
-      // through to the freshly-created store's default rather than
-      // clobbering it with `undefined`. Every other field round-trips
-      // unchanged. A version bump + `migrate` would only be needed if an
-      // *existing* field's meaning or shape changed.
+      // `defaultEvalExecution` was added without a version bump: zustand's
+      // default `merge` is `{ ...currentState, ...persistedState }`, so a
+      // payload that predates it (and therefore doesn't mention it) simply
+      // falls through to the freshly-created store's default rather than
+      // clobbering it with `undefined`. Keys a payload carries for settings
+      // that no longer exist are ignored by `partialize` on the next write.
+      // A version bump + `migrate` would only be needed if an *existing*
+      // field's meaning or shape changed.
       version: 1,
       partialize: (state): SettingsData => ({
         theme: state.theme,
-        robotEnabled: state.robotEnabled,
-        chadEnabled: state.chadEnabled,
         defaultGraderModelId: state.defaultGraderModelId,
         defaultN: state.defaultN,
         defaultEvalExecution: state.defaultEvalExecution
@@ -103,10 +91,7 @@ export const useSettingsStore = create<SettingsStore>()(
  * Pure apart from the `prefersDark` argument, which the caller reads from
  * `matchMedia` so this stays testable and SSR-safe.
  */
-export function resolveTheme(
-  theme: ThemePreference,
-  prefersDark: boolean
-): 'light' | 'dark' {
+export function resolveTheme(theme: ThemePreference, prefersDark: boolean): 'light' | 'dark' {
   if (theme === 'system') return prefersDark ? 'dark' : 'light'
   return theme
 }

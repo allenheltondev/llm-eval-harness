@@ -1,5 +1,5 @@
 /**
- * ModelPanel driven by a scripted `scenarioStore` — in particular the
+ * ModelPanel driven by a scripted `modelStore` — in particular the
  * error path (no AWS creds / EVALHARNESS_FAKE_MODEL dev runs), where the
  * catalog never loads and a model id must be typeable by hand — and the
  * multi-provider grouping (unconfigured / unreachable sources).
@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import ModelPanel from '../ModelPanel'
-import { DEFAULT_RUN_CONFIG, useRunConfigStore, useScenarioStore } from '../../../stores'
+import { DEFAULT_RUN_CONFIG, useRunConfigStore, useModelStore } from '../../../stores'
 import type { ModelInfo, ModelProviders } from '../../../api'
 
 const MODELS: ModelInfo[] = [
@@ -66,7 +66,7 @@ const ALL_CONFIGURED: ModelProviders = {
 
 beforeEach(() => {
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
-  useScenarioStore.setState({
+  useModelStore.setState({
     models: [],
     modelsLoading: false,
     modelsLoaded: false,
@@ -79,7 +79,7 @@ beforeEach(() => {
 
 describe('ModelPanel', () => {
   it('renders the catalog dropdown when models load successfully', () => {
-    useScenarioStore.setState({ models: MODELS, modelsLoaded: true })
+    useModelStore.setState({ models: MODELS, modelsLoaded: true })
 
     render(<ModelPanel />)
 
@@ -88,7 +88,7 @@ describe('ModelPanel', () => {
   })
 
   it('offers a manual model id input when the catalog fails to load', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: [],
       modelsLoaded: false,
       modelsError: { code: 'upstream_error', message: 'Failed to list models: no credentials' }
@@ -101,7 +101,7 @@ describe('ModelPanel', () => {
   })
 
   it('writes a manually typed model id straight into runConfigStore', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: [],
       modelsLoaded: false,
       modelsError: { code: 'upstream_error', message: 'no credentials' }
@@ -117,7 +117,7 @@ describe('ModelPanel', () => {
   })
 
   it('offers a provider select next to the manual model id fallback, defaulting to bedrock', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: [],
       modelsLoaded: false,
       modelsError: { code: 'upstream_error', message: 'no credentials' }
@@ -133,7 +133,7 @@ describe('ModelPanel', () => {
   })
 
   it('selecting a catalog model sets both model_id and provider', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: MULTI_PROVIDER_MODELS,
       modelsLoaded: true,
       modelProviders: ALL_CONFIGURED
@@ -151,7 +151,7 @@ describe('ModelPanel', () => {
   })
 
   it('clearing the selection back to "" writes an empty model_id without touching provider', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: MULTI_PROVIDER_MODELS,
       modelsLoaded: true,
       modelProviders: ALL_CONFIGURED
@@ -170,7 +170,7 @@ describe('ModelPanel', () => {
   })
 
   it('shows a "cached" badge when the catalog came from the server cache', () => {
-    useScenarioStore.setState({ models: MODELS, modelsLoaded: true, modelsCached: true })
+    useModelStore.setState({ models: MODELS, modelsLoaded: true, modelsCached: true })
     render(<ModelPanel />)
     expect(screen.getByText('cached')).toBeInTheDocument()
     expect(screen.getByText('cached')).toHaveAttribute(
@@ -180,13 +180,13 @@ describe('ModelPanel', () => {
   })
 
   it('shows no "cached" badge when the catalog was freshly fetched', () => {
-    useScenarioStore.setState({ models: MODELS, modelsLoaded: true, modelsCached: false })
+    useModelStore.setState({ models: MODELS, modelsLoaded: true, modelsCached: false })
     render(<ModelPanel />)
     expect(screen.queryByText('cached')).not.toBeInTheDocument()
   })
 
   it('groups options by source with Bedrock / Anthropic / OpenAI / Ollama (local) labels', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: MULTI_PROVIDER_MODELS,
       modelsLoaded: true,
       modelProviders: ALL_CONFIGURED
@@ -197,13 +197,13 @@ describe('ModelPanel', () => {
     const select = screen.getByRole('combobox', { name: 'Model' })
     const groupLabels = within(select)
       .getAllByRole('group')
-      .map((group) => group.getAttribute('label'))
+      .map(group => group.getAttribute('label'))
 
     expect(groupLabels).toEqual(['Bedrock', 'Anthropic', 'OpenAI', 'Ollama (local)'])
   })
 
   it('marks an unconfigured provider group as disabled with a "(not configured)" suffix', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: MULTI_PROVIDER_MODELS,
       modelsLoaded: true,
       modelProviders: {
@@ -219,14 +219,14 @@ describe('ModelPanel', () => {
     const select = screen.getByRole('combobox', { name: 'Model' })
     const anthropicGroup = within(select)
       .getAllByRole('group')
-      .find((group) => group.getAttribute('label')?.startsWith('Anthropic'))
+      .find(group => group.getAttribute('label')?.startsWith('Anthropic'))
 
     expect(anthropicGroup).toHaveAttribute('label', 'Anthropic (not configured)')
     expect(anthropicGroup).toBeDisabled()
   })
 
   it('marks a configured-but-unreachable ollama group with "(unreachable)"', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: MULTI_PROVIDER_MODELS,
       modelsLoaded: true,
       modelProviders: {
@@ -242,7 +242,7 @@ describe('ModelPanel', () => {
     const select = screen.getByRole('combobox', { name: 'Model' })
     const ollamaGroup = within(select)
       .getAllByRole('group')
-      .find((group) => group.getAttribute('label')?.startsWith('Ollama'))
+      .find(group => group.getAttribute('label')?.startsWith('Ollama'))
 
     expect(ollamaGroup).toHaveAttribute('label', 'Ollama (local) (unreachable)')
     expect(ollamaGroup).toBeDisabled()
@@ -251,7 +251,7 @@ describe('ModelPanel', () => {
   it('footnotes providers with no catalog rows that are also unconfigured', () => {
     // Only bedrock models come back — no openai/ollama rows at all — and the
     // providers block says those two are unconfigured.
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: MODELS,
       modelsLoaded: true,
       modelProviders: {
@@ -270,7 +270,7 @@ describe('ModelPanel', () => {
   })
 
   it('treats a missing providers object as "only bedrock is usable" without crashing', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: MULTI_PROVIDER_MODELS,
       modelsLoaded: true,
       modelProviders: null
@@ -281,10 +281,10 @@ describe('ModelPanel', () => {
     const select = screen.getByRole('combobox', { name: 'Model' })
     const bedrockGroup = within(select)
       .getAllByRole('group')
-      .find((group) => group.getAttribute('label') === 'Bedrock')
+      .find(group => group.getAttribute('label') === 'Bedrock')
     const anthropicGroup = within(select)
       .getAllByRole('group')
-      .find((group) => group.getAttribute('label')?.startsWith('Anthropic'))
+      .find(group => group.getAttribute('label')?.startsWith('Anthropic'))
 
     expect(bedrockGroup).not.toBeDisabled()
     expect(anthropicGroup).toBeDisabled()

@@ -4,8 +4,8 @@
  * Seven independent slices, each a plain zustand store:
  *
  *   runConfigStore   workbench form state (persisted)
- *   runStore         the active run: stream, tools, metrics, mascot mood
- *   scenarioStore    scenario / model catalogs
+ *   runStore         the active run: stream, tools, metrics
+ *   modelStore       the model catalog
  *   historyStore     paged past runs + detail cache
  *   evalStore        evaluations list + the followed evaluation
  *   guardrailStore   guardrail list, details, versions, CRUD
@@ -26,7 +26,6 @@ export { type StoreError, isAborted, toStoreError } from './errors'
 export {
   useRunConfigStore,
   toRunRequest,
-  scenarioDefaults,
   selectCanRun,
   DEFAULT_RUN_CONFIG,
   RUN_CONFIG_STORAGE_KEY,
@@ -38,18 +37,15 @@ export {
 export {
   useRunStore,
   reduceRunEvent,
-  robotMoodFor,
   phaseForWireStatus,
   isTerminalPhase,
   elapsedMs,
   activeRunController,
-  selectRobotMood,
   selectIsRunning,
   selectElapsedMs,
   selectHasOutput,
   INITIAL_RUN_STATE,
   type RunPhase,
-  type RobotMood,
   type ToolEventEntry,
   type RunMessage,
   type RunStateData,
@@ -58,20 +54,18 @@ export {
 } from './runStore'
 
 export {
-  useScenarioStore,
+  useModelStore,
   findModel,
   groupModelsBySource,
   resolveModelProviders,
-  selectScenarioDetail,
-  selectScenarioLoading,
   DEFAULT_MODEL_PROVIDERS,
-  INITIAL_SCENARIO_STATE,
-  type ScenarioStateData,
-  type ScenarioActions,
-  type ScenarioStore,
+  INITIAL_MODEL_STATE,
+  type ModelStateData,
+  type ModelActions,
+  type ModelStore,
   type ModelSourceGroup,
   type GroupedModels
-} from './scenarioStore'
+} from './modelStore'
 
 export {
   useHistoryStore,

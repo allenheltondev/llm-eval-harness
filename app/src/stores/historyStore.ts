@@ -20,7 +20,6 @@ import { isAborted, toStoreError, type StoreError } from './errors'
 /** The filters the History tab exposes (a subset of `RunListFilters`). */
 export interface HistoryFilters {
   model_id?: string
-  scenario_id?: string
   status?: string
 }
 
@@ -87,7 +86,6 @@ export function listParams(
 ): RunListFilters & { cursor?: string; limit: number } {
   const params: RunListFilters & { cursor?: string; limit: number } = { limit }
   if (filters.model_id) params.model_id = filters.model_id
-  if (filters.scenario_id) params.scenario_id = filters.scenario_id
   if (filters.status) params.status = filters.status
   if (cursor) params.cursor = cursor
   return params
@@ -123,10 +121,8 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => ({
     if (!next_cursor || loading) return
     set({ loading: true, error: null })
     try {
-      const page: Page<RunSummary> = await api.runs.list(
-        listParams(filters, next_cursor, pageSize)
-      )
-      set((state) => ({
+      const page: Page<RunSummary> = await api.runs.list(listParams(filters, next_cursor, pageSize))
+      set(state => ({
         items: [...state.items, ...page.items],
         next_cursor: page.next_cursor,
         loading: false,
@@ -141,7 +137,7 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => ({
     }
   },
 
-  setFilters: async (patch) => {
+  setFilters: async patch => {
     const filters: HistoryFilters = { ...get().filters }
     for (const [key, value] of Object.entries(patch)) {
       const field = key as keyof HistoryFilters
@@ -153,17 +149,17 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => ({
     await get().loadFirstPage()
   },
 
-  remove: async (runId) => {
+  remove: async runId => {
     try {
       await api.runs.remove(runId)
     } catch (error) {
       if (!isAborted(error)) set({ error: toStoreError(error) })
       return
     }
-    set((state) => {
+    set(state => {
       const details = { ...state.details }
       delete details[runId]
-      return { items: state.items.filter((item) => item.id !== runId), details }
+      return { items: state.items.filter(item => item.id !== runId), details }
     })
   },
 
@@ -180,7 +176,7 @@ export const useHistoryStore = create<HistoryStore>()((set, get) => ({
     const request = (async () => {
       try {
         const detail = await api.runs.get(runId)
-        set((state) => ({ details: { ...state.details, [runId]: detail } }))
+        set(state => ({ details: { ...state.details, [runId]: detail } }))
         return detail
       } catch (error) {
         if (!isAborted(error)) set({ error: toStoreError(error) })

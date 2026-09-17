@@ -281,9 +281,9 @@ def _word_policy_from_bedrock(response: dict[str, Any]) -> WordPolicy | None:
 
 
 def _pii_policy_from_bedrock(response: dict[str, Any]) -> PiiPolicy | None:
-    sensitive_policy = _first(
-        response, "sensitiveInformationPolicyConfig", "sensitiveInformationPolicy"
-    ) or {}
+    sensitive_policy = (
+        _first(response, "sensitiveInformationPolicyConfig", "sensitiveInformationPolicy") or {}
+    )
     entities = _first(sensitive_policy, "piiEntitiesConfig", "piiEntities") or []
     if not entities:
         return None
@@ -299,9 +299,9 @@ def _pii_policy_from_bedrock(response: dict[str, Any]) -> PiiPolicy | None:
 
 
 def _contextual_grounding_from_bedrock(response: dict[str, Any]) -> ContextualGrounding | None:
-    grounding_policy = _first(
-        response, "contextualGroundingPolicyConfig", "contextualGroundingPolicy"
-    ) or {}
+    grounding_policy = (
+        _first(response, "contextualGroundingPolicyConfig", "contextualGroundingPolicy") or {}
+    )
     filters = _first(grounding_policy, "filtersConfig", "filters") or []
     if not filters:
         return None

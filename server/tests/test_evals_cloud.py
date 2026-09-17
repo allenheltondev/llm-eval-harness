@@ -91,12 +91,9 @@ def run_meta(
         "id": run_id,
         "ts": ts.isoformat(),
         "model_id": "anthropic.claude-3-sonnet",
-        "scenario_id": "shipping-logistics",
         "system_prompt": "",
         "user_prompt": "Assess order B456",
-        "dataset_id": None,
-        "dataset_hash": None,
-        "config": json.dumps({"tools_enabled": False}),
+        "config": json.dumps({"toolset": None}),
         "output": "Delayed; escalate.",
         "tool_transcript": json.dumps([]),
         "metrics": json.dumps({"latency_ms": 120}),
@@ -419,7 +416,7 @@ async def test_getting_a_run_falls_back_to_dynamodb(client, table):
     assert body["output"] == "Delayed; escalate."
     assert body["metrics"] == {"latency_ms": 120}
     assert body["tool_transcript"] == []
-    assert body["config"] == {"tools_enabled": False}
+    assert body["config"] == {"toolset": None}
 
 
 async def test_an_unknown_run_is_still_a_404(client):
@@ -587,13 +584,13 @@ async def test_health_reports_the_cloud_lane_as_configured(client):
     response = await client.get("/api/v1/health")
 
     assert response.status_code == 200
-    assert response.json()["cloud_evals"] == {"configured": True, "source": "env"}
+    assert response.json()["cloud_evals"] == {"configured": True}
 
 
 async def test_health_reports_the_cloud_lane_as_unconfigured(unconfigured_client):
     response = await unconfigured_client.get("/api/v1/health")
 
-    assert response.json()["cloud_evals"] == {"configured": False, "source": None}
+    assert response.json()["cloud_evals"] == {"configured": False}
 
 
 async def test_a_half_configured_lane_is_not_configured():

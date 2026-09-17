@@ -83,9 +83,9 @@ def test_update_run_partial_update_only_touches_given_fields(session):
 
 
 def test_update_run_can_clear_nullable_field_with_explicit_none(session):
-    created = _make_run(session, scenario_id="scenario-1")
-    updated = history.update_run(session, created.id, scenario_id=None)
-    assert updated.scenario_id is None
+    created = _make_run(session, output="draft")
+    updated = history.update_run(session, created.id, output=None)
+    assert updated.output is None
 
 
 def test_update_run_missing_raises_not_found(session):
@@ -139,14 +139,6 @@ def test_list_runs_filters_by_model_id(session):
     _make_run(session, model_id="model-b")
     items, _ = history.list_runs(session, model_id="model-a")
     assert [r.model_id for r in items] == ["model-a"]
-
-
-def test_list_runs_filters_by_scenario_id(session):
-    _make_run(session, scenario_id="scenario-1")
-    _make_run(session, scenario_id="scenario-2")
-    _make_run(session)
-    items, _ = history.list_runs(session, scenario_id="scenario-1")
-    assert [r.scenario_id for r in items] == ["scenario-1"]
 
 
 def test_list_runs_filters_by_status(session):
@@ -340,17 +332,9 @@ def test_update_run_can_change_model_id_and_prompts(session):
     assert updated.user_prompt == "new user prompt"
 
 
-def test_update_run_can_change_dataset_fields_and_config(session):
+def test_update_run_can_change_config(session):
     created = _make_run(session)
-    updated = history.update_run(
-        session,
-        created.id,
-        dataset_id="ds-1",
-        dataset_hash="abc123",
-        config={"temperature": 0.9},
-    )
-    assert updated.dataset_id == "ds-1"
-    assert updated.dataset_hash == "abc123"
+    updated = history.update_run(session, created.id, config={"temperature": 0.9})
     assert updated.config == {"temperature": 0.9}
 
 
@@ -366,13 +350,6 @@ def test_update_evaluation_can_change_kind_and_config(session):
 # --------------------------------------------------------------------------- #
 # iter_runs_export: the filters list_runs shares
 # --------------------------------------------------------------------------- #
-
-
-def test_iter_runs_export_filters_by_scenario_id(session):
-    _make_run(session, scenario_id="scenario-a")
-    _make_run(session, scenario_id="scenario-b")
-    exported = list(history.iter_runs_export(session, scenario_id="scenario-a"))
-    assert [r.scenario_id for r in exported] == ["scenario-a"]
 
 
 def test_iter_runs_export_filters_by_status(session):

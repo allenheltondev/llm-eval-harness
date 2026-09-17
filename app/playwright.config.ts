@@ -12,12 +12,10 @@ const PREINSTALLED_CHROMIUM = '/opt/pw-browsers/chromium'
  * Playwright `webServer`s so `npx playwright test` is a single, self
  * contained command.
  *
- * The config store is intentionally left unconfigured here (no
- * `CONFIG_API_URL`): the Scenarios tab shows its "not reachable" notice and
- * scenario pickers stay empty, and `/api/v1/models` fails too (no AWS
- * credentials in this environment) — specs must not depend on scenario or
- * catalog data. `EVALHARNESS_FAKE_MODEL=1` gives full run/eval functionality
- * with zero AWS calls (a scripted model *and* judge).
+ * `/api/v1/models` fails in this environment (no AWS credentials), so specs
+ * must not depend on catalog data — the Workbench's manual model-id fallback
+ * is what they drive. `EVALHARNESS_FAKE_MODEL=1` gives full run/eval
+ * functionality with zero AWS calls (a scripted model *and* judge).
  *
  * Chromium is preinstalled in this environment at a revision `@playwright/test`
  * doesn't auto-discover (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`,
@@ -27,7 +25,7 @@ const PREINSTALLED_CHROMIUM = '/opt/pw-browsers/chromium'
  *
  * All specs share one running server/db (started once for the whole suite,
  * not per test), so `workers: 1` keeps them from writing concurrently to the
- * same sqlite file — with only five short specs this costs little and buys a
+ * same sqlite file — with only four short specs this costs little and buys a
  * deterministic, non-flaky run.
  *
  * Spec files are named `*.pw.ts`, not the more usual `*.spec.ts`: `app/`'s

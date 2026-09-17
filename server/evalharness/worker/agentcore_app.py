@@ -77,7 +77,7 @@ def build_store(evaluation_id: str) -> DynamoEvalStore:
     """Construct the DynamoDB store from the runtime's environment.
 
     ``TABLE_NAME`` and ``AWS_REGION`` are set as runtime environment variables by
-    ``api/template.yaml``; AgentCore always sets ``AWS_REGION`` itself, so the
+    ``infra/template.yaml``; AgentCore always sets ``AWS_REGION`` itself, so the
     fallback only matters when running the artifact locally.
     """
     return DynamoEvalStore(
@@ -149,9 +149,7 @@ async def execute(
 
     except interfaces.EvalEngineUnavailable as exc:
         logger.error("eval %s: evaluation engine unavailable: %s", evaluation_id, exc)
-        _finalize_quietly(
-            store, "error", {"code": "eval_engine_unavailable", "message": str(exc)}
-        )
+        _finalize_quietly(store, "error", {"code": "eval_engine_unavailable", "message": str(exc)})
 
     except Exception as exc:  # noqa: BLE001 - a detached task must swallow everything
         logger.exception("eval %s failed", evaluation_id)
@@ -162,9 +160,7 @@ async def execute(
         )
 
 
-def _finalize_quietly(
-    store: DynamoEvalStore, status: str, error: dict[str, Any] | None
-) -> None:
+def _finalize_quietly(store: DynamoEvalStore, status: str, error: dict[str, Any] | None) -> None:
     """Best-effort terminal write from an error path.
 
     If even this fails there is nothing useful left to do -- the evaluation will

@@ -28,11 +28,8 @@ class Run(SQLModel, table=True):
     id: str = Field(default_factory=_uuid_hex, primary_key=True)
     ts: datetime = Field(default_factory=_utcnow, index=True)
     model_id: str = Field(index=True)
-    scenario_id: str | None = Field(default=None, index=True)
     system_prompt: str
     user_prompt: str
-    dataset_id: str | None = None
-    dataset_hash: str | None = None
     config: str  # JSON: inference params, tools_enabled, guardrail config
     output: str | None = None
     tool_transcript: str | None = None  # JSON

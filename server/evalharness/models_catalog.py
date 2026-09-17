@@ -256,12 +256,8 @@ class ProviderCatalog:
             "anthropic": await self._listing(
                 "anthropic", settings.anthropic_api_key, fetch_anthropic_models
             ),
-            "openai": await self._listing(
-                "openai", settings.openai_api_key, fetch_openai_models
-            ),
-            "ollama": await self._listing(
-                "ollama", settings.ollama_base_url, fetch_ollama_models
-            ),
+            "openai": await self._listing("openai", settings.openai_api_key, fetch_openai_models),
+            "ollama": await self._listing("ollama", settings.ollama_base_url, fetch_ollama_models),
         }
 
     async def provider_status(self, settings: Settings) -> dict[str, dict[str, Any]]:

@@ -3,23 +3,32 @@
  * `TABS` resolves to a real page (a missing case in `TabPage` would render
  * nothing and fail here rather than silently showing a blank tab).
  *
- * The Workbench's catalog loaders are stubbed at the store level — this is a
- * shell test, not a network test.
+ * The Workbench's catalog loaders are stubbed at the store level and its
+ * `GET /tools` fetch at the API client — this is a shell test, not a network
+ * test.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import AppShell, { TABS } from '../AppShell'
-import {
+
+const toolsMock = vi.fn()
+
+vi.mock('../api', async importOriginal => {
+  const actual = await importOriginal<typeof import('../api')>()
+  return { ...actual, api: { ...actual.api, tools: toolsMock } }
+})
+
+const { default: AppShell, TABS } = await import('../AppShell')
+const {
   DEFAULT_RUN_CONFIG,
   DEFAULT_SETTINGS,
   INITIAL_RUN_STATE,
   useGuardrailStore,
+  useModelStore,
   useRunConfigStore,
   useRunStore,
-  useScenarioStore,
   useSettingsStore
-} from '../stores'
+} = await import('../stores')
 
 /** Test ids rendered by each page, keyed by tab. */
 const PAGE_TEST_IDS: Record<string, string> = {
@@ -27,22 +36,19 @@ const PAGE_TEST_IDS: Record<string, string> = {
   evals: 'evals-page',
   history: 'history-page',
   guardrails: 'guardrails-page',
-  scenarios: 'scenarios-page',
   about: 'about-page'
 }
 
 beforeEach(() => {
   localStorage.clear()
+  toolsMock.mockReset()
+  toolsMock.mockResolvedValue({ toolsets: [] })
   useRunStore.setState({ ...INITIAL_RUN_STATE })
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
   useSettingsStore.setState({ ...DEFAULT_SETTINGS })
-  // Stub the loaders so mounting the Workbench never reaches the network.
-  useScenarioStore.setState({
+  useModelStore.setState({
     models: [],
-    scenarios: [],
-    loadModels: vi.fn().mockResolvedValue(undefined),
-    loadScenarios: vi.fn().mockResolvedValue(undefined),
-    loadScenario: vi.fn().mockResolvedValue(null)
+    loadModels: vi.fn().mockResolvedValue(undefined)
   })
   useGuardrailStore.setState({
     guardrails: [],
@@ -51,21 +57,20 @@ beforeEach(() => {
 })
 
 describe('AppShell', () => {
-  it('renders the header, the mascot and all six tabs', () => {
+  it('renders the header title and exactly the five tabs, with no Scenarios tab', () => {
     render(<AppShell />)
 
     expect(screen.getByRole('heading', { name: 'LLM Eval Harness' })).toBeInTheDocument()
-    expect(screen.getByTestId('robot-graphic')).toBeInTheDocument()
 
     const tabs = screen.getAllByRole('tab')
-    expect(tabs.map((tab) => tab.textContent)).toEqual([
+    expect(tabs.map(tab => tab.textContent)).toEqual([
       'Workbench',
       'Evals',
       'History',
       'Guardrails',
-      'Scenarios',
       'About'
     ])
+    expect(screen.queryByRole('tab', { name: 'Scenarios' })).not.toBeInTheDocument()
   })
 
   it('opens on the Workbench', () => {
@@ -75,7 +80,7 @@ describe('AppShell', () => {
     expect(screen.getByRole('tab', { name: 'Workbench' })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it.each(TABS.map((tab) => [tab.id, tab.label] as const))(
+  it.each(TABS.map(tab => [tab.id, tab.label] as const))(
     'switching to %s mounts its page and nothing else',
     (id, label) => {
       render(<AppShell />)
@@ -103,28 +108,11 @@ describe('AppShell', () => {
     expect(panel).toHaveAttribute('aria-labelledby', 'tab-about')
   })
 
-  it('floats Chad outside the tabpanel by default, with no bring-back button', () => {
+  it('renders no mascot, companion or bring-back control', () => {
     render(<AppShell />)
 
-    expect(screen.getByTestId('floating-chad')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Bring back Chad' })).not.toBeInTheDocument()
-  })
-
-  it('shows the bring-back button only once Chad is dismissed, and it re-enables him', () => {
-    render(<AppShell />)
-
-    expect(screen.queryByRole('button', { name: 'Bring back Chad' })).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Chad' }))
-
+    expect(screen.queryByTestId('robot-graphic')).not.toBeInTheDocument()
     expect(screen.queryByTestId('floating-chad')).not.toBeInTheDocument()
-    const bringBack = screen.getByRole('button', { name: 'Bring back Chad' })
-    expect(bringBack).toBeInTheDocument()
-
-    fireEvent.click(bringBack)
-
-    expect(useSettingsStore.getState().chadEnabled).toBe(true)
-    expect(screen.getByTestId('floating-chad')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Bring back Chad' })).not.toBeInTheDocument()
   })
 })

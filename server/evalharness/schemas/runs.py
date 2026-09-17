@@ -29,8 +29,6 @@ class RunSummary(BaseModel):
     id: str
     ts: datetime
     model_id: str
-    scenario_id: str | None = None
-    dataset_id: str | None = None
     status: str
     metrics: dict[str, Any] | None = None
 
@@ -43,11 +41,8 @@ class RunDetail(BaseModel):
     id: str
     ts: datetime
     model_id: str
-    scenario_id: str | None = None
     system_prompt: str
     user_prompt: str
-    dataset_id: str | None = None
-    dataset_hash: str | None = None
     config: dict[str, Any]
     output: str | None = None
     tool_transcript: Any | None = None

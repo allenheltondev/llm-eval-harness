@@ -5,19 +5,15 @@ Everything runs against the scripted ``FakeModel`` driven through a *real*
 """
 
 import asyncio
-import hashlib
 import json
 from datetime import datetime
 
-import httpx
 import pytest
-import respx
 from botocore.exceptions import ClientError
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
 from evalharness.config import Settings
-from evalharness.configstore.client import ConfigStoreClient
 from evalharness.engine import runner
 from evalharness.engine.events import (
     ErrorEvent,
@@ -42,12 +38,18 @@ from evalharness.engine.schemas import RunRequest
 from evalharness.errors import BadRequestError
 from evalharness.store import db, history
 
-CONFIG_BASE_URL = "https://configstore.test"
+FREEZE_INPUT = {
+    "account_id": "A1234",
+    "transaction_ids": ["T1", "T2"],
+    "reason": "velocity spike",
+    "severity": "high",
+    "freeze_duration": "temporary",
+}
 
-SHIPPING_SCRIPT = [
+FRAUD_SCRIPT = [
     Text("Hello "),
     Text("world"),
-    ToolUseStep("getCarrierStatus", {"order_id": "B456"}),
+    ToolUseStep("freeze_account", FREEZE_INPUT),
     Text(" done"),
 ]
 
@@ -89,8 +91,8 @@ def types_of(events) -> list[str]:
 
 
 async def test_tool_round_trip_event_sequence_and_persistence(initialized_db, stored_run):
-    model = FakeModel(script=SHIPPING_SCRIPT)
-    request = make_request(scenario_id="shipping-logistics", tools_enabled=True)
+    model = FakeModel(script=FRAUD_SCRIPT)
+    request = make_request(toolset="fraud-detection")
 
     events = await collect(request, model)
     sequence = types_of(events)
@@ -112,13 +114,14 @@ async def test_tool_round_trip_event_sequence_and_persistence(initialized_db, st
 
     tool_use_start = next(e for e in events if isinstance(e, ToolUseStartEvent))
     tool_result = next(e for e in events if isinstance(e, ToolResultEvent))
-    assert tool_use_start.name == "getCarrierStatus"
+    assert tool_use_start.name == "freeze_account"
     assert tool_result.tool_use_id == tool_use_start.tool_use_id
-    assert tool_result.input == {"order_id": "B456"}
+    assert tool_result.input == FREEZE_INPUT
     assert tool_result.error is None
     assert tool_result.duration_ms >= 0
-    # Real tool output, straight from the seeded shipping fixture.
-    assert tool_result.output["carrier"]["name"] == "RegionalExpress"
+    # Real tool output, straight from the fraud-detection toolset.
+    assert tool_result.output["status"] == "frozen"
+    assert tool_result.output["affected_transactions"] == 2
 
     metrics = next(e for e in events if isinstance(e, MetricsEvent))
     assert metrics.total_tokens == 36
@@ -133,26 +136,26 @@ async def test_tool_round_trip_event_sequence_and_persistence(initialized_db, st
     assert row.status == "completed"
     assert row.output == "Hello world done"
     assert len(row.tool_transcript) == 1
-    assert row.tool_transcript[0]["name"] == "getCarrierStatus"
+    assert row.tool_transcript[0]["name"] == "freeze_account"
     assert row.tool_transcript[0]["tool_use_id"] == tool_use_start.tool_use_id
     assert row.metrics["total_tokens"] == 36
     assert row.error is None
 
 
 async def test_tool_input_deltas_reassemble_into_the_tool_input(initialized_db):
-    model = FakeModel(script=SHIPPING_SCRIPT)
-    request = make_request(scenario_id="shipping-logistics", tools_enabled=True)
+    model = FakeModel(script=FRAUD_SCRIPT)
+    request = make_request(toolset="fraud-detection")
 
     events = await collect(request, model)
 
     partials = [e for e in events if e.type == "tool_input_delta"]
     assert len(partials) >= 2
-    assert json.loads("".join(p.json_text for p in partials)) == {"order_id": "B456"}
+    assert json.loads("".join(p.json_text for p in partials)) == FREEZE_INPUT
 
 
 async def test_message_events_carry_the_full_transcript(initialized_db):
-    model = FakeModel(script=SHIPPING_SCRIPT)
-    request = make_request(scenario_id="shipping-logistics", tools_enabled=True)
+    model = FakeModel(script=FRAUD_SCRIPT)
+    request = make_request(toolset="fraud-detection")
 
     events = await collect(request, model)
 
@@ -179,8 +182,7 @@ async def test_config_records_inference_tools_guardrail_and_stream(initialized_d
     model = FakeModel(script=[Text("hi")])
     request = make_request(
         inference={"temperature": 0.2, "max_tokens": 512},
-        tools_enabled=True,
-        scenario_id="shipping-logistics",
+        toolset="fraud-detection",
         guardrail={"id": "gr-1", "version": "2"},
         stream=False,
         max_tool_iterations=3,
@@ -192,7 +194,7 @@ async def test_config_records_inference_tools_guardrail_and_stream(initialized_d
     assert row.config == {
         "provider": "bedrock",
         "inference": {"temperature": 0.2, "max_tokens": 512},
-        "tools_enabled": True,
+        "toolset": "fraud-detection",
         "max_tool_iterations": 3,
         "guardrail": {"id": "gr-1", "version": "2", "trace": True},
         "stream": False,
@@ -201,7 +203,7 @@ async def test_config_records_inference_tools_guardrail_and_stream(initialized_d
 
 async def test_tools_are_only_registered_when_enabled(initialized_db):
     model = FakeModel(script=[Text("hi")])
-    request = make_request(scenario_id="shipping-logistics", tools_enabled=False)
+    request = make_request()
 
     await collect(request, model)
 
@@ -210,12 +212,12 @@ async def test_tools_are_only_registered_when_enabled(initialized_db):
 
 async def test_tools_are_registered_when_enabled(initialized_db):
     model = FakeModel(script=[Text("hi")])
-    request = make_request(scenario_id="shipping-logistics", tools_enabled=True)
+    request = make_request(toolset="fraud-detection")
 
     await collect(request, model)
 
     names = {spec["name"] for spec in model.calls[0].tool_specs}
-    assert "getCarrierStatus" in names
+    assert "freeze_account" in names
 
 
 # --------------------------------------------------------------------------- #
@@ -224,8 +226,8 @@ async def test_tools_are_registered_when_enabled(initialized_db):
 
 
 async def test_row_is_complete_at_the_moment_run_complete_arrives(initialized_db, stored_run):
-    model = FakeModel(script=SHIPPING_SCRIPT)
-    request = make_request(scenario_id="shipping-logistics", tools_enabled=True)
+    model = FakeModel(script=FRAUD_SCRIPT)
+    request = make_request(toolset="fraud-detection")
 
     observed = None
     async for event in runner.execute_run(request, model_factory=lambda _r: model):
@@ -378,69 +380,6 @@ async def test_task_cancellation_mid_stream_persists_cancelled(initialized_db, s
 
 
 # --------------------------------------------------------------------------- #
-# Datasets
-# --------------------------------------------------------------------------- #
-
-
-def _dataset_body(content: str) -> dict:
-    return {
-        "id": "orders-csv",
-        "name": "Orders",
-        "contentType": "text/csv",
-        "content": content,
-    }
-
-
-@respx.mock
-async def test_dataset_content_is_composed_into_the_user_message(initialized_db, stored_run):
-    content = "order_id,status\nB456,delayed\n"
-    respx.get(
-        f"{CONFIG_BASE_URL}/scenarios/shipping-logistics/datasets/orders-csv"
-    ).mock(return_value=httpx.Response(200, json=_dataset_body(content)))
-
-    model = FakeModel(script=[Text("ok")])
-    request = make_request(
-        user_prompt="Analyze these orders",
-        scenario_id="shipping-logistics",
-        dataset_id="orders-csv",
-    )
-
-    events = await collect(
-        request,
-        model,
-        config_client=ConfigStoreClient(base_url=CONFIG_BASE_URL, api_key="k"),
-    )
-
-    assert model.first_user_text == f"Analyze these orders\n\nData to analyze:\n{content}"
-
-    row = stored_run(events[0].run_id)
-    assert row.dataset_id == "orders-csv"
-    assert row.dataset_hash == hashlib.sha256(content.encode()).hexdigest()
-    # The row keeps the *raw* prompt; dataset_id + dataset_hash reproduce the rest.
-    assert row.user_prompt == "Analyze these orders"
-
-
-async def test_dataset_without_scenario_is_a_bad_request(initialized_db):
-    request = make_request(dataset_id="orders-csv")
-
-    with pytest.raises(BadRequestError):
-        await collect(request, FakeModel(script=[Text("ok")]))
-
-
-async def test_dataset_without_a_config_client_is_a_bad_request(initialized_db):
-    request = make_request(dataset_id="orders-csv", scenario_id="shipping-logistics")
-
-    with pytest.raises(BadRequestError):
-        await collect(request, FakeModel(script=[Text("ok")]))
-
-
-def test_compose_user_message_matches_the_legacy_format():
-    assert runner.compose_user_message("p", "c") == "p\n\nData to analyze:\nc"
-    assert runner.compose_user_message("p", "") == "p"
-    assert runner.compose_user_message("p", None) == "p"
-
-
-# --------------------------------------------------------------------------- #
 # Reasoning, guardrails, iteration limits
 # --------------------------------------------------------------------------- #
 
@@ -469,12 +408,12 @@ async def test_guardrail_trace_is_emitted_and_persisted(initialized_db, stored_r
 async def test_max_tool_iterations_caps_the_agent_loop(initialized_db):
     model = FakeModel(
         script=[
-            ToolUseStep("getCarrierStatus", {"order_id": "B456"}),
+            ToolUseStep("freeze_account", FREEZE_INPUT),
             Text("this second turn never happens"),
         ]
     )
     request = make_request(
-        scenario_id="shipping-logistics", tools_enabled=True, max_tool_iterations=1
+        toolset="fraud-detection", max_tool_iterations=1
     )
 
     events = await collect(request, model)
@@ -486,10 +425,10 @@ async def test_max_tool_iterations_caps_the_agent_loop(initialized_db):
 
 async def test_higher_iteration_budget_allows_the_second_turn(initialized_db):
     model = FakeModel(
-        script=[ToolUseStep("getCarrierStatus", {"order_id": "B456"}), Text("wrapped up")]
+        script=[ToolUseStep("freeze_account", FREEZE_INPUT), Text("wrapped up")]
     )
     request = make_request(
-        scenario_id="shipping-logistics", tools_enabled=True, max_tool_iterations=2
+        toolset="fraud-detection", max_tool_iterations=2
     )
 
     events = await collect(request, model)
@@ -499,17 +438,30 @@ async def test_higher_iteration_budget_allows_the_second_turn(initialized_db):
 
 
 async def test_failing_tool_is_recorded_with_its_error_shape(initialized_db, stored_run):
-    # An unknown order id makes the real tool return its "Order Not Found" payload.
+    # Missing required arguments make the real tool fail validation.
     model = FakeModel(
-        script=[ToolUseStep("getCarrierStatus", {"order_id": "Z999"}), Text("sorry")]
+        script=[ToolUseStep("freeze_account", {"account_id": "A1234"}), Text("sorry")]
     )
-    request = make_request(scenario_id="shipping-logistics", tools_enabled=True)
+    request = make_request(toolset="fraud-detection")
 
     events = await collect(request, model)
 
     tool_result = next(e for e in events if isinstance(e, ToolResultEvent))
-    assert tool_result.name == "getCarrierStatus"
-    assert stored_run(events[0].run_id).tool_transcript[0]["input"] == {"order_id": "Z999"}
+    assert tool_result.name == "freeze_account"
+    assert tool_result.error is not None
+    transcript = stored_run(events[0].run_id).tool_transcript[0]
+    assert transcript["input"] == {"account_id": "A1234"}
+    assert transcript["error"] is not None
+
+
+async def test_unknown_toolset_is_a_bad_request_before_any_row_exists(initialized_db):
+    request = make_request(toolset="does-not-exist")
+
+    with pytest.raises(BadRequestError) as excinfo:
+        await collect(request, FakeModel(script=[Text("ok")]))
+
+    assert excinfo.value.code == "unknown_toolset"
+    assert excinfo.value.detail == {"toolset": "does-not-exist", "available": ["fraud-detection"]}
 
 
 # --------------------------------------------------------------------------- #

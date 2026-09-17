@@ -48,10 +48,10 @@ class RunRequest(BaseModel):
     provider: Provider = DEFAULT_PROVIDER
     system_prompt: str = ""
     user_prompt: str = Field(min_length=1)
-    scenario_id: str | None = None
-    dataset_id: str | None = None
     inference: InferenceConfig = Field(default_factory=InferenceConfig)
-    tools_enabled: bool = False
+    #: Name of a registered toolset (``GET /tools``) the agent may call during
+    #: this run. ``None`` runs without tools.
+    toolset: str | None = None
     max_tool_iterations: int = Field(default=10, ge=1, le=100)
     guardrail: GuardrailConfig | None = None
     stream: bool = True
@@ -77,7 +77,7 @@ class RunRequest(BaseModel):
         return {
             "provider": self.provider,
             "inference": self.inference.as_model_config(),
-            "tools_enabled": self.tools_enabled,
+            "toolset": self.toolset,
             "max_tool_iterations": self.max_tool_iterations,
             "guardrail": self.guardrail.model_dump() if self.guardrail else None,
             "stream": self.stream,

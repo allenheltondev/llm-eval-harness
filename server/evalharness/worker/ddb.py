@@ -1,7 +1,7 @@
 """DynamoDB persistence for the cloud evaluation lane.
 
 Implements the writer half of the item contract in ``docs/cloud-evals.md``
-against the existing single-table config store (``pk``/``sk`` + ``GSI1``). The
+against the stack's single table (``pk``/``sk`` + ``GSI1``). The
 FastAPI server implements the reader half; the item shapes written here are the
 only thing the two share.
 
@@ -200,7 +200,7 @@ class DynamoEvalStore:
     a read-modify-write against the table.
 
     Args:
-        table_name: The shared config-store table.
+        table_name: The stack's ``EvalTable``.
         evaluation_id: The evaluation this store writes for.
         client: A ``boto3`` ``dynamodb`` client. Created lazily from
             ``region_name`` when omitted, so constructing a store in a test does
@@ -602,9 +602,7 @@ class DynamoEvalStore:
         ``GET /runs/{id}`` can fall back to this item and
         ``GET /runs?execution=cloud`` can list them by ``ts`` desc.
         """
-        item = ddb_items.run_item(
-            run, evaluation_id=self.evaluation_id, ttl=self._expires_at()
-        )
+        item = ddb_items.run_item(run, evaluation_id=self.evaluation_id, ttl=self._expires_at())
         self.client.put_item(TableName=self.table_name, Item=_serialize(item))
         run_id = str(run["id"])
         if run_id not in self._saved_runs:

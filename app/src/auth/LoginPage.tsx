@@ -8,7 +8,6 @@
  */
 
 import { useState, type FormEvent } from 'react'
-import RobotMascot from '../components/RobotMascot'
 import {
   completeNewPassword,
   confirmForgotPassword,
@@ -151,12 +150,9 @@ export default function LoginPage({ notice = null }: LoginPageProps) {
       data-testid="login-page"
     >
       <div className="w-full max-w-sm rounded-lg border border-secondary-200 bg-white p-6 shadow-md">
-        <div className="mb-5 flex items-center gap-3">
-          <RobotMascot size="md" />
-          <div>
-            <h1 className="text-lg font-bold text-primary-700 leading-tight">LLM Eval Harness</h1>
-            <p className="text-xs text-secondary-700">Sign in to continue</p>
-          </div>
+        <div className="mb-5">
+          <h1 className="text-lg font-bold text-primary-700 leading-tight">LLM Eval Harness</h1>
+          <p className="text-xs text-secondary-700">Sign in to continue</p>
         </div>
 
         {info && (

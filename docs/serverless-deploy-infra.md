@@ -6,7 +6,7 @@ normative contract between the server-side work and this. That document says
 where each fact came from, and what about it only a real deploy can prove.**
 
 Everything here concerns `scripts/package-server.sh`, the `ServerFunction` /
-`AppBucket` / `AppDistribution` half of `api/template.yaml`, and `make deploy`.
+`AppBucket` / `AppDistribution` half of `infra/template.yaml`, and `make deploy`.
 
 ## Where the facts came from
 
@@ -248,66 +248,17 @@ limit, which 46 MB is uncomfortably close to.
 
 ---
 
-## Environment wiring, and the one thing CloudFormation cannot do
+## Environment wiring
 
-Three of the four discoverable settings are injected straight from the
-template, exactly as `serverless-deploy.md` prefers:
-
-| Env var | Value |
-|---|---|
-| `EVALHARNESS_CONFIG_API_URL` | `!Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/api` |
-| `EVALHARNESS_EVAL_TABLE` | `!Ref ScenariosTable` |
-| `EVALHARNESS_EVAL_RUNTIME_ARN` | `!GetAtt EvalWorkerRuntime.AgentRuntimeArn`, or absent when the worker is not deployed |
-
-The fourth, `EVALHARNESS_CONFIG_API_KEY`, **cannot** be: CloudFormation has no
-way to read an `AWS::ApiGateway::ApiKey`'s value. There were two honest
-options.
-
-**Rejected: a `NoEcho` template parameter**, mirroring
-`EvalWorkerConfigApiKey`. It keeps discovery off and the deploy fully
-declarative, but it puts the secret in the argv of every deploy (and therefore
-in shell history and in the CloudFormation console's parameter list, `NoEcho`
-notwithstanding for the CLI half), and it must be re-supplied on every deploy
-or it silently reverts to empty. The worker took this route only because it had
-no alternative.
-
-**Chosen: keep stack discovery ON for that one field.** `EVALHARNESS_STACK_DISCOVERY`
-is `true` and `EVALHARNESS_STACK_NAME` is `!Ref AWS::StackName`, so the server
-resolves the key from the stack itself at runtime. This costs exactly two
-read-only IAM actions on the function role, both narrowly scoped:
-
-```yaml
-- Effect: Allow
-  Action: cloudformation:DescribeStacks
-  Resource: arn:<partition>:cloudformation:<region>:<account>:stack/<this stack>/*
-- Effect: Allow
-  Action: apigateway:GET
-  Resource: arn:<partition>:apigateway:<region>::/apikeys/*
-```
-
-Why this is the cleaner half rather than just the lazier one:
-
-- The mechanism already exists, is cached for the life of the execution
-  environment, and is explicitly fail-soft — a permissions problem degrades one
-  field and logs one line, it does not break the server **[repo]**.
-- The secret never travels through a CLI argument or a template parameter.
-- Injecting the other three anyway is not redundant: they are on the hot path
-  (DynamoDB history on every request, `InvokeAgentRuntime` on every cloud
-  evaluation), and an explicit value keeps them working even if discovery
-  fails. Only the config store, which the server can run without, depends on
-  discovery succeeding.
-- `GET /api/v1/health` reports `config_store.source` as `"stack"`, so the
-  behaviour is visible rather than mysterious **[repo]**.
-
-`apigateway:GET` on `/apikeys/*` is the one grant worth a second look: it is
-account-wide read on API-key values in the region, because the key's id is not
-known at template-authoring time. Narrowing it needs the id, which is only
-available after the key exists.
-
-The rest of the environment:
+Everything the server needs is injected from the template; the server has no
+runtime discovery of any kind, and the function role has no read access to
+CloudFormation or API Gateway.
 
 | Env var | Value | Why |
 |---|---|---|
+| `EVALHARNESS_EVAL_TABLE` | `!Ref EvalTable` | History backend and cloud-eval state |
+| `EVALHARNESS_EVAL_RUNTIME_ARN` | `!GetAtt EvalWorkerRuntime.AgentRuntimeArn`, or absent when the worker is not deployed | The cloud evaluation lane |
+| `EVALHARNESS_AUTH_USER_POOL_ID` / `EVALHARNESS_AUTH_CLIENT_ID` | `!Ref UserPool` / `!Ref UserPoolClient` | The bearer-token gate ("Auth" below) |
 | `EVALHARNESS_DB_PATH` | `/tmp/evalharness.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
 | `EVALHARNESS_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
 | `EVALHARNESS_LOCAL_EVALS` | `off` | Same reasoning |
@@ -503,11 +454,9 @@ for `Tracing: Active`:
 | `bedrock:ListFoundationModels`, `ListInferenceProfiles` | `*` (neither is resource-scopable) |
 | `bedrock:ApplyGuardrail`, `CreateGuardrail`, `CreateGuardrailVersion`, `GetGuardrail`, `UpdateGuardrail`, `DeleteGuardrail` | `guardrail/*` |
 | `bedrock:ListGuardrails` | `*` |
-| `dynamodb:Query`, `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` | the config-store table |
+| `dynamodb:Query`, `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` | `EvalTable` |
 | `dynamodb:Query` | that table's `GSI1` |
 | `bedrock-agentcore:InvokeAgentRuntime` | the eval worker runtime (only when it is deployed) |
-| `cloudformation:DescribeStacks` | this stack only |
-| `apigateway:GET` | `/apikeys/*` in this region |
 
 Two differences from the worker's role are worth noting. The server **does**
 get `Query` (listing runs and evaluations walks the `GSI1` `RUN`/`EVAL`
@@ -531,11 +480,10 @@ is the whole flow, and it is **idempotent**:
 3. Read the stack's **current** `EvalWorkerArtifactKey` and pass it back
    unchanged alongside `ServerArtifactKey`.
 4. `sam build && sam deploy`.
-5. Seed the table from `api/seed/fixtures/**`.
-6. `npm ci && VITE_API_URL=/ npm run build` in `app/`.
-7. `aws s3 sync app/dist s3://<AppBucket> --delete`.
-8. `aws cloudfront create-invalidation --paths '/*'`.
-9. Print the `AppUrl`.
+5. `npm ci && VITE_API_URL=/ npm run build` in `app/`.
+6. `aws s3 sync app/dist s3://<AppBucket> --delete`.
+7. `aws cloudfront create-invalidation --paths '/*'`.
+8. Print the `AppUrl`.
 
 `make package-server` builds the artifact alone and makes no AWS calls.
 
@@ -547,16 +495,14 @@ resources. So:
 
 | Target | Preserves worker? | Preserves server? |
 |---|---|---|
-| `make deploy-api` | ✅ (reads it back) | ❌ **deletes the server** |
-| `make deploy-worker` | ✅ (sets it) | ❌ **deletes the server** |
+| bare `sam deploy` | ❌ **deletes the worker** | ❌ **deletes the server** |
+| `make deploy-worker` | ✅ (sets it) | ✅ (reads it back) |
 | `make deploy` | ✅ (reads it back) | ✅ (sets it) |
 
-**Once the server is deployed, `make deploy` is the target to use.** It is a
-superset of `deploy-api` and coexists with `deploy-worker` only in the
-worker→server direction. Extending `deploy-api`/`deploy-worker` to read back
-`ServerArtifactKey` too would fix the asymmetry but changes targets this work
-item does not own; the mitigation for now is this table, the parameter's own
-comment in `api/template.yaml`, and the Makefile comment.
+Each target reads the other's current parameter back from the stack and
+passes it through, so either is safe once both exist. A bare `sam deploy` is
+not; the mitigation is this table, the parameters' own comments in
+`infra/template.yaml`, and the Makefile comment.
 
 ---
 

@@ -14,7 +14,7 @@ already true of the cloud lane's listings today (``docs/serverless-deploy.md``:
 "Filters apply post-page like the existing cloud listing"):
 
 **Filters narrow a page, they do not fill one.** GSI1 is keyed on time alone, so
-``model_id``/``scenario_id``/``status``/``since`` (and ``kind``/``status`` for
+``model_id``/``status``/``since`` (and ``kind``/``status`` for
 evaluations) are applied to each page *after* it is read -- exactly what a
 DynamoDB ``FilterExpression`` would do. A filtered page can therefore come back
 shorter than ``limit`` while ``next_cursor`` is still set.
@@ -124,9 +124,6 @@ class DynamoHistoryRepo:
         model_id: str,
         system_prompt: str,
         user_prompt: str,
-        scenario_id: str | None = None,
-        dataset_id: str | None = None,
-        dataset_hash: str | None = None,
         config: dict[str, Any] | None = None,
         output: str | None = None,
         tool_transcript: Any | None = None,
@@ -142,11 +139,8 @@ class DynamoHistoryRepo:
             id=id or uuid4().hex,
             ts=ts or datetime.now(UTC),
             model_id=model_id,
-            scenario_id=scenario_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            dataset_id=dataset_id,
-            dataset_hash=dataset_hash,
             config=config or {},
             output=output,
             tool_transcript=tool_transcript,
@@ -163,11 +157,8 @@ class DynamoHistoryRepo:
         run_id: str,
         *,
         model_id: str = _UNSET,
-        scenario_id: str | None = _UNSET,
         system_prompt: str = _UNSET,
         user_prompt: str = _UNSET,
-        dataset_id: str | None = _UNSET,
-        dataset_hash: str | None = _UNSET,
         config: dict[str, Any] = _UNSET,
         output: str | None = _UNSET,
         tool_transcript: Any = _UNSET,
@@ -186,11 +177,8 @@ class DynamoHistoryRepo:
             updated,
             ddb_items.text,
             model_id=model_id,
-            scenario_id=scenario_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            dataset_id=dataset_id,
-            dataset_hash=dataset_hash,
             output=output,
             status=status,
         )
@@ -224,35 +212,29 @@ class DynamoHistoryRepo:
         self,
         *,
         model_id: str | None = None,
-        scenario_id: str | None = None,
         status: str | None = None,
         since: datetime | None = None,
         cursor: str | None = None,
         limit: int = 25,
     ) -> tuple[list[RunRecord], str | None]:
         """List runs newest-first with keyset pagination (filters apply post-page)."""
-        items, next_cursor = self._page(
-            RUN_PARTITION, limit=_clamp_limit(limit), cursor=cursor
-        )
+        items, next_cursor = self._page(RUN_PARTITION, limit=_clamp_limit(limit), cursor=cursor)
         records = [ddb_items.run_record(item) for item in items]
-        return _filter_runs(records, model_id, scenario_id, status, since), next_cursor
+        return _filter_runs(records, model_id, status, since), next_cursor
 
     def iter_runs_export(
         self,
         *,
         model_id: str | None = None,
-        scenario_id: str | None = None,
         status: str | None = None,
         since: datetime | None = None,
     ) -> Iterator[RunRecord]:
         """Yield every run matching the filters, newest-first, unpaginated."""
         cursor: str | None = None
         while True:
-            items, cursor = self._page(
-                RUN_PARTITION, limit=EXPORT_PAGE_SIZE, cursor=cursor
-            )
+            items, cursor = self._page(RUN_PARTITION, limit=EXPORT_PAGE_SIZE, cursor=cursor)
             records = [ddb_items.run_record(item) for item in items]
-            yield from _filter_runs(records, model_id, scenario_id, status, since)
+            yield from _filter_runs(records, model_id, status, since)
             if cursor is None:
                 return
 
@@ -330,9 +312,7 @@ class DynamoHistoryRepo:
         limit: int = 25,
     ) -> tuple[list[EvaluationRecord], str | None]:
         """List evaluations newest-first (same shape as :meth:`list_runs`)."""
-        items, next_cursor = self._page(
-            EVAL_PARTITION, limit=_clamp_limit(limit), cursor=cursor
-        )
+        items, next_cursor = self._page(EVAL_PARTITION, limit=_clamp_limit(limit), cursor=cursor)
         records = [ddb_items.evaluation_record(item) for item in items]
         if kind is not None:
             records = [record for record in records if record.kind == kind]
@@ -368,15 +348,12 @@ def _assign(item: dict[str, Any], encode: Any, **fields: Any) -> None:
 def _filter_runs(
     records: list[RunRecord],
     model_id: str | None,
-    scenario_id: str | None,
     status: str | None,
     since: datetime | None,
 ) -> list[RunRecord]:
     """Apply the run listing filters to an already-read page."""
     if model_id is not None:
         records = [record for record in records if record.model_id == model_id]
-    if scenario_id is not None:
-        records = [record for record in records if record.scenario_id == scenario_id]
     if status is not None:
         records = [record for record in records if record.status == status]
     if since is not None:

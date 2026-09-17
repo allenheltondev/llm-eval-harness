@@ -5,8 +5,8 @@ Evaluations run in one of two lanes, chosen per launch in the UI:
 - **local** (default): executed in-process by the FastAPI server, history in SQLite.
   Nothing leaves the machine except the Bedrock calls themselves.
 - **cloud**: executed by a worker hosted on Amazon Bedrock AgentCore Runtime,
-  with job state, progress events, and run records persisted to the existing
-  DynamoDB config-store table. Durable across laptop/server restarts and
+  with job state, progress events, and run records persisted to the stack's
+  DynamoDB table (`EvalTable`). Durable across laptop/server restarts and
   reviewable from any machine pointed at the same stack.
 
 This document is the contract between the three implementations (infra/worker,
@@ -36,7 +36,7 @@ All items carry `expiresAt` (epoch seconds, now + 90 days) for TTL.
 | Eval meta | `EVAL#{evaluation_id}` | `META` | `id, ts (ISO), kind, status (pending\|running\|completed\|error\|cancelled), config (JSON string: stored_config incl. grader/rubric/n), run_ids (JSON list), result (JSON string \| null), error (JSON string \| null), seq_count (number), GSI1PK="EVAL", GSI1SK={ts}` |
 | Progress event | `EVAL#{evaluation_id}` | `EVENT#{seq:08d}` | `seq (number), ts, event (JSON string — exactly the existing EvalStreamEvent wire shapes)` |
 | Cancel flag | `EVAL#{evaluation_id}` | `CANCEL` | `ts` — presence means cancel requested; worker checks between runs and before grading |
-| Run record | `RUN#{run_id}` | `META` | same fields as the SQLite `runs` table (id, ts, model_id, scenario_id, system_prompt, user_prompt, dataset_id, dataset_hash, config, output, tool_transcript, metrics, guardrail_trace, status, error — JSON columns as JSON strings), plus `evaluation_id`, `GSI1PK="RUN", GSI1SK={ts}` |
+| Run record | `RUN#{run_id}` | `META` | same fields as the SQLite `runs` table (id, ts, model_id, system_prompt, user_prompt, config, output, tool_transcript, metrics, guardrail_trace, status, error — JSON columns as JSON strings), plus `evaluation_id`, `GSI1PK="RUN", GSI1SK={ts}` |
 
 Writer rules (worker):
 - Events are appended with a strictly increasing `seq` starting at 0; `META.seq_count`
@@ -79,7 +79,8 @@ seam to make that swap injectable.
 
 Server (pydantic-settings, `EVALHARNESS_` prefix):
 - `eval_runtime_arn: str | None` — AgentCore runtime ARN; None = cloud lane unavailable.
-- `eval_table: str | None` — DynamoDB table name (same table as the config store).
+- `eval_table: str | None` — DynamoDB table name (the stack's `TableName` output; also
+  the deployed server's history store).
 
 Worker (env): `TABLE_NAME`, `AWS_REGION`. Model/judge config arrives in the payload.
 
@@ -88,8 +89,8 @@ Health: `GET /health` gains `"cloud_evals": {"configured": bool}`.
 ## Frontend
 
 - Eval launcher: a "Run location" toggle — **This machine** (default) vs
-  **Cloud — persisted** — with copy noting cloud sends prompts, dataset content,
-  and outputs to your AWS account's DynamoDB table. Disabled with a tooltip when
+  **Cloud — persisted** — with copy noting cloud sends prompts and outputs to
+  your AWS account's DynamoDB table. Disabled with a tooltip when
   health says the lane is unconfigured. Choice remembered in settings
   (`defaultEvalExecution`).
 - Eval list: lane badge per row (`local` | `cloud`); a filter to view cloud

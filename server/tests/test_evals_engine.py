@@ -125,7 +125,7 @@ async def test_backoff_is_actually_awaited_between_attempts(initialized_db, monk
 async def test_a_setup_failure_before_run_start_is_reported_as_the_outcomes_error(
     initialized_db,
 ):
-    """dataset_id without scenario_id raises BadRequestError before the runner
+    """An unknown toolset raises BadRequestError before the runner
     ever yields ``run_start`` -- this is the AppError branch of ``_execute_once``,
     not the generic ``classify_error`` one that in-band run failures take."""
     models = SequencedModels([Text("unused")])
@@ -136,7 +136,7 @@ async def test_a_setup_failure_before_run_start_is_reported_as_the_outcomes_erro
             "run_config": {
                 "model_id": "m",
                 "user_prompt": "hi",
-                "dataset_id": "orders-csv",
+                "toolset": "does-not-exist",
             },
         }
     )
@@ -145,9 +145,9 @@ async def test_a_setup_failure_before_run_start_is_reported_as_the_outcomes_erro
 
     assert not outcome.succeeded
     assert outcome.run_id is None
-    assert outcome.error["code"] == "bad_request"
+    assert outcome.error["code"] == "unknown_toolset"
     assert outcome.error["retryable"] is False
-    assert "scenario_id" in outcome.error["message"]
+    assert "does-not-exist" in outcome.error["message"]
     # The model was never invoked -- the failure is entirely in setup.
     assert models.calls == 0
 

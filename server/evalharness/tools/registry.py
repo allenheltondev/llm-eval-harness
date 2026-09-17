@@ -1,65 +1,40 @@
-"""Scenario id -> ported Strands tools lookup.
+"""Named toolsets a run may execute with (``RunRequest.toolset``).
 
-Keyed by each scenario's actual ``id`` field from its ``scenario.json``
-(``fraud-detection-comprehensive`` and ``shipping-logistics``), with the
-scenario's folder name also accepted as an alias so callers that only know
-the directory name (``fraud-detection``) still resolve correctly. For
-shipping-logistics the folder name and the scenario id are already the same
-string, so there is only one alias to add (fraud-detection).
+A toolset is a list of Strands ``@tool`` callables under a stable name that
+``GET /tools`` advertises and a run names to opt in. One example ships:
+``fraud-detection``, a small in-memory account-risk workflow. Real tools
+belong to whoever authors the evaluation; this is the seam they plug into.
 """
 
 from __future__ import annotations
 
-from evalharness.tools import fraud_detection, shipping_logistics
+from evalharness.tools import fraud_detection
 
-_FRAUD_TOOLS = [
-    fraud_detection.freeze_account,
-    fraud_detection.flag_suspicious_transaction,
-    fraud_detection.create_fraud_alert,
-    fraud_detection.update_risk_profile,
-]
-
-_SHIPPING_TOOLS = [
-    shipping_logistics.get_carrier_status,
-    shipping_logistics.get_package_contents,
-    shipping_logistics.get_customer_tier,
-    shipping_logistics.get_sla,
-    shipping_logistics.get_expedite_quote,
-    shipping_logistics.list_orders,
-    shipping_logistics.expedite_shipment,
-    shipping_logistics.hold_for_pickup,
-    shipping_logistics.escalate_to_manager,
-    shipping_logistics.no_action_required,
-]
-
-# scenario.json "id" fields, plus folder-name aliases.
 _REGISTRY: dict[str, list] = {
-    "fraud-detection-comprehensive": _FRAUD_TOOLS,
-    "fraud-detection": _FRAUD_TOOLS,
-    "shipping-logistics": _SHIPPING_TOOLS,
+    "fraud-detection": [
+        fraud_detection.freeze_account,
+        fraud_detection.flag_suspicious_transaction,
+        fraud_detection.create_fraud_alert,
+        fraud_detection.update_risk_profile,
+    ],
 }
 
 
-def get_tools(scenario_id: str) -> list:
-    """Return the ``@tool`` callables registered for ``scenario_id``.
-
-    Unknown scenario ids return an empty list.
-    """
-    return list(_REGISTRY.get(scenario_id, []))
+def get_tools(toolset: str) -> list:
+    """The ``@tool`` callables registered under ``toolset`` (empty if unknown)."""
+    return list(_REGISTRY.get(toolset, []))
 
 
-def has_handler(scenario_id: str, tool_name: str) -> bool:
-    """Return whether ``scenario_id`` has a tool named ``tool_name``.
+def has_handler(toolset: str, tool_name: str) -> bool:
+    """Whether ``toolset`` has a tool whose Strands ``tool_name`` is ``tool_name``."""
+    return any(tool.tool_name == tool_name for tool in get_tools(toolset))
 
-    ``tool_name`` is matched against each tool's Strands ``tool_name``
-    (the name Strands/scenario.json expose it under, e.g. ``getCarrierStatus``
-    or ``freeze_account`` -- not the Python function name).
-    """
-    return any(tool.tool_name == tool_name for tool in get_tools(scenario_id))
+
+def list_toolsets() -> list[str]:
+    """Every registered toolset name, in registration order."""
+    return list(_REGISTRY)
 
 
 def list_handlers() -> dict[str, list[str]]:
-    """Return ``{scenario_id: [tool_name, ...]}`` for every registered scenario id/alias."""
-    return {
-        scenario_id: [tool.tool_name for tool in tools] for scenario_id, tools in _REGISTRY.items()
-    }
+    """``{toolset: [tool_name, ...]}`` for every registered toolset."""
+    return {name: [tool.tool_name for tool in tools] for name, tools in _REGISTRY.items()}

@@ -48,7 +48,6 @@ from fastapi.responses import StreamingResponse
 
 from evalharness import deployment
 from evalharness.config import Settings, get_settings
-from evalharness.configstore.client import ConfigStoreClient
 from evalharness.engine.events import ErrorEvent, RunEvent, RunStartEvent
 from evalharness.engine.model_factory import ModelFactory, build_model
 from evalharness.engine.runner import execute_run
@@ -62,7 +61,6 @@ from evalharness.evals.ddb_reader import EvalTable
 from evalharness.evals.events import EvalCompleteEvent
 from evalharness.evals.judge import JudgeFactory, get_judge_factory
 from evalharness.evals.schemas import EvaluationRequest
-from evalharness.routers.scenarios import get_config_store_client
 from evalharness.schemas.runs import EvaluationDetail, Page, RunDetail, RunSummary
 from evalharness.store import history
 from evalharness.store.repo import HistoryRepo, get_history_repo, get_repo
@@ -75,7 +73,6 @@ NDJSON_MEDIA_TYPE = "application/x-ndjson"
 def _export_ndjson(
     repo: HistoryRepo,
     model_id: str | None,
-    scenario_id: str | None,
     status: str | None,
     since: datetime | None,
 ) -> Iterator[str]:
@@ -88,7 +85,6 @@ def _export_ndjson(
     """
     for record in repo.iter_runs_export(
         model_id=model_id,
-        scenario_id=scenario_id,
         status=status,
         since=since,
     ):
@@ -122,13 +118,12 @@ async def _run_ndjson(first: RunEvent, rest: AsyncIterator[RunEvent]) -> AsyncIt
 async def create_run(
     payload: RunRequest,
     settings: Settings = Depends(get_settings),
-    config_client: ConfigStoreClient = Depends(get_config_store_client),
     model_factory: ModelFactory = Depends(get_model_factory),
 ):
     """Execute a run; stream it as NDJSON, or return the finished ``RunDetail``.
 
-    The generator is primed once here so that setup failures (an invalid
-    dataset reference, an unreachable config store) still surface as ordinary
+    The generator is primed once here so that setup failures (an unknown
+    toolset, a provider that is not configured) still surface as ordinary
     HTTP error envelopes. Once ``run_start`` has been produced the run row
     exists, and every later failure travels in-band on a 200 stream.
 
@@ -140,7 +135,6 @@ async def create_run(
     repo = get_history_repo(settings)
     events = execute_run(
         payload,
-        config_client=config_client,
         settings=settings,
         model_factory=model_factory,
         repo=repo,
@@ -170,7 +164,6 @@ async def create_run(
 def list_runs(
     request: Request,
     model_id: str | None = None,
-    scenario_id: str | None = None,
     status: str | None = None,
     since: datetime | None = None,
     cursor: str | None = None,
@@ -190,19 +183,16 @@ def list_runs(
     alone) and the NDJSON export stays local-only.
     """
     if execution == "cloud":
-        return evals_cloud.list_runs(
-            evals_cloud.require_table(table), cursor=cursor, limit=limit
-        )
+        return evals_cloud.list_runs(evals_cloud.require_table(table), cursor=cursor, limit=limit)
 
     if request.headers.get("accept") == NDJSON_MEDIA_TYPE:
         return StreamingResponse(
-            _export_ndjson(repo, model_id, scenario_id, status, since),
+            _export_ndjson(repo, model_id, status, since),
             media_type=NDJSON_MEDIA_TYPE,
         )
 
     items, next_cursor = repo.list_runs(
         model_id=model_id,
-        scenario_id=scenario_id,
         status=status,
         since=since,
         cursor=cursor,
@@ -260,9 +250,7 @@ def list_evaluations(
             limit=limit,
         )
 
-    items, next_cursor = repo.list_evaluations(
-        kind=kind, status=status, cursor=cursor, limit=limit
-    )
+    items, next_cursor = repo.list_evaluations(kind=kind, status=status, cursor=cursor, limit=limit)
     return Page[EvaluationDetail](
         items=[EvaluationDetail.model_validate(record) for record in items],
         next_cursor=next_cursor,
@@ -277,7 +265,6 @@ def list_evaluations(
 async def create_evaluation(
     payload: EvaluationRequest,
     settings: Settings = Depends(get_settings),
-    config_client: ConfigStoreClient = Depends(get_config_store_client),
     model_factory: ModelFactory = Depends(get_model_factory),
     judge_factory: JudgeFactory = Depends(get_judge_factory),
     repo: HistoryRepo = Depends(get_repo),
@@ -323,7 +310,6 @@ async def create_evaluation(
             settings=settings,
             model_factory=model_factory,
             judge_factory=judge_factory,
-            config_client=config_client,
             repo=repo,
         ),
     )

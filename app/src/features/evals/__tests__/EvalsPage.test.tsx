@@ -11,11 +11,10 @@ import type { EvaluationDetail } from '../../../api'
 const healthMock = vi.fn().mockResolvedValue({
   status: 'ok',
   aws: { region: 'us-east-1', credentials: 'ok' },
-  config_store: { configured: false, reachable: null },
   cloud_evals: { configured: false }
 })
 
-vi.mock('../../../api', async (importOriginal) => {
+vi.mock('../../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../api')>()
   return { ...actual, api: { ...actual.api, health: healthMock } }
 })
@@ -26,8 +25,8 @@ const {
   DEFAULT_SETTINGS,
   INITIAL_EVAL_STATE,
   useEvalStore,
+  useModelStore,
   useRunConfigStore,
-  useScenarioStore,
   useSettingsStore
 } = await import('../../../stores')
 
@@ -104,13 +103,10 @@ beforeEach(() => {
   })
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
   useSettingsStore.setState({ ...DEFAULT_SETTINGS })
-  useScenarioStore.setState({
+  useModelStore.setState({
     models: [],
     modelsLoaded: true,
-    scenarios: [],
-    scenariosLoaded: true,
-    loadModels: vi.fn().mockResolvedValue(undefined),
-    loadScenarios: vi.fn().mockResolvedValue(undefined)
+    loadModels: vi.fn().mockResolvedValue(undefined)
   })
 })
 

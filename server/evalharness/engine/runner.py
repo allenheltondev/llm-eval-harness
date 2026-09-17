@@ -6,7 +6,7 @@ stream or as a single ``RunDetail`` JSON body.
 
 Ordering guarantees
 -------------------
-1. Nothing is yielded until the dataset is resolved and the run row exists, so a
+1. Nothing is yielded until the toolset is resolved and the run row exists, so a
    caller that primes the generator once (see ``routers/runs.py``) can still turn
    a setup failure into an ordinary HTTP error envelope. Everything after
    ``run_start`` travels in-band as an ``error`` event on a 200 stream.
@@ -22,7 +22,6 @@ Ordering guarantees
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import time
@@ -35,7 +34,6 @@ from strands import Agent
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
 
 from evalharness.config import Settings, get_settings
-from evalharness.configstore.client import ConfigStoreClient
 from evalharness.engine.events import (
     ErrorEvent,
     GuardrailTraceEvent,
@@ -56,39 +54,18 @@ from evalharness.store.repo import (
     default_session_factory,
     get_history_repo,
 )
-from evalharness.tools.registry import get_tools
+from evalharness.tools.registry import get_tools, list_toolsets
 
 logger = logging.getLogger(__name__)
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
-
-# The legacy app composed dataset content into the user turn exactly like this
-# before calling Converse -- see app/src/services/bedrockService.js
-# (invokeModel/invokeModelStream) and toolExecutionService.js:
-#     const fullUserPrompt = content
-#         ? `${userPrompt}\n\nData to analyze:\n${content}`
-#         : userPrompt;
-DATASET_PROMPT_TEMPLATE = "{user_prompt}\n\nData to analyze:\n{content}"
-
 
 #: Re-exported for callers that already imported it from here. The runner writes
 #: through a :class:`~evalharness.store.repo.HistoryRepo`, which opens (and
 #: closes) its own short session per write instead of borrowing the request's
 #: ``Depends`` session: FastAPI tears those down when the endpoint function
 #: returns, which for a streaming response is long before the body finishes.
-__all__ = ["compose_user_message", "dataset_hash", "default_session_factory", "execute_run"]
-
-
-def compose_user_message(user_prompt: str, dataset_content: str | None) -> str:
-    """Combine the user prompt with dataset content the way the legacy app did."""
-    if not dataset_content:
-        return user_prompt
-    return DATASET_PROMPT_TEMPLATE.format(user_prompt=user_prompt, content=dataset_content)
-
-
-def dataset_hash(content: str) -> str:
-    """sha256 of the dataset content, as stored on the run row."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+__all__ = ["default_session_factory", "execute_run"]
 
 
 class _ToolTranscriptRecorder:
@@ -167,29 +144,9 @@ def _stringify(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
-async def _resolve_dataset(
-    request: RunRequest, config_client: ConfigStoreClient | None
-) -> tuple[str, str | None]:
-    """Return ``(effective_user_message, dataset_hash)`` for this request."""
-    if not request.dataset_id:
-        return request.user_prompt, None
-    if not request.scenario_id:
-        raise BadRequestError(
-            "scenario_id is required when dataset_id is provided",
-            detail={"dataset_id": request.dataset_id},
-        )
-    if config_client is None:
-        raise BadRequestError("A config store client is required to resolve dataset_id")
-
-    dataset = await config_client.get_dataset(request.scenario_id, request.dataset_id)
-    content = dataset.content or ""
-    return compose_user_message(request.user_prompt, content), dataset_hash(content)
-
-
 async def execute_run(
     request: RunRequest,
     session_factory: SessionFactory | None = None,
-    config_client: ConfigStoreClient | None = None,
     settings: Settings | None = None,
     *,
     model_factory: ModelFactory | None = None,
@@ -209,20 +166,21 @@ async def execute_run(
             if session_factory is not None
             else get_history_repo(resolved_settings)
         )
-    make_model: ModelFactory = model_factory or (
-        lambda req: build_model(req, resolved_settings)
-    )
+    make_model: ModelFactory = model_factory or (lambda req: build_model(req, resolved_settings))
 
     # --- setup: anything that fails here is a plain HTTP error ----------- #
-    user_message, content_hash = await _resolve_dataset(request, config_client)
+    tools = get_tools(request.toolset) if request.toolset else []
+    if request.toolset and not tools:
+        raise BadRequestError(
+            f"Unknown toolset {request.toolset!r}",
+            detail={"toolset": request.toolset, "available": list_toolsets()},
+            code="unknown_toolset",
+        )
 
     record = repo.create_run(
         model_id=request.model_id,
         system_prompt=request.system_prompt,
         user_prompt=request.user_prompt,
-        scenario_id=request.scenario_id,
-        dataset_id=request.dataset_id,
-        dataset_hash=content_hash,
         config=request.stored_config(),
         status="running",
     )
@@ -266,8 +224,6 @@ async def execute_run(
 
     try:
         model = make_model(request)
-        use_tools = request.tools_enabled and request.scenario_id
-        tools = get_tools(request.scenario_id) if use_tools else []
         agent = Agent(
             model=model,
             tools=tools,
@@ -286,7 +242,7 @@ async def execute_run(
         # caps agent loop iterations (one model call + its tool executions), and the
         # loop stops gracefully with stop_reason "limit_turns" rather than raising.
         stream = agent.stream_async(
-            user_message, limits={"turns": request.max_tool_iterations}
+            request.user_prompt, limits={"turns": request.max_tool_iterations}
         )
 
         async for raw_event in stream:

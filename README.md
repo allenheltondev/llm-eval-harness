@@ -1,57 +1,58 @@
 # LLM Eval Harness
 
-A manual evaluation harness for AWS Bedrock foundation models and prompts, built on the
-[Strands Agents SDK](https://strandsagents.com/). Author scenarios (prompts, datasets, tool
-definitions), run them against any Bedrock model with streaming output and live tool-use, then
-grade the results — either by hand or with an LLM-as-judge determinism evaluation — and keep the
-full run history for comparison and export.
+An evaluation harness for LLM prompts and agents, built on the
+[Strands Agents SDK](https://strandsagents.com/). Run a prompt against a model with streaming
+output and live tool-use, then grade the results with an LLM-as-judge determinism evaluation, and
+keep the full run and evaluation history for comparison and export.
+
+Evaluations are the product. A run is one execution of a prompt; an evaluation runs it `n` times
+(or grades runs you already have) and scores the batch with `strands-agents-evals`. Everything
+runs local-first; a serverless deployment (Lambda + CloudFront + Cognito) is optional.
 
 ## Architecture
 
 ```
  +------------------+        +---------------------------+        +------------------------+
- |  app/ (React)    |  HTTP  |  server/ (FastAPI)         |        |  AWS Bedrock           |
- |  Vite, :3000      | -----> |  uvicorn --reload, :8000   | -----> |  (via Strands Agents)  |
- |  zero AWS creds   |        |  routes under /api/v1      |        +------------------------+
- +------------------+        |                             |
-                              |  scenarios/runs/models/     |        +------------------------+
-                              |  guardrails/health routers  | -----> |  Bedrock Guardrails    |
-                              |                             |        |  (create/version/apply)|
-                              |  SQLite (server/data/)      |        +------------------------+
-                              |  run + evaluation history   |
+ |  app/ (React)    |  HTTP  |  server/ (FastAPI)         |        |  Bedrock / Anthropic / |
+ |  Vite, :3000      | -----> |  uvicorn --reload, :8000   | -----> |  OpenAI / Ollama       |
+ |  zero AWS creds   |        |  routes under /api/v1      |        |  (via Strands Agents)  |
+ +------------------+        |                             |        +------------------------+
+                              |  runs/evaluations/models/   |
+                              |  tools/guardrails/health    |        +------------------------+
+                              |                             | -----> |  Bedrock Guardrails    |
+                              |  SQLite (server/data/)      |        |  (create/version/apply)|
+                              |  run + evaluation history   |        +------------------------+
                               +--------------+--------------+
-                                             |
-                                             | proxied, x-api-key
+                                             | optional cloud lane
                                              v
                               +---------------------------+
-                              |  api/ (AWS SAM)             |
-                              |  API Gateway + 4 Lambdas    |
-                              |  (Node.js 22, TypeScript)   |
-                              |  ------------------------   |
-                              |  DynamoDB: scenarios,       |
-                              |  prompts, datasets, tools   |
+                              |  infra/ (AWS SAM)           |
+                              |  AgentCore eval worker      |
+                              |  DynamoDB: history + eval   |
+                              |  state; Lambda server; S3 + |
+                              |  CloudFront; Cognito pool   |
                               +---------------------------+
 ```
 
-- **`app/`** — React + TypeScript SPA. Talks only to the FastAPI server (`VITE_API_URL`); it never
-  holds AWS credentials.
-- **`server/`** — FastAPI + [Strands Agents SDK](https://strandsagents.com/). Runs models against
-  Bedrock, proxies scenario/prompt/dataset/tool config from the deployed config API, executes
-  Python `@tool` handlers during tool-use scenarios, runs determinism evaluations
-  (`strands-agents-evals`), authors guardrails, and stores run/evaluation history in a local
-  SQLite database (`server/data/`). AWS credentials come from the standard credential chain.
-- **`api/`** — AWS SAM stack: an API Gateway REST API in front of four Lambda functions
-  (Node.js 22/TypeScript) backed by a single DynamoDB table, holding the scenario/prompt/dataset/tool
-  configuration. Deployed once; the server proxies to it with an API key.
+- **`server/`** — FastAPI + [Strands Agents SDK](https://strandsagents.com/). Executes runs
+  against four providers, runs Python `@tool` handlers when a run names a toolset, runs
+  determinism and grading evaluations (`strands-agents-evals`), authors Bedrock guardrails, and
+  stores history in SQLite (`server/data/`). This is where the product lives; the UI is one
+  client of it.
+- **`app/`** — React + TypeScript SPA. Talks only to the server (`VITE_API_URL`); it never holds
+  AWS credentials.
+- **`infra/`** — one AWS SAM template: the DynamoDB table, the AgentCore Runtime worker for the
+  cloud evaluation lane, and (optionally) the server on Lambda, the SPA on S3 + CloudFront, and
+  the Cognito user pool that gates it. No application code lives here.
 
 ## Prerequisites
 
 - Node.js 22+ and npm
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- AWS CLI credentials (`AWS_PROFILE`, SSO, env vars, or an instance/task role) — only needed for
-  **real** model calls and for deploying `api/`
+- Credentials for at least one model provider: the AWS credential chain for Bedrock, or an
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OLLAMA_HOST` (see [Configuration](#configuration))
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) —
-  only needed to deploy `api/`
+  only to deploy `infra/`
 
 ## Quick start
 
@@ -63,50 +64,115 @@ Then pick a mode:
 
 ### Fake mode — zero AWS, nothing to deploy
 
-A scripted model and judge stand in for Bedrock, so every feature (streaming, tool-use,
-determinism evaluations, guardrail authoring UI) works end-to-end with no AWS account and no
-deployed `api/` stack. This is the fastest way to try the app or develop against it.
+A scripted model and judge stand in for a real provider, so every feature (streaming, tool-use,
+determinism evaluations, guardrail authoring UI) works end-to-end with no credentials at all.
+This exists so CI and the E2E suite run free and hermetically; it is test infrastructure, not a
+usage mode.
 
 ```bash
 EVALHARNESS_FAKE_MODEL=1 make dev
 ```
 
-### Real mode — live Bedrock calls
+### Real mode — live model calls
 
-1. Deploy the config API once (creates the DynamoDB table, seeds it with the bundled scenarios):
-   ```bash
-   AWS_PROFILE=your-profile make deploy-api
-   ```
-2. Start both apps with the same AWS profile:
-   ```bash
-   AWS_PROFILE=your-profile make dev
-   ```
-   The server auto-discovers `config_api_url`/`config_api_key` (and, once deployed,
-   `eval_runtime_arn`/`eval_table`) from the deployed stack's CloudFormation outputs on first
-   use — no more copying `ApiEndpoint`/`ApiKeyId` by hand. If you deployed the stack under a
-   name other than the Makefile default (`llm-eval-harness`), set
-   `EVALHARNESS_STACK_NAME` to match. See [Configuration](#configuration) for the env vars that
-   still work as manual overrides, and `GET /health`'s `config_store.source`/`cloud_evals.source`
-   to see where the server actually got each value from (`"env"` or `"stack"`).
+```bash
+AWS_PROFILE=your-profile make dev          # Bedrock
+OLLAMA_HOST=localhost:11434 make dev       # or a local model, no cloud account at all
+```
 
-Either way, the app opens at `http://localhost:3000` and talks to the server at
-`http://localhost:8000`.
+The app opens at `http://localhost:3000` and talks to the server at `http://localhost:8000`.
+History lives in `server/data/evalharness.db`.
+
+## Runs and toolsets
+
+`POST /api/v1/runs` executes one prompt (`system_prompt`, `user_prompt`, `model_id`, `provider`,
+inference settings, optional guardrail) and streams the result as NDJSON, or returns the finished
+run with `stream: false`.
+
+A run may name a **toolset** (`"toolset": "fraud-detection"`), a list of Python `@tool` handlers
+the model can call during the run. `GET /api/v1/tools` lists what is registered. One example
+ships; add your own next to it:
+
+```python
+# server/evalharness/tools/support.py
+from strands import tool
+
+@tool(name="escalate_ticket")
+def escalate_ticket(ticket_id: str, priority: str, reason: str) -> dict:
+    """Escalate a support ticket to management.
+
+    Args:
+        ticket_id: The ticket to escalate.
+        priority: Urgency of the escalation.
+        reason: Why this ticket needs escalation.
+    """
+    return {"success": True, "ticket_id": ticket_id, "priority": priority}
+```
+
+```python
+# server/evalharness/tools/registry.py
+_REGISTRY["support"] = [support.escalate_ticket]
+```
+
+## Evaluations
+
+`POST /api/v1/evaluations` runs one of two kinds of evaluation, both graded by an LLM-as-judge
+(`strands-agents-evals`):
+
+- **`determinism`** — runs the same `run_config` `n` times (2–25, default 10) and grades the batch
+  for response consistency.
+- **`grade`** — grades a set of already-executed runs (`run_ids`) against a rubric.
+
+The grader model, rubric, and system prompt are all configurable per request
+(`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.system_prompt`; `rubric`). Progress
+streams as NDJSON from `GET /api/v1/evaluations/{id}/events`; results and history live alongside
+runs in the server's SQLite database.
+
+### Execution lanes: local vs cloud
+
+Evaluations run in one of two lanes, chosen per launch with the **Run location** toggle in the
+Evals tab (`execution: "local" | "cloud"` on the API):
+
+- **This machine** (default) — executed in-process by the server; history stays in local SQLite.
+  Nothing leaves your machine except the model calls themselves.
+- **Cloud — persisted** — executed by a worker hosted on Amazon Bedrock AgentCore Runtime; job
+  state, progress events, and every run record are persisted to the stack's DynamoDB table, so
+  evaluations survive laptop/server restarts and are reviewable from any machine pointed at the
+  same stack. Cloud evaluations appear under the **Cloud** filters in the Evals and History tabs.
+
+To enable the cloud lane, `make deploy-worker` packages the Python worker as an AgentCore CodeZip
+artifact, uploads it, and deploys the runtime and table; it prints the two values to export:
+
+```bash
+EVALHARNESS_EVAL_RUNTIME_ARN=arn:aws:bedrock-agentcore:...   # stack output EvalWorkerRuntimeArn
+EVALHARNESS_EVAL_TABLE=llm-eval-harness-EvalTable-...         # stack output TableName
+```
+
+The UI disables the cloud option until `GET /health` reports `cloud_evals.configured`. Full design
+and item shapes: `docs/cloud-evals.md`; infrastructure notes and first-deploy verification list:
+`docs/cloud-evals-infra.md`.
+
+## Guardrails
+
+`server/evalharness/routers/guardrails.py` authors AWS Bedrock Guardrails directly: create/update
+operate on a mutable `DRAFT` working copy, `POST /guardrails/{id}/versions` publishes the current
+draft as a new immutable numbered version, and any version (including `DRAFT`) can be applied to a
+run. `GET /guardrails/{id}/versions` lists the full version history for a guardrail. Bedrock-only.
 
 ## Deploy to AWS (serverless)
 
-Everything runs local-first and always will — this is optional. When you do want the harness on
-the internet, it is serverless end to end: **no containers anywhere**, one Lambda for the FastAPI
-server (unchanged, behind the [AWS Lambda Web Adapter](https://github.com/aws/aws-lambda-web-adapter)),
-S3 + CloudFront for the SPA, DynamoDB for history, and the existing AgentCore Runtime for
-evaluations.
+Optional. When you want the harness on the internet, it is serverless end to end: **no containers
+anywhere**, one Lambda for the FastAPI server (unchanged, behind the
+[AWS Lambda Web Adapter](https://github.com/aws/aws-lambda-web-adapter)), S3 + CloudFront for the
+SPA, DynamoDB for history, and the AgentCore Runtime for evaluations.
 
 ```bash
 AWS_PROFILE=your-profile make deploy
 ```
 
 One command, idempotent, prints the URL at the end. It packages the server's arm64 Lambda zip,
-uploads it under a content-hashed key, deploys the SAM stack (server function + Function URL +
-S3 bucket + CloudFront distribution), seeds the table, builds the SPA with `VITE_API_URL=/`,
+uploads it under a content-hashed key, deploys the SAM stack (table + server function + Function
+URL + S3 bucket + CloudFront distribution + Cognito pool), builds the SPA with `VITE_API_URL=/`,
 syncs it to S3, and invalidates the CDN.
 
 The result is a single origin: the SPA at `/`, the API at `/api/v1` on the same domain — so
@@ -126,7 +192,7 @@ shows a sign-in screen until it has one. Nothing is baked into the build: the SP
 locally (no pool, no gate) and deployed (pool, gate).
 
 The pool is **invitation-only** — there is no sign-up form, because an account here can spend
-your Bedrock budget. Create each user from the CLI; Cognito emails them a temporary password and
+your model budget. Create each user from the CLI; Cognito emails them a temporary password and
 the app walks them through choosing a real one on first sign-in:
 
 ```bash
@@ -169,18 +235,17 @@ The artifacts bucket is not optional in CI, and it does double duty. The pipelin
 to it, so letting SAM resolve its own managed bucket fails with `AccessDenied`, and the same
 applies to the server/worker zips — hence the `ArtifactsBucketName` template parameter, which
 points the stack's `CodeUri` at that bucket instead of one the stack creates. Local deploys pass
-no bucket: SAM uses `--resolve-s3` and the stack creates and owns its own artifact bucket, as
-before.
+no bucket: SAM uses `--resolve-s3` and the stack creates and owns its own artifact bucket.
 
 | Workflow | Trigger | Stack |
 | --- | --- | --- |
 | `deploy-staging.yaml` | pull request to `main` (or manual) | `llm-eval-harness-staging` |
 | `deploy-production.yaml` | push to `main` (or manual) | `llm-eval-harness-prod` |
 
-Both call `shared-pre-deploy-validations.yaml` (lint, typecheck, unit tests, `sam validate`) and
-then `shared-deploy.yaml` with `secrets: inherit`. Staging and Production are separate stacks, so
-a PR can never touch production, and each environment deploys one at a time. Fork PRs are skipped
-— they never receive repo secrets.
+Both call `shared-pre-deploy-validations.yaml` (lint, typecheck, unit tests, `sam validate --lint`)
+and then `shared-deploy.yaml` with `secrets: inherit`. Staging and Production are separate stacks,
+so a PR can never touch production, and each environment deploys one at a time. Fork PRs are
+skipped — they never receive repo secrets.
 
 The deploy job runs the same `make deploy` used locally, so there is one deploy definition rather
 than a CI copy that drifts. Local runs use your own credentials; CI assumes the pipeline role and
@@ -188,22 +253,16 @@ passes the artifacts bucket and CloudFormation execution role through `DEPLOY_S3
 
 #### Permissions the pipeline role needs
 
-`make deploy` does four things *outside* CloudFormation, so they run as `PIPELINE_EXECUTION_ROLE`
-rather than the CloudFormation execution role: seed the config store, sync the SPA to S3,
-invalidate CloudFront, and upload the server zip. The last one is covered by the shared artifacts
-bucket; the other three touch `llm-eval-harness-*` resources this stack creates, and need to be
-allowed on the pipeline role once:
+`make deploy` does three things *outside* CloudFormation, so they run as `PIPELINE_EXECUTION_ROLE`
+rather than the CloudFormation execution role: upload the server zip, sync the SPA to S3, and
+invalidate CloudFront. The first is covered by the shared artifacts bucket; the other two touch
+`llm-eval-harness-*` resources this stack creates, and need to be allowed on the pipeline role
+once:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
-    {
-      "Sid": "SeedLlmEvalHarnessConfigStore",
-      "Effect": "Allow",
-      "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
-      "Resource": "arn:aws:dynamodb:*:*:table/llm-eval-harness-*"
-    },
     {
       "Sid": "SyncLlmEvalHarnessSpa",
       "Effect": "Allow",
@@ -220,14 +279,15 @@ allowed on the pipeline role once:
 }
 ```
 
-`s3:DeleteObject` is required because the SPA sync runs with `--delete`; `GetItem` because the
-seeder preserves `createdAt` on re-seed. `cloudfront:CreateInvalidation` cannot be scoped by a
-resource policy — CloudFront has none — so it has to come from the role's identity policy.
+`s3:DeleteObject` is required because the SPA sync runs with `--delete`.
+`cloudfront:CreateInvalidation` cannot be scoped by a resource policy — CloudFront has none — so
+it has to come from the role's identity policy. `make create-user` additionally needs
+`cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
 
-One sharp edge: `ServerArtifactKey` is a CloudFormation parameter with an empty default, and an
-empty value deletes the server. `make deploy-api` and `make deploy-worker` do not pass it, so
-**once the server is deployed, use `make deploy`** — it is a superset of both `deploy-api` and
-(for preservation purposes) `deploy-worker`.
+One sharp edge: `ServerArtifactKey` and `EvalWorkerArtifactKey` are CloudFormation parameters with
+empty defaults, and an empty value deletes the corresponding resource. `make deploy` and
+`make deploy-worker` each read the other's current value back from the stack and pass it through,
+so use those targets rather than a bare `sam deploy` once anything is deployed.
 
 Details — the adapter layer, packaging and artifact size, the CloudFront origin/behaviour setup,
 exact IAM, and the list of things only a real deploy can prove — are in
@@ -238,16 +298,17 @@ exact IAM, and the list of things only a real deploy can prove — are in
 
 | Target | What it does |
 | --- | --- |
-| `make install` | `app` (`npm ci`) + `api` (`npm ci`) + `server` (`uv sync --dev`) |
+| `make install` | `app` (`npm ci`) + `server` (`uv sync --dev`) |
 | `make dev` | Runs the server (`uvicorn --reload`, `:8000`) and app (`vite`, `:3000`) concurrently in one terminal; Ctrl-C stops both |
 | `make dev-server` | Runs just the FastAPI server, for when you want its logs in their own terminal |
 | `make dev-app` | Runs just the Vite dev server |
 | `make lint` | `app` (`eslint`) + `server` (`ruff check`) |
-| `make test` | `app` (`vitest`) + `api` (`vitest`) + `server` (`pytest`) |
-| `make deploy-api` | `sam build && sam deploy` for the `api/` stack, then seeds it from `api/seed/fixtures/**` |
-| `make seed-api TABLE_NAME=...` | Re-runs just the seeder against an already-deployed table |
+| `make test` | `app` (`vitest`) + `server` (`pytest`) |
+| `make validate-template` | `sam validate --lint` on `infra/template.yaml` (cfn-lint; no credentials needed) |
+| `make e2e` | Playwright against the fake-model full stack |
 | `make package-server` | Builds the FastAPI server's arm64 Lambda zip. No AWS calls |
-| `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): package + upload + `sam deploy` + seed + build SPA + S3 sync + CloudFront invalidation |
+| `make deploy-worker` | Packages and deploys the AgentCore eval worker (the cloud evaluation lane) |
+| `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): package + upload + `sam deploy` + build SPA + S3 sync + CloudFront invalidation |
 | `make create-user EMAIL=...` | Invites a user to the deployed stack's Cognito pool ([Sign-in](#sign-in-cognito)); Cognito emails them a temporary password |
 
 `make dev` runs both processes as background jobs of one recipe with a `trap ... EXIT INT TERM`
@@ -261,27 +322,22 @@ terminals instead; they run the exact same commands.
 
 | Env var | Default | Description |
 | --- | --- | --- |
-| `EVALHARNESS_AWS_REGION` | `us-east-1` | AWS region for Bedrock/Guardrails calls |
-| `EVALHARNESS_CONFIG_API_URL` | *(unset)* | Base URL of the deployed `api/` config store — auto-discovered from the stack's `ApiEndpoint` output; set to override |
-| `EVALHARNESS_CONFIG_API_KEY` | *(unset)* | `x-api-key` bearer token for the config store — auto-discovered from the stack's `ApiKeyId` output; set to override |
+| `EVALHARNESS_AWS_REGION` | `us-east-1` | AWS region for Bedrock/Guardrails/DynamoDB calls |
 | `EVALHARNESS_DB_PATH` | `./data/evalharness.db` | SQLite path for run/evaluation history |
 | `EVALHARNESS_CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON list) |
-| `EVALHARNESS_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of live Bedrock |
+| `EVALHARNESS_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of a real provider (test infrastructure) |
 | `EVALHARNESS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
 | `EVALHARNESS_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
 | `EVALHARNESS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
-| `EVALHARNESS_STACK_NAME` | `llm-eval-harness` | Name of the deployed `api/` stack to auto-discover settings from |
-| `EVALHARNESS_STACK_DISCOVERY` | `true` | Set `false` to disable CloudFormation-stack auto-discovery entirely |
+| `EVALHARNESS_EVAL_RUNTIME_ARN` | *(unset)* | AgentCore runtime ARN of the eval worker (stack output `EvalWorkerRuntimeArn`). With `EVAL_TABLE`, enables the cloud lane |
+| `EVALHARNESS_EVAL_TABLE` | *(unset)* | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
+| `EVALHARNESS_HISTORY_BACKEND` | `auto` | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda, SQLite elsewhere) |
+| `EVALHARNESS_LOCAL_EVALS` | `auto` | `on` \| `off` \| `auto` (off inside Lambda) — whether evaluations may run in this process |
 | `EVALHARNESS_AUTH_USER_POOL_ID` | *(unset)* | Cognito user pool to verify bearer tokens against. With `EVALHARNESS_AUTH_CLIENT_ID`, every route but `/health` requires a token; unset locally means no gate. The deployed stack injects both |
 | `EVALHARNESS_AUTH_CLIENT_ID` | *(unset)* | The pool's app client id — what the SPA signs in with and what every accepted token's `aud`/`client_id` must equal |
 
 AWS credentials themselves are **not** a setting — they come from the standard boto3 credential
 chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, SSO, or an instance/task role).
-The same credentials are used to auto-discover `EVALHARNESS_CONFIG_API_URL`,
-`EVALHARNESS_CONFIG_API_KEY`, `EVALHARNESS_EVAL_TABLE`, and `EVALHARNESS_EVAL_RUNTIME_ARN` from
-the deployed stack (`cloudformation:DescribeStacks` plus, when an API key is present,
-`apigateway:GET` on `/apikeys/{id}`); a missing stack or missing credentials just leaves those
-settings unconfigured, exactly as before this existed.
 
 Bedrock is the default provider and the only one that needs no extra configuration. Setting any of
 the three keys above adds that provider's models to `GET /models` and lets runs, evaluations and
@@ -300,141 +356,47 @@ Set it to `/` for a same-origin build (what `make deploy` does behind CloudFront
 then go to relative `/api/v1/...` paths. Note that `/`, not `""`, is the value: a blank
 `VITE_API_URL` counts as unset and falls back to `http://localhost:8000`.
 
-## Add a scenario
-
-A scenario bundles system/user prompts, datasets, and (optionally) tool definitions the model can
-call during a run.
-
-1. **Create the scenario.** Either use the Scenarios tab in the app, or call the API directly:
-   ```bash
-   curl -X POST "$VITE_API_URL/api/v1/scenarios" \
-     -H 'content-type: application/json' \
-     -d '{"name": "Customer Support", "description": "Support ticket triage"}'
-   ```
-2. **Add prompts and datasets** under it, via the Scenarios tab or
-   `POST /api/v1/scenarios/{id}/prompts` and `POST /api/v1/scenarios/{id}/datasets`.
-3. **Add tool definitions**, if the scenario needs tool-use. The tool's *schema* (name,
-   description, input JSON schema) lives in the scenario config
-   (`PUT /api/v1/scenarios/{id}/tools/{toolName}`), but the *handler* — the Python function that
-   actually runs when the model calls the tool — is a `@tool` registered in
-   `server/evalharness/tools/registry.py`:
-
-   ```python
-   # server/evalharness/tools/my_scenario.py
-   from strands import tool
-
-   @tool(name="escalate_ticket")
-   def escalate_ticket(ticket_id: str, priority: str, reason: str) -> dict:
-       """Escalate a support ticket to management.
-
-       Args:
-           ticket_id: The ticket to escalate.
-           priority: Urgency of the escalation.
-           reason: Why this ticket needs escalation.
-       """
-       return {"success": True, "ticket_id": ticket_id, "priority": priority}
-   ```
-
-   ```python
-   # server/evalharness/tools/registry.py
-   from evalharness.tools import my_scenario
-
-   _REGISTRY["customer-support"] = [my_scenario.escalate_ticket]
-   ```
-
-   `GET /api/v1/scenarios/{id}/tools` reports `handler_registered: true/false` per tool by
-   checking this registry, so you can see at a glance whether a defined tool actually has code
-   behind it.
-4. **Re-seed instead**, if you'd rather define the whole scenario as a fixture up front: drop a
-   `scenario.json` (plus any dataset files) under `api/seed/fixtures/<scenario-id>/`, following the
-   shape of the existing `fraud-detection` / `shipping-logistics` fixtures, then run:
-   ```bash
-   make deploy-api            # first deploy, or
-   make seed-api TABLE_NAME=... # re-seed an existing table
-   ```
-   The seeder is idempotent — safe to re-run against the same table.
-
-## Evaluations
-
-`POST /api/v1/evaluations` runs one of two kinds of evaluation, both graded by an LLM-as-judge
-(`strands-agents-evals`):
-
-- **`determinism`** — runs the same `run_config` `n` times (2–25, default 10) and grades the batch
-  for response consistency.
-- **`grade`** — grades a set of already-executed runs (`run_ids`) against a rubric.
-
-The grader model, rubric, and system prompt are all configurable per request
-(`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.system_prompt`; `rubric`). Progress
-streams as NDJSON from `GET /api/v1/evaluations/{id}/events`; results and history live alongside
-runs in the server's SQLite database (`server/data/evalharness.db`).
-
-### Execution lanes: local vs cloud
-
-Evaluations run in one of two lanes, chosen per launch with the **Run location** toggle in the
-Evals tab (`execution: "local" | "cloud"` on the API):
-
-- **This machine** (default) — executed in-process by the FastAPI server; history stays in local
-  SQLite. Nothing leaves your machine except the Bedrock calls themselves.
-- **Cloud — persisted** — executed by a worker hosted on Amazon Bedrock AgentCore Runtime; job
-  state, progress events, and every run record are persisted to the config-store DynamoDB table,
-  so evaluations survive laptop/server restarts and are reviewable from any machine pointed at
-  the same stack. Cloud evaluations appear under the **Cloud** filters in the Evals and History
-  tabs.
-
-To enable the cloud lane: `make deploy-worker` (packages the Python worker as an AgentCore
-CodeZip artifact, uploads it, and deploys the runtime alongside the config store). The server
-auto-discovers `EVALHARNESS_EVAL_RUNTIME_ARN` and `EVALHARNESS_EVAL_TABLE` from the stack's
-`EvalWorkerRuntimeArn`/`TableName` outputs on next use — nothing to copy by hand. The UI disables
-the cloud option until the server reports the lane configured (`GET /health`'s
-`cloud_evals.configured`); `cloud_evals.source` shows whether that came from the stack or from an
-env override. After the worker exists, prefer `make deploy-worker` for stack updates
-(`make deploy-api` preserves the deployed worker artifact automatically). Full design and item
-shapes: `docs/cloud-evals.md`; infrastructure notes and first-deploy verification list:
-`docs/cloud-evals-infra.md`.
-
-## Guardrails
-
-`server/evalharness/routers/guardrails.py` authors AWS Bedrock Guardrails directly: create/update
-operate on a mutable `DRAFT` working copy, `POST /guardrails/{id}/versions` publishes the current
-draft as a new immutable numbered version, and any version (including `DRAFT`) can be applied to a
-run. `GET /guardrails/{id}/versions` lists the full version history for a guardrail.
-
 ## Repo layout
 
 ```
 llm-eval-harness/
-├── app/                      # React + TypeScript SPA (Vite, :3000)
-│   ├── src/
-│   └── .env.example
 ├── server/                   # FastAPI + Strands Agents SDK (uvicorn, :8000)
 │   ├── evalharness/
-│   │   ├── routers/          # health, models, scenarios (proxy), runs, guardrails
+│   │   ├── routers/          # health, models, tools, runs (+ evaluations), guardrails
 │   │   ├── engine/           # run execution, streaming, fake model
-│   │   ├── evals/            # determinism + grading engine, LLM-as-judge
+│   │   ├── evals/            # determinism + grading engine, LLM-as-judge, cloud lane client
 │   │   ├── guardrails/       # guardrail schemas/service/translator
-│   │   ├── tools/            # @tool handlers + registry.py
-│   │   ├── configstore/      # HTTP client for api/
-│   │   └── store/            # SQLite run/evaluation history
+│   │   ├── tools/            # @tool toolsets + registry.py
+│   │   ├── store/            # SQLite + DynamoDB run/evaluation history
+│   │   ├── worker/           # the AgentCore eval worker entrypoint
+│   │   └── auth.py           # Cognito bearer-token verification (deployed)
 │   └── tests/
-├── api/                      # AWS SAM: config store (scenarios/prompts/datasets/tools)
-│   ├── functions/            # one Lambda per resource
-│   ├── seed/fixtures/        # bundled scenario fixtures (fraud-detection, shipping-logistics)
-│   └── template.yaml
-├── .kiro/                    # historical spec/steering archaeology from earlier iterations
+├── app/                      # React + TypeScript SPA (Vite, :3000)
+│   ├── src/
+│   ├── e2e/                  # Playwright, against the fake-model stack
+│   └── .env.example
+├── infra/                    # AWS SAM: table, eval worker, Lambda server, CloudFront, Cognito
+│   ├── template.yaml
+│   └── samconfig.toml
+├── docs/                     # contracts (cloud-evals, serverless-deploy) and infra notes
+├── scripts/                  # packaging scripts + the live smoke test
 └── Makefile
 ```
 
 ## Testing
 
 ```bash
-make test          # everything: app + api + server
+make test                   # app + server
 cd app && npm test          # app only (vitest)
-cd api && npm test          # api only (vitest, mocked DynamoDB)
-cd server && uv run pytest  # server only (pytest, fake model — no AWS calls)
+cd server && uv run pytest  # server only (pytest, fake model — no network)
+make e2e                    # Playwright against the fake-model full stack
+make validate-template      # cfn-lint on infra/template.yaml
 ```
 
-`.kiro/` holds steering docs and specs from earlier iterations of this project; it's kept for
-historical reference and isn't part of the current architecture described above.
+Coverage gates are ratchets set at achieved numbers (`fail_under` in `server/pyproject.toml`,
+`thresholds` in `app/vitest.config.ts`): raise them when coverage climbs, never lower them to make
+a change pass. Mutation testing (Stryker for the app, mutmut for the server) runs as advisory CI
+jobs.
 
 ## License
 

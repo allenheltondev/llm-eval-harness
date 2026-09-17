@@ -1,5 +1,5 @@
 /**
- * The launcher, wired to real `runConfigStore` / `scenarioStore` /
+ * The launcher, wired to real `runConfigStore` / `modelStore` /
  * `settingsStore` with only `evalStore.startEvaluation` stubbed.
  */
 
@@ -19,13 +19,12 @@ function health(configured: boolean, localAvailable = true): HealthResponse {
   return {
     status: 'ok',
     aws: { region: 'us-east-1', credentials: 'ok' },
-    config_store: { configured: false, reachable: null },
     cloud_evals: { configured },
     local_evals: { available: localAvailable }
   }
 }
 
-vi.mock('../../../api', async (importOriginal) => {
+vi.mock('../../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../api')>()
   return { ...actual, api: { ...actual.api, health: healthMock } }
 })
@@ -36,8 +35,8 @@ const {
   DEFAULT_SETTINGS,
   INITIAL_EVAL_STATE,
   useEvalStore,
+  useModelStore,
   useRunConfigStore,
-  useScenarioStore,
   useSettingsStore
 } = await import('../../../stores')
 
@@ -68,13 +67,10 @@ beforeEach(() => {
   useEvalStore.setState({ ...INITIAL_EVAL_STATE, startEvaluation })
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
   useSettingsStore.setState({ ...DEFAULT_SETTINGS })
-  useScenarioStore.setState({
+  useModelStore.setState({
     models: MODELS,
     modelsLoaded: true,
-    scenarios: [],
-    scenariosLoaded: true,
-    loadModels: vi.fn().mockResolvedValue(undefined),
-    loadScenarios: vi.fn().mockResolvedValue(undefined)
+    loadModels: vi.fn().mockResolvedValue(undefined)
   })
 })
 
@@ -118,7 +114,7 @@ describe('DeterminismLauncher', () => {
       model_id: MODELS[1].model_id,
       system_prompt: 'You are a fraud analyst.',
       user_prompt: 'Is this suspicious?',
-      tools_enabled: true
+      toolset: 'fraud-detection'
     })
     render(<DeterminismLauncher />)
     await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
@@ -145,7 +141,7 @@ describe('DeterminismLauncher', () => {
         model_id: MODELS[1].model_id,
         user_prompt: 'Is this suspicious?',
         system_prompt: 'You are a fraud analyst.',
-        tools_enabled: true,
+        toolset: 'fraud-detection',
         max_tool_iterations: 10,
         provider: 'bedrock',
         stream: true
@@ -181,7 +177,7 @@ describe('DeterminismLauncher', () => {
 
   it('sends the grader provider matching the chosen grader model source', async () => {
     useRunConfigStore.setState({ model_id: MODELS[0].model_id, user_prompt: 'go' })
-    useScenarioStore.setState({
+    useModelStore.setState({
       models: [
         ...MODELS,
         {
@@ -234,9 +230,9 @@ describe('DeterminismLauncher', () => {
       render(<DeterminismLauncher />)
       await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
 
-      expect((screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked).toBe(
-        true
-      )
+      expect(
+        (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked
+      ).toBe(true)
     })
 
     it('switching to Cloud persists it as the new default and shows the storage note', async () => {
@@ -247,12 +243,12 @@ describe('DeterminismLauncher', () => {
 
       fireEvent.click(screen.getByRole('radio', { name: 'Cloud — persisted' }))
 
-      expect((screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked).toBe(
-        true
-      )
+      expect(
+        (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked
+      ).toBe(true)
       expect(useSettingsStore.getState().defaultEvalExecution).toBe('cloud')
       expect(screen.getByTestId('cloud-execution-note')).toHaveTextContent(
-        'Runs, prompts, and dataset content are persisted to your AWS account (DynamoDB) for later review.'
+        'Runs and prompts are persisted to your AWS account (DynamoDB) for later review.'
       )
     })
 
@@ -262,9 +258,9 @@ describe('DeterminismLauncher', () => {
       render(<DeterminismLauncher />)
 
       await waitFor(() =>
-        expect((screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled).toBe(
-          true
-        )
+        expect(
+          (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled
+        ).toBe(true)
       )
       const cloudLabel = screen.getByRole('radio', { name: 'Cloud — persisted' }).closest('label')
       expect(cloudLabel).toHaveAttribute('title', 'Cloud lane not configured on the server')
@@ -276,9 +272,9 @@ describe('DeterminismLauncher', () => {
       render(<DeterminismLauncher />)
 
       await waitFor(() =>
-        expect((screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled).toBe(
-          true
-        )
+        expect(
+          (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled
+        ).toBe(true)
       )
     })
 
@@ -290,9 +286,7 @@ describe('DeterminismLauncher', () => {
       fireEvent.click(screen.getByRole('radio', { name: 'Cloud — persisted' }))
       fireEvent.click(screen.getByRole('button', { name: 'Start evaluation' }))
 
-      expect(startEvaluation).toHaveBeenCalledWith(
-        expect.objectContaining({ execution: 'cloud' })
-      )
+      expect(startEvaluation).toHaveBeenCalledWith(expect.objectContaining({ execution: 'cloud' }))
     })
 
     describe('when the deployment has no local lane', () => {
@@ -305,31 +299,30 @@ describe('DeterminismLauncher', () => {
         render(<DeterminismLauncher />)
 
         await waitFor(() =>
-          expect((screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement).disabled).toBe(
-            true
-          )
+          expect(
+            (screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement).disabled
+          ).toBe(true)
         )
-        expect(screen.getByRole('radio', { name: 'This machine' }).closest('label')).toHaveAttribute(
-          'title',
-          'Local execution is unavailable on this deployment'
-        )
+        expect(
+          screen.getByRole('radio', { name: 'This machine' }).closest('label')
+        ).toHaveAttribute('title', 'Local execution is unavailable on this deployment')
         // The cloud lane is configured here, so it stays selectable.
-        expect((screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled).toBe(
-          false
-        )
+        expect(
+          (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled
+        ).toBe(false)
       })
 
       it('makes cloud the effective default without rewriting the stored preference', async () => {
         render(<DeterminismLauncher />)
 
         await waitFor(() =>
-          expect((screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked).toBe(
-            true
-          )
+          expect(
+            (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked
+          ).toBe(true)
         )
-        expect((screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement).checked).toBe(
-          false
-        )
+        expect(
+          (screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement).checked
+        ).toBe(false)
         expect(screen.getByTestId('cloud-execution-note')).toBeInTheDocument()
         // The user's own preference is untouched: it is right again the moment
         // they point the UI at their own machine.

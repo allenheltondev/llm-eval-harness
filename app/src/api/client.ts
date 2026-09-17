@@ -6,14 +6,9 @@
  * `/api/v1` (see `http.apiUrl`).
  */
 
-import { http, type QueryParams } from './http'
+import { http } from './http'
 import { getNdjson, streamNdjson, type StreamOptions } from './stream'
 import type {
-  ConfigStorePageParams,
-  Dataset,
-  DatasetCreateRequest,
-  DatasetListResponse,
-  DatasetUpdateRequest,
   EvalStreamEvent,
   EvaluationDetail,
   EvaluationListParams,
@@ -25,25 +20,15 @@ import type {
   GuardrailVersionListResponse,
   GuardrailVersionSummary,
   HealthResponse,
-  IdResponse,
   ModelListResponse,
   Page,
-  PromptCreateRequest,
-  PromptListResponse,
-  PromptUpdateRequest,
   RunDetail,
   RunListFilters,
   RunListParams,
   RunRequest,
   RunStreamEvent,
   RunSummary,
-  ScenarioCreateRequest,
-  ScenarioDetail,
-  ScenarioListResponse,
-  ScenarioUpdateRequest,
-  ToolDefinition,
-  ToolListResponse,
-  ToolUpsertRequest
+  ToolsResponse
 } from './types'
 
 /** Options accepted by every plain (non-streaming) call. */
@@ -52,11 +37,6 @@ export interface CallOptions {
 }
 
 const encode = encodeURIComponent
-
-function pageParams(params?: ConfigStorePageParams): QueryParams | undefined {
-  if (!params) return undefined
-  return { limit: params.limit, nextToken: params.nextToken }
-}
 
 /* -------------------------------------------------------------------------- */
 /* Models                                                                     */
@@ -69,154 +49,12 @@ const models = {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Scenarios (+ prompts / datasets / tools)                                   */
+/* Tools                                                                      */
 /* -------------------------------------------------------------------------- */
 
-const prompts = {
-  /** `GET /scenarios/{id}/prompts`. */
-  list: (
-    scenarioId: string,
-    params?: ConfigStorePageParams,
-    options: CallOptions = {}
-  ): Promise<PromptListResponse> =>
-    http.get<PromptListResponse>(`/scenarios/${encode(scenarioId)}/prompts`, {
-      query: pageParams(params),
-      signal: options.signal
-    }),
-
-  /** `POST /scenarios/{id}/prompts` -> 201 `{id}`. */
-  create: (
-    scenarioId: string,
-    body: PromptCreateRequest,
-    options: CallOptions = {}
-  ): Promise<IdResponse> =>
-    http.post<IdResponse>(`/scenarios/${encode(scenarioId)}/prompts`, body, {
-      signal: options.signal
-    }),
-
-  /** `PUT /scenarios/{id}/prompts/{promptId}` -> 204. */
-  update: (
-    scenarioId: string,
-    promptId: string,
-    body: PromptUpdateRequest,
-    options: CallOptions = {}
-  ): Promise<void> =>
-    http.put<void>(`/scenarios/${encode(scenarioId)}/prompts/${encode(promptId)}`, body, {
-      signal: options.signal
-    }),
-
-  /** `DELETE /scenarios/{id}/prompts/{promptId}` -> 204. */
-  remove: (scenarioId: string, promptId: string, options: CallOptions = {}): Promise<void> =>
-    http.delete<void>(`/scenarios/${encode(scenarioId)}/prompts/${encode(promptId)}`, {
-      signal: options.signal
-    })
-}
-
-const datasets = {
-  /** `GET /scenarios/{id}/datasets`. */
-  list: (
-    scenarioId: string,
-    params?: ConfigStorePageParams,
-    options: CallOptions = {}
-  ): Promise<DatasetListResponse> =>
-    http.get<DatasetListResponse>(`/scenarios/${encode(scenarioId)}/datasets`, {
-      query: pageParams(params),
-      signal: options.signal
-    }),
-
-  /** `GET /scenarios/{id}/datasets/{datasetId}` (metadata + content). */
-  get: (scenarioId: string, datasetId: string, options: CallOptions = {}): Promise<Dataset> =>
-    http.get<Dataset>(`/scenarios/${encode(scenarioId)}/datasets/${encode(datasetId)}`, {
-      signal: options.signal
-    }),
-
-  /** `POST /scenarios/{id}/datasets` -> 201 `{id}`. */
-  create: (
-    scenarioId: string,
-    body: DatasetCreateRequest,
-    options: CallOptions = {}
-  ): Promise<IdResponse> =>
-    http.post<IdResponse>(`/scenarios/${encode(scenarioId)}/datasets`, body, {
-      signal: options.signal
-    }),
-
-  /** `PUT /scenarios/{id}/datasets/{datasetId}` -> 204. */
-  update: (
-    scenarioId: string,
-    datasetId: string,
-    body: DatasetUpdateRequest,
-    options: CallOptions = {}
-  ): Promise<void> =>
-    http.put<void>(`/scenarios/${encode(scenarioId)}/datasets/${encode(datasetId)}`, body, {
-      signal: options.signal
-    }),
-
-  /** `DELETE /scenarios/{id}/datasets/{datasetId}` -> 204. */
-  remove: (scenarioId: string, datasetId: string, options: CallOptions = {}): Promise<void> =>
-    http.delete<void>(`/scenarios/${encode(scenarioId)}/datasets/${encode(datasetId)}`, {
-      signal: options.signal
-    })
-}
-
-const tools = {
-  /** `GET /scenarios/{id}/tools` — rows carry `handler_registered`. */
-  list: (scenarioId: string, options: CallOptions = {}): Promise<ToolListResponse> =>
-    http.get<ToolListResponse>(`/scenarios/${encode(scenarioId)}/tools`, {
-      signal: options.signal
-    }),
-
-  /** `GET /scenarios/{id}/tools/{name}`. */
-  get: (scenarioId: string, toolName: string, options: CallOptions = {}): Promise<ToolDefinition> =>
-    http.get<ToolDefinition>(`/scenarios/${encode(scenarioId)}/tools/${encode(toolName)}`, {
-      signal: options.signal
-    }),
-
-  /** `PUT /scenarios/{id}/tools/{name}` (create or replace). */
-  upsert: (
-    scenarioId: string,
-    toolName: string,
-    body: ToolUpsertRequest,
-    options: CallOptions = {}
-  ): Promise<ToolDefinition> =>
-    http.put<ToolDefinition>(
-      `/scenarios/${encode(scenarioId)}/tools/${encode(toolName)}`,
-      body,
-      { signal: options.signal }
-    )
-}
-
-const scenarios = {
-  /** `GET /scenarios` (`nextToken` pagination, `limit` 1-20). */
-  list: (params?: ConfigStorePageParams, options: CallOptions = {}): Promise<ScenarioListResponse> =>
-    http.get<ScenarioListResponse>('/scenarios', {
-      query: pageParams(params),
-      signal: options.signal
-    }),
-
-  /** `GET /scenarios/{id}` — hydrated detail (prompts, tools, datasets). */
-  get: (scenarioId: string, options: CallOptions = {}): Promise<ScenarioDetail> =>
-    http.get<ScenarioDetail>(`/scenarios/${encode(scenarioId)}`, { signal: options.signal }),
-
-  /** `POST /scenarios` -> 201 `ScenarioDetail`. */
-  create: (body: ScenarioCreateRequest, options: CallOptions = {}): Promise<ScenarioDetail> =>
-    http.post<ScenarioDetail>('/scenarios', body, { signal: options.signal }),
-
-  /** `PUT /scenarios/{id}` -> 204. */
-  update: (
-    scenarioId: string,
-    body: ScenarioUpdateRequest,
-    options: CallOptions = {}
-  ): Promise<void> =>
-    http.put<void>(`/scenarios/${encode(scenarioId)}`, body, { signal: options.signal }),
-
-  /** `DELETE /scenarios/{id}` -> 204. */
-  remove: (scenarioId: string, options: CallOptions = {}): Promise<void> =>
-    http.delete<void>(`/scenarios/${encode(scenarioId)}`, { signal: options.signal }),
-
-  prompts,
-  datasets,
-  tools
-}
+/** `GET /tools` -> `{toolsets}`: the named toolsets a run can execute with. */
+const tools = (options: CallOptions = {}): Promise<ToolsResponse> =>
+  http.get<ToolsResponse>('/tools', { signal: options.signal })
 
 /* -------------------------------------------------------------------------- */
 /* Runs                                                                       */
@@ -248,7 +86,6 @@ const runs = {
     http.get<Page<RunSummary>>('/runs', {
       query: {
         model_id: params.model_id,
-        scenario_id: params.scenario_id,
         status: params.status,
         since: params.since,
         cursor: params.cursor,
@@ -278,7 +115,6 @@ const runs = {
       ...options,
       query: {
         model_id: filters.model_id,
-        scenario_id: filters.scenario_id,
         status: filters.status,
         since: filters.since
       }
@@ -420,7 +256,7 @@ const health = (options: CallOptions = {}): Promise<HealthResponse> =>
 export const api = {
   health,
   models,
-  scenarios,
+  tools,
   runs,
   evaluations,
   guardrails

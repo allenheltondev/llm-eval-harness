@@ -5,13 +5,8 @@
  * response. Field *casing follows the wire*, which is not uniform across the
  * API:
  *
- * - runs / models / health / evaluations -> snake_case
+ * - runs / models / tools / health / evaluations -> snake_case
  *   (plain `BaseModel`s and plain dicts; no alias generator).
- * - scenarios (+ prompts / datasets / tools) -> camelCase
- *   (`evalharness/schemas/scenario.py` uses `alias_generator=to_camel` and
- *   FastAPI serializes with `response_model_by_alias=True`). The one exception
- *   is `handler_registered`, which `routers/scenarios.py` grafts onto each tool
- *   list item *after* `model_dump(by_alias=True)`, so it stays snake_case.
  * - guardrails -> camelCase
  *   (`routers/guardrails.py` returns `model_dump(mode="json", by_alias=True)`).
  *   Requests accept either casing (`populate_by_name=True`); we send camelCase.
@@ -20,7 +15,6 @@
  *   server/evalharness/engine/events.py     (run stream events)
  *   server/evalharness/engine/schemas.py    (RunRequest)
  *   server/evalharness/schemas/runs.py      (Page, RunSummary, RunDetail, EvaluationDetail)
- *   server/evalharness/schemas/scenario.py  (scenario/prompt/dataset/tool)
  *   server/evalharness/guardrails/schemas.py
  *   server/evalharness/routers/*.py
  *   server/evalharness/errors.py            (error envelope)
@@ -209,10 +203,12 @@ export interface RunRequest {
   model_id: string
   user_prompt: string
   system_prompt?: string
-  scenario_id?: string | null
-  dataset_id?: string | null
   inference?: InferenceConfig
-  tools_enabled?: boolean
+  /**
+   * Name of a toolset from `GET /api/v1/tools`; `null` (the default) runs
+   * without tools. Non-null executes the run with that toolset's tools.
+   */
+  toolset?: string | null
   /** 1 – 100, defaults to 10. */
   max_tool_iterations?: number
   guardrail?: RunGuardrailConfig | null
@@ -242,8 +238,6 @@ export interface RunSummary {
   /** ISO-8601 timestamp. */
   ts: string
   model_id: string
-  scenario_id: string | null
-  dataset_id: string | null
   status: string
   metrics: RunMetrics | null
 }
@@ -271,7 +265,7 @@ export interface ToolTranscriptEntry {
 /** The `config` JSON persisted on a run row (`RunRequest.stored_config`). */
 export interface RunStoredConfig {
   inference: InferenceConfig
-  tools_enabled: boolean
+  toolset: string | null
   max_tool_iterations: number
   guardrail: Required<RunGuardrailConfig> | null
   stream: boolean
@@ -284,11 +278,8 @@ export interface RunDetail {
   /** ISO-8601 timestamp. */
   ts: string
   model_id: string
-  scenario_id: string | null
   system_prompt: string
   user_prompt: string
-  dataset_id: string | null
-  dataset_hash: string | null
   config: RunStoredConfig
   output: string | null
   tool_transcript: ToolTranscriptEntry[] | null
@@ -301,7 +292,6 @@ export interface RunDetail {
 /** Query filters for `GET /api/v1/runs`. */
 export interface RunListFilters {
   model_id?: string
-  scenario_id?: string
   status?: string
   /** ISO-8601 timestamp. */
   since?: string
@@ -561,7 +551,7 @@ export interface ModelInfo {
    * Which backend serves this model — the machine-readable counterpart to
    * `provider`. Optional on the wire type because pre-existing/fake-mode
    * payloads predate the field; treat a missing value as `'bedrock'` (see
-   * `scenarioStore.groupModelsBySource`).
+   * `modelStore.groupModelsBySource`).
    *
    * contract: multi-provider model selection doc — `GET /models` row shape.
    */
@@ -593,7 +583,7 @@ export interface ModelProviders {
  * `providers` is optional on the wire type: a server that has not yet shipped
  * multi-provider support (e.g. the `EVALHARNESS_FAKE_MODEL` dev server) omits
  * it entirely. Treat a missing `providers` as "only bedrock is configured"
- * rather than crashing — see `scenarioStore.resolveModelProviders`.
+ * rather than crashing — see `modelStore.resolveModelProviders`.
  *
  * contract: multi-provider model selection doc — `GET /models` response
  * shape.
@@ -602,6 +592,22 @@ export interface ModelListResponse {
   models: ModelInfo[]
   providers?: ModelProviders
   cached: boolean
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tools — routers/tools.py                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** One named bundle of tools a run can execute with (`RunRequest.toolset`). */
+export interface Toolset {
+  name: string
+  /** Tool names in the set, for display. */
+  tools: string[]
+}
+
+/** `GET /api/v1/tools`. */
+export interface ToolsResponse {
+  toolsets: Toolset[]
 }
 
 /* -------------------------------------------------------------------------- */
@@ -616,19 +622,10 @@ export interface HealthResponse {
     region: string
     credentials: CredentialStatus
   }
-  config_store: {
-    configured: boolean
-    /** `null` when the config store is not configured. */
-    reachable: boolean | null
-  }
   /**
    * Whether the server has an AgentCore runtime configured for the cloud eval
-   * lane (`EVALHARNESS_EVAL_RUNTIME_ARN`). `false` (never unset) once the
-   * server ships this field; callers should still treat a missing/failed
-   * health response as unconfigured.
-   *
-   * contract: docs/cloud-evals.md "Configuration" — "Health: GET /health
-   * gains "cloud_evals": {"configured": bool}".
+   * lane (`EVALHARNESS_EVAL_RUNTIME_ARN`). Callers should still treat a
+   * missing/failed health response as unconfigured.
    */
   cloud_evals: {
     configured: boolean
@@ -668,144 +665,6 @@ export type HealthAuth =
       user_pool_id: string
       client_id: string
     }
-
-/* -------------------------------------------------------------------------- */
-/* Scenarios (camelCase wire) — schemas/scenario.py                           */
-/* -------------------------------------------------------------------------- */
-
-export type DatasetContentType = 'text/csv' | 'application/json'
-export type PromptKind = 'SYSTEM' | 'USER'
-
-export interface ScenarioSummary {
-  id: string
-  name: string
-  description: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export interface ScenarioCreateRequest {
-  id?: string
-  name: string
-  description?: string
-}
-
-export interface ScenarioUpdateRequest {
-  name?: string
-  description?: string
-}
-
-/** Config-store style pagination: `nextToken`, not `next_cursor`. */
-export interface ScenarioListResponse {
-  items: ScenarioSummary[]
-  count: number
-  nextToken: string | null
-}
-
-export interface PromptSummary {
-  id: string
-  name: string
-  content: string
-}
-
-export interface Prompt extends PromptSummary {
-  kind: PromptKind
-}
-
-export interface PromptCreateRequest {
-  kind: PromptKind
-  name: string
-  content: string
-}
-
-export interface PromptUpdateRequest {
-  name?: string
-  content?: string
-}
-
-export interface PromptListResponse {
-  items: Prompt[]
-  count: number
-  nextToken: string | null
-}
-
-export interface ToolDefinition {
-  name: string
-  description: string
-  inputSchema: Record<string, unknown>
-  handlerKey: string
-}
-
-/**
- * A tool list row. `handler_registered` is snake_case on purpose: the router
- * adds it to the already-camelCased dump (routers/scenarios.py `list_tools`).
- */
-export interface ToolListItem extends ToolDefinition {
-  handler_registered: boolean
-}
-
-export interface ToolListResponse {
-  items: ToolListItem[]
-  count: number
-}
-
-export interface ToolUpsertRequest {
-  description: string
-  inputSchema: Record<string, unknown>
-  handlerKey: string
-}
-
-export interface DatasetMeta {
-  id: string
-  name: string
-  description: string | null
-  contentType: DatasetContentType
-}
-
-export interface Dataset extends DatasetMeta {
-  content: string
-}
-
-export interface DatasetCreateRequest {
-  id?: string
-  name: string
-  description?: string
-  contentType: DatasetContentType
-  content: string
-}
-
-export interface DatasetUpdateRequest {
-  name?: string
-  description?: string
-  contentType?: DatasetContentType
-  content?: string
-}
-
-export interface DatasetListResponse {
-  items: DatasetMeta[]
-  count: number
-  nextToken: string | null
-}
-
-/** Hydrated scenario: metadata + prompts + tools + dataset metadata. */
-export interface ScenarioDetail extends ScenarioSummary {
-  systemPrompts: PromptSummary[]
-  userPrompts: PromptSummary[]
-  tools: ToolDefinition[]
-  datasets: DatasetMeta[]
-}
-
-/** `{"id": "..."}` — returned by prompt/dataset creates. */
-export interface IdResponse {
-  id: string
-}
-
-/** Config-store pagination params (`limit`, `nextToken`). */
-export interface ConfigStorePageParams {
-  /** 1 – 20. */
-  limit?: number
-  nextToken?: string
-}
 
 /* -------------------------------------------------------------------------- */
 /* Guardrails (camelCase wire) — guardrails/schemas.py                        */

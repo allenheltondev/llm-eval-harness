@@ -1,8 +1,8 @@
-.PHONY: dev dev-server dev-app lint lint-app lint-server test test-app test-api test-server \
-	install install-app install-api install-server deploy-api seed-api e2e smoke \
+.PHONY: dev dev-server dev-app lint lint-app lint-server test test-app test-server \
+	install install-app install-server validate-template e2e smoke \
 	package-eval-worker deploy-worker package-server deploy create-user
 
-# CloudFormation stack the api/ SAM template deploys into. Overriding this is
+# CloudFormation stack the infra/ SAM template deploys into. Overriding this is
 # what makes multiple environments possible (Staging and Production are two
 # independent stacks), so it MUST reach `sam deploy` itself -- samconfig.toml
 # carries its own stack_name and would otherwise win, silently deploying every
@@ -67,13 +67,10 @@ dev-app:
 # install
 # --------------------------------------------------------------------------- #
 
-install: install-app install-api install-server
+install: install-app install-server
 
 install-app:
 	cd app && npm ci
-
-install-api:
-	cd api && npm ci
 
 install-server:
 	cd server && uv sync --dev
@@ -94,13 +91,14 @@ lint-server:
 # test
 # --------------------------------------------------------------------------- #
 
-test: test-app test-api test-server
+test: test-app test-server
 
 test-app:
 	cd app && npm test
 
-test-api:
-	cd api && npm test
+# cfn-lint via sam: no AWS credentials needed. CI runs the same target.
+validate-template:
+	cd infra && sam validate --lint --region $(or $(DEPLOY_REGION),us-east-1)
 
 test-server:
 	cd server && uv run pytest
@@ -132,55 +130,16 @@ smoke:
 	cd server && uv run python ../scripts/live_smoke.py
 
 # --------------------------------------------------------------------------- #
-# api deploy / seed
-#
-# Builds + deploys the api/ SAM stack, then seeds it from api/seed/fixtures/**
-# using the TableName resolved from the stack's own outputs.
-# --------------------------------------------------------------------------- #
-
-deploy-api:
-	@set -e; \
-	current_param() { \
-		aws cloudformation describe-stacks --stack-name $(STACK_NAME) \
-			--query "Stacks[0].Parameters[?ParameterKey=='$$1'].ParameterValue" \
-			--output text 2>/dev/null || true; \
-	}; \
-	OVERRIDES=""; \
-	for PARAM in EvalWorkerArtifactKey ServerArtifactKey ArtifactsBucketName; do \
-		VALUE=$$(current_param $$PARAM); \
-		if [ -n "$$VALUE" ] && [ "$$VALUE" != "None" ]; then \
-			echo "deploy-api: preserving deployed $$PARAM=$$VALUE"; \
-			OVERRIDES="$$OVERRIDES $$PARAM=$$VALUE"; \
-		fi; \
-	done; \
-	if [ -n "$$OVERRIDES" ]; then OVERRIDES="--parameter-overrides$$OVERRIDES"; fi; \
-	cd api && npm ci && sam build && sam deploy $(SAM_DEPLOY_ARGS) $$OVERRIDES && \
-	TABLE_NAME=$$(aws cloudformation describe-stacks --stack-name $(STACK_NAME) --query "Stacks[0].Outputs[?OutputKey=='TableName'].OutputValue" --output text) && \
-	if [ -z "$$TABLE_NAME" ] || [ "$$TABLE_NAME" = "None" ]; then \
-		echo "deploy-api: could not resolve TableName from stack '$(STACK_NAME)' outputs" >&2; \
-		exit 1; \
-	fi && \
-	npm run seed -- --table "$$TABLE_NAME"
-
-# --------------------------------------------------------------------------- #
 # cloud eval worker
 #
 # `package-eval-worker` builds the AgentCore CodeZip artifact and nothing else
 # -- no AWS calls, safe to run anywhere. `deploy-worker` builds it, uploads it,
-# and deploys the whole api/ stack with the worker enabled.
+# and deploys the whole infra/ stack with the worker enabled.
 #
-# deploy-worker is a SUPERSET of deploy-api: it deploys the same stack plus the
-# AgentCore runtime. Once the worker exists, keep using it -- a bare
-# `make deploy-api` passes no EvalWorkerArtifactKey, so the parameter falls back
-# to its empty default and CloudFormation deletes the runtime. (See the
-# parameter's own comment in api/template.yaml.)
-#
-# Optional: pass the config store API key so the worker can resolve stored
-# scenarios/prompts/datasets (CloudFormation cannot read it out of the ApiKey
-# resource, so it has to come in from outside):
-#   EVAL_WORKER_CONFIG_API_KEY=$(aws apigateway get-api-key \
-#       --api-key <ApiKeyId> --include-value --query value --output text) \
-#     make deploy-worker
+# Once the worker exists, keep deploying through this target or `make deploy`:
+# a bare `sam deploy` passes no EvalWorkerArtifactKey, so the parameter falls
+# back to its empty default and CloudFormation deletes the runtime. (See the
+# parameter's own comment in infra/template.yaml.)
 # --------------------------------------------------------------------------- #
 
 package-eval-worker:
@@ -200,7 +159,7 @@ deploy-worker:
 		BUCKET=$$(resolve_output EvalWorkerArtifactBucket); \
 		if [ -z "$$BUCKET" ] || [ "$$BUCKET" = "None" ]; then \
 			echo "deploy-worker: stack '$(STACK_NAME)' has no artifact bucket yet -- bootstrapping"; \
-			( cd api && npm ci && sam build && sam deploy $(SAM_DEPLOY_ARGS) ); \
+			( cd infra && sam build && sam deploy $(SAM_DEPLOY_ARGS) ); \
 			BUCKET=$$(resolve_output EvalWorkerArtifactBucket); \
 		fi; \
 	fi; \
@@ -219,11 +178,10 @@ deploy-worker:
 	if [ -n "$$CURRENT_SERVER_KEY" ]; then \
 		echo "deploy-worker: preserving deployed server artifact $$CURRENT_SERVER_KEY"; \
 	fi; \
-	( cd api && npm ci && sam build && sam deploy $(SAM_DEPLOY_ARGS) --parameter-overrides \
+	( cd infra && sam build && sam deploy $(SAM_DEPLOY_ARGS) --parameter-overrides \
 		"EvalWorkerArtifactKey=$$ARTIFACT_KEY" \
 		$${DEPLOY_S3_BUCKET:+"ArtifactsBucketName=$(DEPLOY_S3_BUCKET)"} \
-		$${CURRENT_SERVER_KEY:+"ServerArtifactKey=$$CURRENT_SERVER_KEY"} \
-		$${EVAL_WORKER_CONFIG_API_KEY:+"EvalWorkerConfigApiKey=$$EVAL_WORKER_CONFIG_API_KEY"} ); \
+		$${CURRENT_SERVER_KEY:+"ServerArtifactKey=$$CURRENT_SERVER_KEY"} ); \
 	ARN=$$(resolve_output EvalWorkerRuntimeArn); \
 	TABLE=$$(resolve_output TableName); \
 	echo; \
@@ -237,12 +195,11 @@ deploy-worker:
 # `package-server` builds the server's Lambda zip and nothing else -- no AWS
 # calls, safe to run anywhere. `deploy` is the whole thing:
 #
-#   package -> upload -> sam deploy -> seed -> build SPA -> s3 sync -> invalidate
+#   package -> upload -> sam deploy -> build SPA -> s3 sync -> invalidate
 #
-# `deploy` is a SUPERSET of deploy-api and orthogonal to deploy-worker: it
-# passes ServerArtifactKey, and reads the stack's CURRENT EvalWorkerArtifactKey
-# and passes that back unchanged (exactly as deploy-api does), so deploying the
-# server never deletes a deployed eval worker. The converse is NOT true --
+# `deploy` is orthogonal to deploy-worker: it passes ServerArtifactKey, and
+# reads the stack's CURRENT EvalWorkerArtifactKey and passes that back
+# unchanged, so deploying the server never deletes a deployed eval worker. The converse is NOT true --
 # `deploy-worker` does not preserve ServerArtifactKey, so once the server
 # exists, `make deploy` is the target to use.
 #
@@ -268,7 +225,7 @@ deploy:
 		BUCKET=$$(resolve_output ArtifactBucket); \
 		if [ -z "$$BUCKET" ] || [ "$$BUCKET" = "None" ]; then \
 			echo "deploy: stack '$(STACK_NAME)' has no artifact bucket yet -- bootstrapping"; \
-			( cd api && npm ci && sam build && sam deploy $(SAM_DEPLOY_ARGS) ); \
+			( cd infra && sam build && sam deploy $(SAM_DEPLOY_ARGS) ); \
 			BUCKET=$$(resolve_output ArtifactBucket); \
 		fi; \
 	fi; \
@@ -288,17 +245,11 @@ deploy:
 	else \
 		WORKER_KEY=""; \
 	fi; \
-	( cd api && npm ci && sam build && sam deploy $(SAM_DEPLOY_ARGS) --parameter-overrides \
+	( cd infra && sam build && sam deploy $(SAM_DEPLOY_ARGS) --parameter-overrides \
 		"ServerArtifactKey=$$ARTIFACT_KEY" \
 		$${DEPLOY_S3_BUCKET:+"ArtifactsBucketName=$(DEPLOY_S3_BUCKET)"} \
 		$${WORKER_KEY:+"EvalWorkerArtifactKey=$$WORKER_KEY"} \
 		$${SERVER_MEMORY:+"ServerMemorySize=$$SERVER_MEMORY"} ); \
-	TABLE=$$(resolve_output TableName); \
-	if [ -z "$$TABLE" ] || [ "$$TABLE" = "None" ]; then \
-		echo "deploy: could not resolve TableName from stack '$(STACK_NAME)'" >&2; \
-		exit 1; \
-	fi; \
-	( cd api && npm run seed -- --table "$$TABLE" ); \
 	APP_BUCKET=$$(resolve_output AppBucket); \
 	DIST_ID=$$(resolve_output AppDistributionId); \
 	APP_URL=$$(resolve_output AppUrl); \
@@ -317,7 +268,7 @@ deploy:
 # --------------------------------------------------------------------------- #
 # users
 #
-# The deployed app's Cognito pool is invitation-only (api/template.yaml
+# The deployed app's Cognito pool is invitation-only (infra/template.yaml
 # `UserPool`). This invites one user: Cognito emails them a temporary password
 # and the app's sign-in screen walks them through choosing a real one.
 #   make create-user EMAIL=you@example.com [STACK_NAME=llm-eval-harness-staging]
@@ -344,12 +295,3 @@ create-user:
 		--user-attributes Name=email,Value="$(EMAIL)" Name=email_verified,Value=true \
 		--desired-delivery-mediums EMAIL >/dev/null; \
 	echo "create-user: invited $(EMAIL) to pool $$POOL_ID -- a temporary password is on its way by email"
-
-# Runs just the seeder against an already-deployed table. Requires TABLE_NAME, e.g.:
-#   make seed-api TABLE_NAME=llm-eval-harness-ScenariosTable-XXXXXXXXXXXX
-seed-api:
-	@if [ -z "$(TABLE_NAME)" ]; then \
-		echo "seed-api: TABLE_NAME is required, e.g. make seed-api TABLE_NAME=your-table-name" >&2; \
-		exit 1; \
-	fi
-	cd api && TABLE_NAME=$(TABLE_NAME) npm run seed

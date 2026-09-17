@@ -9,7 +9,7 @@ from evalharness import deployment
 from evalharness.auth import require_auth
 from evalharness.config import get_settings
 from evalharness.errors import register_exception_handlers
-from evalharness.routers import guardrails, health, models, runs, scenarios
+from evalharness.routers import guardrails, health, models, runs, tools
 from evalharness.store.db import init_db
 from evalharness.store.repo import get_history_repo
 
@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix=API_PREFIX)
     protected = [Depends(require_auth)]
     app.include_router(models.router, prefix=API_PREFIX, dependencies=protected)
-    app.include_router(scenarios.router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(tools.router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(runs.router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(guardrails.router, prefix=API_PREFIX, dependencies=protected)
 

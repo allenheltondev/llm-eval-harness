@@ -1,23 +1,34 @@
 /**
  * The header's sign-out control: absent whenever the deployment has no auth
  * (every local run), present and working behind an AuthProvider.
+ *
+ * The Workbench's `GET /tools` fetch is stubbed at the API client so the only
+ * `fetch` the sign-out test observes is Cognito's RevokeToken.
  */
 
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import AppShell from '../AppShell'
 import { jsonResponse, mockFetch } from '../api/__tests__/helpers'
-import { AUTH_STORAGE_KEY, AuthProvider, configureAuth, readSession } from '../auth'
-import {
+
+const toolsMock = vi.fn()
+
+vi.mock('../api', async importOriginal => {
+  const actual = await importOriginal<typeof import('../api')>()
+  return { ...actual, api: { ...actual.api, tools: toolsMock } }
+})
+
+const { default: AppShell } = await import('../AppShell')
+const { AUTH_STORAGE_KEY, AuthProvider, configureAuth, readSession } = await import('../auth')
+const {
   DEFAULT_RUN_CONFIG,
   DEFAULT_SETTINGS,
   INITIAL_RUN_STATE,
   useGuardrailStore,
+  useModelStore,
   useRunConfigStore,
   useRunStore,
-  useScenarioStore,
   useSettingsStore
-} from '../stores'
+} = await import('../stores')
 
 function fakeJwt(payload: Record<string, unknown>): string {
   const b64 = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -26,15 +37,14 @@ function fakeJwt(payload: Record<string, unknown>): string {
 
 beforeEach(() => {
   localStorage.clear()
+  toolsMock.mockReset()
+  toolsMock.mockResolvedValue({ toolsets: [] })
   useRunStore.setState({ ...INITIAL_RUN_STATE })
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
   useSettingsStore.setState({ ...DEFAULT_SETTINGS })
-  useScenarioStore.setState({
+  useModelStore.setState({
     models: [],
-    scenarios: [],
-    loadModels: vi.fn().mockResolvedValue(undefined),
-    loadScenarios: vi.fn().mockResolvedValue(undefined),
-    loadScenario: vi.fn().mockResolvedValue(null)
+    loadModels: vi.fn().mockResolvedValue(undefined)
   })
   useGuardrailStore.setState({
     guardrails: [],

@@ -1,10 +1,10 @@
 # LLM Eval Harness Server
 
-FastAPI execution/eval engine for the model-evaluation harness, built on the
-[Strands Agents SDK](https://strandsagents.com/). Runs models against Bedrock, proxies
-scenario/prompt/dataset/tool config from the `api/` config store, executes tool-use scenarios, runs
-determinism/grading evaluations, authors Bedrock Guardrails, and stores run/evaluation history in
-SQLite.
+FastAPI execution/eval engine for the harness, built on the
+[Strands Agents SDK](https://strandsagents.com/). Executes runs against Bedrock, Anthropic, OpenAI
+or Ollama, runs Python `@tool` handlers when a run names a toolset, runs determinism/grading
+evaluations (`strands-agents-evals`), authors Bedrock Guardrails, and stores run/evaluation history
+in SQLite (DynamoDB when deployed).
 
 ## Getting started
 
@@ -13,39 +13,30 @@ uv sync --dev
 uv run uvicorn evalharness.main:app --reload --port 8000
 ```
 
-Or, for zero AWS calls (scripted model + judge — no credentials or deployed `api/` stack needed):
+Or, for zero network calls (scripted model + judge; test infrastructure, not a usage mode):
 
 ```bash
 EVALHARNESS_FAKE_MODEL=1 uv run uvicorn evalharness.main:app --reload --port 8000
 ```
 
 AWS credentials come from the standard credential chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, an
-instance/task role, etc.) — this replaces the old `local-setup.sh` flow.
+instance/task role, etc.).
 
 | Env var                          | Default                       | Description                          |
 | --------------------------------- | ------------------------------ | ------------------------------------ |
 | `EVALHARNESS_AWS_REGION`          | `us-east-1`                    | AWS region for SDK calls             |
-| `EVALHARNESS_CONFIG_API_URL`      | `None`                         | Base URL of the config API — auto-discovered from the stack; set to override |
-| `EVALHARNESS_CONFIG_API_KEY`      | `None`                         | Bearer token for the config API — auto-discovered from the stack; set to override |
 | `EVALHARNESS_DB_PATH`             | `./data/evalharness.db`        | SQLite database path                 |
 | `EVALHARNESS_CORS_ORIGINS`        | `["http://localhost:3000"]`    | Allowed CORS origins (JSON list)     |
 | `EVALHARNESS_FAKE_MODEL`          | `false`                        | Use a fake model instead of live LLM |
 | `EVALHARNESS_ANTHROPIC_API_KEY`   | `None`                         | Anthropic API key (falls back to `ANTHROPIC_API_KEY`) |
 | `EVALHARNESS_OPENAI_API_KEY`      | `None`                         | OpenAI API key (falls back to `OPENAI_API_KEY`) |
 | `EVALHARNESS_OLLAMA_BASE_URL`     | `None`                         | Ollama server base URL, e.g. `http://localhost:11434` (falls back to `OLLAMA_HOST`) |
-| `EVALHARNESS_EVAL_RUNTIME_ARN`    | `None`                         | AgentCore Runtime ARN for the cloud evaluation lane — auto-discovered from the stack; set to override |
-| `EVALHARNESS_EVAL_TABLE`          | `None`                         | DynamoDB table for the cloud evaluation lane — auto-discovered from the stack; set to override |
-| `EVALHARNESS_STACK_NAME`          | `llm-eval-harness`           | Name of the deployed `api/` stack the four settings above are auto-discovered from |
-| `EVALHARNESS_STACK_DISCOVERY`     | `true`                         | Set `false` to disable CloudFormation-stack auto-discovery entirely |
-
-Auto-discovery (`evalharness/stack_discovery.py`) runs lazily, once per process, and only for
-whichever of the four settings above aren't already set explicitly: it calls
-`cloudformation:DescribeStacks` on `EVALHARNESS_STACK_NAME` and, when the stack's `ApiKeyId`
-output is present, `apigateway:GET` (`get-api-key --include-value`) to resolve the key's actual
-value. A missing stack, missing credentials, or a permissions error all degrade silently to
-"unconfigured" (one log line, no traceback) rather than failing startup — this is the expected
-state for `EVALHARNESS_FAKE_MODEL`/local-only usage. `GET /health` reports where each configured
-value came from via `config_store.source` / `cloud_evals.source` (`"env"` or `"stack"`).
+| `EVALHARNESS_EVAL_RUNTIME_ARN`    | `None`                         | AgentCore Runtime ARN for the cloud evaluation lane (stack output `EvalWorkerRuntimeArn`) |
+| `EVALHARNESS_EVAL_TABLE`          | `None`                         | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
+| `EVALHARNESS_HISTORY_BACKEND`     | `auto`                         | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda) |
+| `EVALHARNESS_LOCAL_EVALS`         | `auto`                         | `on` \| `off` \| `auto` (off inside Lambda) |
+| `EVALHARNESS_AUTH_USER_POOL_ID`   | `None`                         | Cognito pool to verify bearer tokens against; with the client id, gates every route but `/health` |
+| `EVALHARNESS_AUTH_CLIENT_ID`      | `None`                         | The pool's app client id |
 
 ## Model providers
 
@@ -62,21 +53,29 @@ unconfigured provider is a `400 provider_not_configured`. Guardrails are Bedrock
 — pairing one with another provider is a `400 guardrail_requires_bedrock`.
 `EVALHARNESS_FAKE_MODEL` short-circuits all of this, provider included.
 
+## Toolsets
+
+A run may name a toolset (`"toolset": "fraud-detection"`) — a list of Strands `@tool`
+callables registered in `evalharness/tools/registry.py`. `GET /tools` lists them; an
+unknown name is a `400 unknown_toolset`. Add a module next to `fraud_detection.py`
+and register it to add your own.
+
 ## Endpoints
 
-All routes are mounted under `/api/v1`.
+All routes are mounted under `/api/v1`. Every route except `/health` requires a
+bearer token when a Cognito pool is configured (`evalharness/auth.py`).
 
 | Router | Routes |
 | --- | --- |
 | `health` | `GET /health` |
 | `models` | `GET /models` |
-| `scenarios` | `GET,POST /scenarios` · `GET,PUT,DELETE /scenarios/{id}` · `GET,POST /scenarios/{id}/prompts` · `PUT,DELETE /scenarios/{id}/prompts/{promptId}` · `GET,POST /scenarios/{id}/datasets` · `GET,PUT,DELETE /scenarios/{id}/datasets/{datasetId}` · `GET,PUT /scenarios/{id}/tools/{toolName}` · `GET /scenarios/{id}/tools` (proxied to `api/`, with `handler_registered` filled in from the local tool registry) |
+| `tools` | `GET /tools` |
 | `runs` | `POST,GET /runs` (POST executes a run; `stream=true` returns NDJSON) · `GET,DELETE /runs/{id}` · `POST,GET /evaluations` · `GET /evaluations/{id}` · `GET /evaluations/{id}/events` (NDJSON) · `DELETE /evaluations/{id}` |
 | `guardrails` | `GET,POST /guardrails` · `GET,PUT,DELETE /guardrails/{id}` · `GET,POST /guardrails/{id}/versions` |
 
 ## Testing & linting
 
 ```bash
-uv run pytest
+uv run pytest --cov=evalharness   # fail_under in pyproject.toml is a ratchet
 uv run ruff check .
 ```

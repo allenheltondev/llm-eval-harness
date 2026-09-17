@@ -19,7 +19,7 @@ export async function configureWorkbench(
 /** Switches the active tab via the top nav's `role=tab` buttons. */
 export async function gotoTab(
   page: Page,
-  name: 'Workbench' | 'Evals' | 'History' | 'Guardrails' | 'Scenarios' | 'About'
+  name: 'Workbench' | 'Evals' | 'History' | 'Guardrails' | 'About'
 ): Promise<void> {
   await page.getByRole('tab', { name }).click()
 }

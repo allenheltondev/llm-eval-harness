@@ -6,7 +6,7 @@ document deliberately left open: **how the worker is packaged, how it is
 invoked, and what about that is proven versus assumed.**
 
 Everything here concerns `server/evalharness/worker/`, the
-`AWS::BedrockAgentCore::Runtime` resource in `api/template.yaml`,
+`AWS::BedrockAgentCore::Runtime` resource in `infra/template.yaml`,
 `scripts/package-eval-worker.sh`, and `make deploy-worker`.
 
 ## Where the facts came from
@@ -60,9 +60,9 @@ real fork in the road, and the zip side wins on every axis that matters here:
   path differs only in the `Runtime` enum value and the entry point's file
   extension — `AgentManagedRuntimeType` accepts `PYTHON_3_10`, `PYTHON_3_11`,
   `PYTHON_3_12`, `PYTHON_3_13`, `PYTHON_3_14` and `NODE_22` **[model]**.
-- **This repository has no container toolchain.** `api/` builds Node Lambdas
-  with esbuild; there is no Dockerfile, no buildx, no ECR repository, and no CI
-  step that could produce a cross-architecture arm64 image. Adding one to ship a
+- **This repository has no container toolchain.** There is no Dockerfile, no
+  buildx, no ECR repository, and no CI step that could produce a
+  cross-architecture arm64 image. Adding one to ship a
   pure-Python worker would be the largest single piece of new machinery in the
   change.
 - **`uv` already does the hard part.** The one genuinely awkward requirement —
@@ -247,7 +247,7 @@ binding; if it ever became so, `LifecycleConfiguration.maxLifetime` raises it to
 configure — IAM (SigV4) is what you get when the property is absent, and a
 runtime is JWT- *or* IAM-authorized, never both **[rsc]**.
 
-`api/template.yaml` therefore omits `AuthorizerConfiguration` entirely. That is
+`infra/template.yaml` therefore omits `AuthorizerConfiguration` entirely. That is
 the right choice here: the only caller is the FastAPI server, which already
 holds AWS credentials, and unlike rsc-core there is no browser opening a socket
 directly to the runtime. The server needs `bedrock-agentcore:InvokeAgentRuntime`
@@ -277,7 +277,7 @@ The trust policy is `bedrock-agentcore.amazonaws.com` with both
 ## Deploying
 
 The worker is **opt-in**. `EvalWorkerArtifactKey` defaults to `''` and the
-`DeployEvalWorker` condition gates the runtime and its role, so the config-store
+`DeployEvalWorker` condition gates the runtime and its role, so the rest of the
 stack deploys exactly as it did before.
 
 ```
@@ -291,33 +291,21 @@ variables the server needs.
 
 ```
 EVALHARNESS_EVAL_RUNTIME_ARN=arn:aws:bedrock-agentcore:…:runtime/evalharness_eval_worker-…
-EVALHARNESS_EVAL_TABLE=llm-eval-harness-ScenariosTable-…
+EVALHARNESS_EVAL_TABLE=llm-eval-harness-EvalTable-…
 ```
 
 `make package-eval-worker` builds the artifact alone and makes no AWS calls.
 
 ### One sharp edge
 
-`deploy-worker` is a **superset** of `deploy-api` — same stack, plus the
-runtime. Once the worker exists, keep using `deploy-worker`: a bare
-`make deploy-api` passes no `EvalWorkerArtifactKey`, the parameter falls back to
-its empty default, and CloudFormation deletes the runtime. This is inherent to
+Once the worker exists, deploy through `make deploy-worker` or `make deploy`
+(each reads the other's artifact key back): a bare `sam deploy` passes no
+`EvalWorkerArtifactKey`, the parameter falls back to its empty default, and
+CloudFormation deletes the runtime. This is inherent to
 plain CloudFormation parameters with defaults; the alternatives (SSM-backed
-parameters, or persisting the value into `api/samconfig.toml`) both add moving
+parameters, or persisting the value into `infra/samconfig.toml`) both add moving
 parts, so the mitigation is a loud comment on the parameter, in the Makefile,
 and here.
-
-### Config store access
-
-If evaluations reference stored scenarios/prompts/datasets, the worker needs the
-config store's API key. CloudFormation cannot read an
-`AWS::ApiGateway::ApiKey`'s value, so it is passed in:
-
-```
-EVAL_WORKER_CONFIG_API_KEY=$(aws apigateway get-api-key \
-    --api-key <ApiKeyId output> --include-value --query value --output text) \
-  make deploy-worker
-```
 
 ---
 

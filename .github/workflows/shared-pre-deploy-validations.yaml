@@ -51,18 +51,12 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: |
-            app/package-lock.json
-            api/package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       - uses: astral-sh/setup-uv@v5
 
       - name: App
         working-directory: app
-        run: npm ci && npm test
-
-      - name: Api
-        working-directory: api
         run: npm ci && npm test
 
       - name: Server
@@ -79,8 +73,5 @@ jobs:
         with:
           use-installer: true
 
-      # Plain `validate`, not `--lint`: the latter still trips on four
-      # pre-existing W1100 YAML-merge warnings from the esbuild anchors.
       - name: Validate template
-        working-directory: api
-        run: sam validate --region us-east-1
+        run: make validate-template

@@ -382,12 +382,9 @@ RUN = {
     "id": "run-abc",
     "ts": "2026-08-12T10:00:00+00:00",
     "model_id": "some-model",
-    "scenario_id": "scenario-1",
     "system_prompt": "you are helpful",
     "user_prompt": "hello",
-    "dataset_id": None,
-    "dataset_hash": None,
-    "config": {"temperature": 0.0, "tools_enabled": True},
+    "config": {"temperature": 0.0, "toolset": "fraud-detection"},
     "output": "hi there",
     "tool_transcript": [{"name": "lookup", "input": {}}],
     "metrics": {"latency_ms": 1200},
@@ -408,7 +405,6 @@ def test_run_item_matches_the_contract_field_for_field(store, client):
     # Plain-string columns.
     assert item["id"] == {"S": "run-abc"}
     assert item["model_id"] == {"S": "some-model"}
-    assert item["scenario_id"] == {"S": "scenario-1"}
     assert item["system_prompt"] == {"S": "you are helpful"}
     assert item["user_prompt"] == {"S": "hello"}
     assert item["output"] == {"S": "hi there"}
@@ -420,8 +416,6 @@ def test_run_item_matches_the_contract_field_for_field(store, client):
     assert json.loads(item["metrics"]["S"]) == RUN["metrics"]
 
     # Nullable fields are present-and-null, never absent.
-    assert item["dataset_id"] == {"NULL": True}
-    assert item["dataset_hash"] == {"NULL": True}
     assert item["guardrail_trace"] == {"NULL": True}
     assert item["error"] == {"NULL": True}
 
@@ -436,8 +430,8 @@ def test_run_item_declares_every_contract_field(store, client):
 
     item = client.item("RUN#run-min", "META")
     expected = {
-        "id", "ts", "model_id", "scenario_id", "system_prompt", "user_prompt",
-        "dataset_id", "dataset_hash", "config", "output", "tool_transcript",
+        "id", "ts", "model_id", "system_prompt", "user_prompt",
+        "config", "output", "tool_transcript",
         "metrics", "guardrail_trace", "status", "error",
     }
     assert expected <= set(item)
@@ -511,11 +505,8 @@ def test_load_run_maps_every_field_of_the_dynamodb_record(store, monkeypatch):
 
     assert record.id == RUN["id"]
     assert record.model_id == RUN["model_id"]
-    assert record.scenario_id == RUN["scenario_id"]
     assert record.system_prompt == RUN["system_prompt"]
     assert record.user_prompt == RUN["user_prompt"]
-    assert record.dataset_id == RUN["dataset_id"]
-    assert record.dataset_hash == RUN["dataset_hash"]
     assert record.config == RUN["config"]
     assert record.output == RUN["output"]
     assert record.tool_transcript == RUN["tool_transcript"]
@@ -534,11 +525,8 @@ def test_to_run_record_defaults_every_field_for_an_empty_record():
 
     assert record.id == ""
     assert record.model_id == ""
-    assert record.scenario_id is None
     assert record.system_prompt == ""
     assert record.user_prompt == ""
-    assert record.dataset_id is None
-    assert record.dataset_hash is None
     assert record.config == {}
     assert record.output is None
     assert record.tool_transcript is None
@@ -815,7 +803,7 @@ def test_save_run_mirrors_a_real_local_sqlite_row(store, client, tmp_path):
             model_id="some-model",
             system_prompt="",
             user_prompt="hi",
-            config={"tools_enabled": False},
+            config={"toolset": None},
             status="completed",
             output="done",
         )

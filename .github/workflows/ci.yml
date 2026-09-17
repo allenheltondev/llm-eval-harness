@@ -31,36 +31,6 @@ jobs:
 
       - run: npm run build
 
-  api:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: api
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: api/package-lock.json
-
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - run: npm ci
-
-      - run: npx tsc --noEmit
-
-      # Guards the deploy path: the template grew a server Lambda, an AgentCore
-      # runtime and a CloudFront distribution, and nothing else in CI reads it.
-      # Plain `validate` rather than `--lint`, which still trips on four
-      # pre-existing W1100 YAML-merge warnings.
-      - run: sam validate --region ${{ vars.AWS_REGION || 'us-east-1' }}
-
-      - run: npm run test:coverage
-
   server:
     runs-on: ubuntu-latest
     defaults:
@@ -75,7 +45,7 @@ jobs:
 
       - run: uv run ruff check .
 
-      # fail_under=97 in pyproject.toml gates the step automatically
+      # fail_under in pyproject.toml gates the step automatically
       - run: uv run pytest --cov=evalharness --cov-report=term-missing
 
   # Mutation testing: advisory quality signal, one job per package so the
@@ -99,25 +69,6 @@ jobs:
 
       - run: npx stryker run
 
-  mutation-api:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    defaults:
-      run:
-        working-directory: api
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: api/package-lock.json
-
-      - run: npm ci
-
-      - run: npx stryker run
-
   mutation-server:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -135,6 +86,20 @@ jobs:
 
       - run: uv run mutmut results
         if: always()
+
+  # Guards the deploy path: the template carries the server Lambda, the
+  # AgentCore runtime, CloudFront and the Cognito pool, and nothing else in CI
+  # reads it. `--lint` is cfn-lint, so no AWS credentials are needed.
+  template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - run: make validate-template
 
   e2e:
     runs-on: ubuntu-latest

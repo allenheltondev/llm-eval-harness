@@ -66,7 +66,6 @@ describe('api.health / api.models', () => {
       jsonResponse({
         status: 'ok',
         aws: { region: 'us-east-1', credentials: 'ok' },
-        config_store: { configured: true, reachable: true },
         cloud_evals: { configured: true }
       })
     )
@@ -117,202 +116,30 @@ describe('api.health / api.models', () => {
   })
 })
 
-describe('api.scenarios', () => {
-  it('lists with camelCase nextToken pagination', async () => {
-    const spy = mockFetch(jsonResponse({ items: [], count: 0, nextToken: null }))
-
-    await api.scenarios.list({ limit: 20, nextToken: 'abc' })
-
-    expect(urlOf(spy)).toBe(`${BASE}/scenarios?limit=20&nextToken=abc`)
-  })
-
-  it('gets a hydrated scenario by id', async () => {
+describe('api.tools', () => {
+  it('GETs /tools and returns the toolsets with their tool names', async () => {
     const spy = mockFetch(
       jsonResponse({
-        id: 's1',
-        name: 'Shipping',
-        description: null,
-        createdAt: '2026-08-01T00:00:00Z',
-        updatedAt: '2026-08-02T00:00:00Z',
-        systemPrompts: [],
-        userPrompts: [],
-        tools: [],
-        datasets: []
+        toolsets: [{ name: 'fraud-detection', tools: ['lookupAccount', 'flagTransaction'] }]
       })
     )
 
-    const scenario = await api.scenarios.get('shipping logistics')
+    const result = await api.tools()
 
-    expect(urlOf(spy)).toBe(`${BASE}/scenarios/shipping%20logistics`)
-    expect(scenario.createdAt).toBe('2026-08-01T00:00:00Z')
-  })
-
-  it('creates, updates and removes a scenario', async () => {
-    const spy = mockFetch(jsonResponse({ id: 's1' }, 201), noContent(), noContent())
-
-    await api.scenarios.create({ name: 'New', description: 'd' })
-    await api.scenarios.update('s1', { name: 'Renamed' })
-    await api.scenarios.remove('s1')
-
-    expect([urlOf(spy, 0), urlOf(spy, 1), urlOf(spy, 2)]).toEqual([
-      `${BASE}/scenarios`,
-      `${BASE}/scenarios/s1`,
-      `${BASE}/scenarios/s1`
+    expect(urlOf(spy)).toBe(`${BASE}/tools`)
+    expect(spy.mock.calls[0][1]?.method).toBe('GET')
+    expect(result.toolsets).toEqual([
+      { name: 'fraud-detection', tools: ['lookupAccount', 'flagTransaction'] }
     ])
-    expect(methodsOf(spy)).toEqual([
-      'POST',
-      'PUT',
-      'DELETE'
-    ])
-    expect(bodyOf(spy, 0)).toEqual({ name: 'New', description: 'd' })
-    expect(bodyOf(spy, 1)).toEqual({ name: 'Renamed' })
   })
 
-  it('creates a prompt under a scenario', async () => {
-    const spy = mockFetch(jsonResponse({ id: 'p1' }, 201))
+  it('passes the AbortSignal through', async () => {
+    const spy = mockFetch(jsonResponse({ toolsets: [] }))
+    const controller = new AbortController()
 
-    const created = await api.scenarios.prompts.create('s1', {
-      kind: 'SYSTEM',
-      name: 'Base',
-      content: 'You are helpful'
-    })
+    await api.tools({ signal: controller.signal })
 
-    expect(urlOf(spy)).toBe(`${BASE}/scenarios/s1/prompts`)
-    expect(bodyOf(spy)).toEqual({ kind: 'SYSTEM', name: 'Base', content: 'You are helpful' })
-    expect(created.id).toBe('p1')
-  })
-
-  it('lists, updates and removes a prompt', async () => {
-    const spy = mockFetch(
-      jsonResponse({ items: [], count: 0, nextToken: null }),
-      noContent(),
-      noContent()
-    )
-
-    await api.scenarios.prompts.list('s1', { limit: 5, nextToken: 'tok' })
-    await api.scenarios.prompts.update('s1', 'p1', { name: 'Renamed', content: 'New text' })
-    await api.scenarios.prompts.remove('s1', 'p1')
-
-    expect(urlsOf(spy)).toEqual([
-      `${BASE}/scenarios/s1/prompts?limit=5&nextToken=tok`,
-      `${BASE}/scenarios/s1/prompts/p1`,
-      `${BASE}/scenarios/s1/prompts/p1`
-    ])
-    expect(methodsOf(spy)).toEqual(['GET', 'PUT', 'DELETE'])
-    expect(bodyOf(spy, 1)).toEqual({ name: 'Renamed', content: 'New text' })
-  })
-
-  it('gets a dataset with its content', async () => {
-    const spy = mockFetch(
-      jsonResponse({
-        id: 'orders-csv',
-        name: 'Orders',
-        description: null,
-        contentType: 'text/csv',
-        content: 'order_id,status\nB456,delayed\n'
-      })
-    )
-
-    const dataset = await api.scenarios.datasets.get('s1', 'orders-csv')
-
-    expect(urlOf(spy)).toBe(`${BASE}/scenarios/s1/datasets/orders-csv`)
-    expect(dataset.contentType).toBe('text/csv')
-  })
-
-  it('lists, creates, updates and removes a dataset', async () => {
-    const spy = mockFetch(
-      jsonResponse({ items: [], count: 0, nextToken: null }),
-      jsonResponse({ id: 'orders-csv' }, 201),
-      noContent(),
-      noContent()
-    )
-
-    await api.scenarios.datasets.list('s1')
-    await api.scenarios.datasets.create('s1', {
-      id: 'orders-csv',
-      name: 'Orders',
-      contentType: 'text/csv',
-      content: 'order_id\nB456\n'
-    })
-    await api.scenarios.datasets.update('s1', 'orders-csv', {
-      name: 'Orders v2',
-      contentType: 'text/csv',
-      content: 'order_id\nB457\n'
-    })
-    await api.scenarios.datasets.remove('s1', 'orders-csv')
-
-    expect(urlsOf(spy)).toEqual([
-      `${BASE}/scenarios/s1/datasets`,
-      `${BASE}/scenarios/s1/datasets`,
-      `${BASE}/scenarios/s1/datasets/orders-csv`,
-      `${BASE}/scenarios/s1/datasets/orders-csv`
-    ])
-    expect(methodsOf(spy)).toEqual(['GET', 'POST', 'PUT', 'DELETE'])
-    expect(bodyOf(spy, 1)).toEqual({
-      id: 'orders-csv',
-      name: 'Orders',
-      contentType: 'text/csv',
-      content: 'order_id\nB456\n'
-    })
-  })
-
-  it('gets a single tool definition by name', async () => {
-    const spy = mockFetch(
-      jsonResponse({
-        name: 'getCarrierStatus',
-        description: 'd',
-        inputSchema: { type: 'object' },
-        handlerKey: 'k'
-      })
-    )
-
-    const tool = await api.scenarios.tools.get('s1', 'getCarrierStatus')
-
-    expect(urlOf(spy)).toBe(`${BASE}/scenarios/s1/tools/getCarrierStatus`)
-    expect(tool.handlerKey).toBe('k')
-  })
-
-  it('lists tools with the snake_case handler_registered flag', async () => {
-    const spy = mockFetch(
-      jsonResponse({
-        items: [
-          {
-            name: 'getCarrierStatus',
-            description: 'Look up a carrier status',
-            inputSchema: { type: 'object' },
-            handlerKey: 'shipping.getCarrierStatus',
-            handler_registered: true
-          }
-        ],
-        count: 1
-      })
-    )
-
-    const tools = await api.scenarios.tools.list('s1')
-
-    expect(urlOf(spy)).toBe(`${BASE}/scenarios/s1/tools`)
-    expect(tools.items[0].handler_registered).toBe(true)
-    expect(tools.items[0].handlerKey).toBe('shipping.getCarrierStatus')
-  })
-
-  it('upserts a tool by name', async () => {
-    const spy = mockFetch(
-      jsonResponse({
-        name: 'getCarrierStatus',
-        description: 'd',
-        inputSchema: { type: 'object' },
-        handlerKey: 'k'
-      })
-    )
-
-    await api.scenarios.tools.upsert('s1', 'getCarrierStatus', {
-      description: 'd',
-      inputSchema: { type: 'object' },
-      handlerKey: 'k'
-    })
-
-    expect(urlOf(spy)).toBe(`${BASE}/scenarios/s1/tools/getCarrierStatus`)
-    expect(spy.mock.calls[0][1]?.method).toBe('PUT')
+    expect(spy.mock.calls[0][1]?.signal).toBe(controller.signal)
   })
 })
 
@@ -331,14 +158,13 @@ describe('api.runs', () => {
 
     await api.runs.list({
       model_id: 'anthropic.claude-3-sonnet',
-      scenario_id: 's1',
       status: 'completed',
       cursor: 'c1',
       limit: 50
     })
 
     expect(urlOf(spy)).toBe(
-      `${BASE}/runs?model_id=anthropic.claude-3-sonnet&scenario_id=s1&status=completed&cursor=c1&limit=50`
+      `${BASE}/runs?model_id=anthropic.claude-3-sonnet&status=completed&cursor=c1&limit=50`
     )
   })
 
@@ -442,7 +268,7 @@ describe('api.runs.stream', () => {
     const spy = mockFetch(ndjsonResponse([runStreamFixture]))
 
     await api.runs.stream(
-      { model_id: 'm', user_prompt: 'p', tools_enabled: true, inference: { temperature: 0.2 } },
+      { model_id: 'm', user_prompt: 'p', toolset: 'fraud-detection', inference: { temperature: 0.2 } },
       { onEvent: () => undefined }
     )
 
@@ -450,7 +276,7 @@ describe('api.runs.stream', () => {
     expect(bodyOf(spy)).toEqual({
       model_id: 'm',
       user_prompt: 'p',
-      tools_enabled: true,
+      toolset: 'fraud-detection',
       inference: { temperature: 0.2 },
       stream: true
     })

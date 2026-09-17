@@ -28,7 +28,7 @@ ISSUER = f"https://cognito-idp.{REGION}.amazonaws.com/{POOL_ID}"
 JWKS_URL = f"{ISSUER}/.well-known/jwks.json"
 
 #: A route from every protected router, and the open one, by name.
-PROTECTED_ROUTES = ("/api/v1/models", "/api/v1/runs", "/api/v1/guardrails", "/api/v1/scenarios")
+PROTECTED_ROUTES = ("/api/v1/models", "/api/v1/runs", "/api/v1/guardrails", "/api/v1/tools")
 
 
 class _Signer:

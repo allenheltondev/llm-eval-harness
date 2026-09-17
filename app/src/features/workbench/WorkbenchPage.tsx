@@ -12,7 +12,6 @@ import ModelPanel from './ModelPanel'
 import OutputPane from './OutputPane'
 import PromptPanel from './PromptPanel'
 import RunControls from './RunControls'
-import ScenarioPanel from './ScenarioPanel'
 import ToolTimeline from './ToolTimeline'
 
 export default function WorkbenchPage() {
@@ -20,7 +19,6 @@ export default function WorkbenchPage() {
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6" data-testid="workbench-page">
       <div className="lg:col-span-1 space-y-4">
         <ModelPanel />
-        <ScenarioPanel />
         <PromptPanel />
         <RunControls />
       </div>

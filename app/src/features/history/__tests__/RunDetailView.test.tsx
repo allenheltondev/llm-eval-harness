@@ -19,14 +19,11 @@ function detail(overrides: Partial<RunDetail> = {}): RunDetail {
     id: 'r1',
     ts: '2026-08-11T18:00:00Z',
     model_id: 'anthropic.claude-3-sonnet',
-    scenario_id: 'shipping',
     system_prompt: 'You are helpful.',
     user_prompt: 'Summarize this.',
-    dataset_id: null,
-    dataset_hash: null,
     config: {
       inference: {},
-      tools_enabled: true,
+      toolset: 'fraud-detection',
       max_tool_iterations: 10,
       guardrail: null,
       stream: false
@@ -42,7 +39,13 @@ function detail(overrides: Partial<RunDetail> = {}): RunDetail {
         error: null
       }
     ],
-    metrics: { input_tokens: 10, output_tokens: 20, total_tokens: 30, latency_ms: 500, cycle_count: 2 },
+    metrics: {
+      input_tokens: 10,
+      output_tokens: 20,
+      total_tokens: 30,
+      latency_ms: 500,
+      cycle_count: 2
+    },
     guardrail_trace: { action: 'NONE' },
     status: 'completed',
     error: null,
@@ -72,17 +75,41 @@ describe('RunDetailView', () => {
     expect(screen.getByText('You are helpful.')).toBeInTheDocument()
     expect(screen.getByText('Summarize this.')).toBeInTheDocument()
     expect(screen.getByTestId('run-detail-output')).toHaveTextContent('Here is the summary.')
+    expect(screen.getByTestId('run-detail-toolset')).toHaveTextContent('Toolset: fraud-detection')
 
     expect(screen.getByText('lookupOrder')).toBeInTheDocument()
     expect(screen.getByTestId('run-detail-tool-row')).toHaveTextContent('120 ms')
 
-    const totalTokensCard = screen.getByText('Total tokens').closest('[data-testid="run-detail-metric"]')
+    const totalTokensCard = screen
+      .getByText('Total tokens')
+      .closest('[data-testid="run-detail-metric"]')
     expect(totalTokensCard).toHaveTextContent('30')
+  })
+
+  it('omits the toolset line for a run that executed without tools', () => {
+    useHistoryStore.setState({
+      details: {
+        r1: detail({
+          config: {
+            inference: {},
+            toolset: null,
+            max_tool_iterations: 10,
+            guardrail: null,
+            stream: false
+          }
+        })
+      }
+    })
+    render(<RunDetailView runId="r1" />)
+
+    expect(screen.queryByTestId('run-detail-toolset')).not.toBeInTheDocument()
   })
 
   it('shows an error payload when the run failed', () => {
     useHistoryStore.setState({
-      details: { r1: detail({ status: 'error', error: { code: 'timeout', message: 'took too long' } }) }
+      details: {
+        r1: detail({ status: 'error', error: { code: 'timeout', message: 'took too long' } })
+      }
     })
     render(<RunDetailView runId="r1" />)
 
@@ -121,8 +148,13 @@ describe('RunDetailView', () => {
     )
 
     expect(screen.getByTestId('run-detail-model-id')).toHaveAttribute('data-highlighted', 'true')
-    expect(screen.getByTestId('run-detail-status-badge')).toHaveAttribute('data-highlighted', 'true')
-    const totalTokensCard = screen.getByText('Total tokens').closest('[data-testid="run-detail-metric"]')
+    expect(screen.getByTestId('run-detail-status-badge')).toHaveAttribute(
+      'data-highlighted',
+      'true'
+    )
+    const totalTokensCard = screen
+      .getByText('Total tokens')
+      .closest('[data-testid="run-detail-metric"]')
     expect(totalTokensCard).toHaveAttribute('data-highlighted', 'true')
   })
 })
