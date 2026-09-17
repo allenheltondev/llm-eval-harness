@@ -7,7 +7,7 @@ invoked, and what about that is proven versus assumed.**
 
 Everything here concerns `server/evalharness/worker/`, the
 `AWS::BedrockAgentCore::Runtime` resource in `infra/template.yaml`,
-`scripts/package-eval-worker.sh`, and `make deploy-worker`.
+`scripts/package-eval-worker.sh`, and `make deploy-backend`.
 
 ## Where the facts came from
 
@@ -276,18 +276,18 @@ The trust policy is `bedrock-agentcore.amazonaws.com` with both
 
 ## Deploying
 
-The worker is **opt-in**. `EvalWorkerArtifactKey` defaults to `''` and the
-`DeployEvalWorker` condition gates the runtime and its role, so the rest of the
-stack deploys exactly as it did before.
+`EvalWorkerArtifactKey` defaults to `''` and the `DeployEvalWorker` condition
+gates the runtime and its role, so the template still stands up without the
+worker; in practice `make deploy-backend` always ships it:
 
 ```
-make deploy-worker
+make deploy-backend
 ```
 
-does the whole thing: bootstraps the stack if the artifact bucket does not exist
-yet, builds the artifact, uploads it under its hashed key, deploys with
-`EvalWorkerArtifactKey` set, and prints the runtime ARN with the two environment
-variables the server needs.
+bootstraps the stack if the artifact bucket does not exist yet, builds the
+worker and server artifacts, uploads both under their hashed keys, deploys with
+both keys set, and prints the runtime ARN with the two environment variables a
+local server needs to use the deployed lane.
 
 ```
 EVALHARNESS_EVAL_RUNTIME_ARN=arn:aws:bedrock-agentcore:…:runtime/evalharness_eval_worker-…
@@ -298,8 +298,8 @@ EVALHARNESS_EVAL_TABLE=llm-eval-harness-EvalTable-…
 
 ### One sharp edge
 
-Once the worker exists, deploy through `make deploy-worker` or `make deploy`
-(each reads the other's artifact key back): a bare `sam deploy` passes no
+Once the worker exists, deploy through `make deploy-backend` (it passes both
+artifact keys every time): a bare `sam deploy` passes no
 `EvalWorkerArtifactKey`, the parameter falls back to its empty default, and
 CloudFormation deletes the runtime. This is inherent to
 plain CloudFormation parameters with defaults; the alternatives (SSM-backed

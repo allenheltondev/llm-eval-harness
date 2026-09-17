@@ -21,7 +21,7 @@
 #   EVAL_WORKER_BUILD_DIR=/tmp/x scripts/...    # build somewhere else
 #
 # Writes <build-dir>/artifact.env with ARTIFACT_ZIP / ARTIFACT_SHA /
-# ARTIFACT_KEY for `make deploy-worker` to source. Makes no AWS calls.
+# ARTIFACT_KEY for `make deploy-backend` to source. Makes no AWS calls.
 
 set -euo pipefail
 

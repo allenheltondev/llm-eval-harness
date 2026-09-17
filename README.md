@@ -140,8 +140,9 @@ Evals tab (`execution: "local" | "cloud"` on the API):
   evaluations survive laptop/server restarts and are reviewable from any machine pointed at the
   same stack. Cloud evaluations appear under the **Cloud** filters in the Evals and History tabs.
 
-To enable the cloud lane, `make deploy-worker` packages the Python worker as an AgentCore CodeZip
-artifact, uploads it, and deploys the runtime and table; it prints the two values to export:
+The cloud lane is part of the stack: `make deploy-backend` packages the Python worker as an
+AgentCore CodeZip artifact alongside the server zip and deploys both. It prints the two values a
+local server needs to use the deployed lane:
 
 ```bash
 EVALHARNESS_EVAL_RUNTIME_ARN=arn:aws:bedrock-agentcore:...   # stack output EvalWorkerRuntimeArn
@@ -170,10 +171,11 @@ SPA, DynamoDB for history, and the AgentCore Runtime for evaluations.
 AWS_PROFILE=your-profile make deploy
 ```
 
-One command, idempotent, prints the URL at the end. It packages the server's arm64 Lambda zip,
-uploads it under a content-hashed key, deploys the SAM stack (table + server function + Function
-URL + S3 bucket + CloudFront distribution + Cognito pool), builds the SPA with `VITE_API_URL=/`,
-syncs it to S3, and invalidates the CDN.
+One command, idempotent, prints the URL at the end. `deploy-backend` packages the server's arm64
+Lambda zip and the eval worker's CodeZip, uploads both under content-hashed keys, and deploys the
+SAM stack (table + worker runtime + server function + Function URL + S3 bucket + CloudFront
+distribution + Cognito pool); `deploy-frontend` builds the SPA with `VITE_API_URL=/`, syncs it to
+S3, and invalidates the CDN.
 
 The result is a single origin: the SPA at `/`, the API at `/api/v1` on the same domain — so
 there is no CORS in production and no API URL to configure in the app.
@@ -214,80 +216,56 @@ pattern as [`readysetcloud/rsc-core`](https://github.com/readysetcloud/rsc-core)
 > public client id). Locally, with no pool configured, there is no gate at all; that is the
 > intended local-first posture, not an oversight.
 
-### Continuous deployment (GitHub Actions + OIDC)
+### Continuous deployment (GitHub Actions)
 
-Deployment follows the same shape as the `nullchecktv` services' convention (see
-`stream-post-processor` for the origin of the pattern), adapted to a personal account: these are
-**repo-level secrets** on `allenheltondev/llm-eval-harness`, not org-level ones — there is no
-organization here to share them across services.
+The pipeline follows `readysetcloud/newsletter-service`: a change-detection job decides what a
+push touched, only the relevant validations run, and only the affected halves deploy.
 
-| Secret | Used for |
-| --- | --- |
-| `PIPELINE_EXECUTION_ROLE` | the role GitHub Actions assumes via OIDC |
-| `CLOUDFORMATION_EXECUTION_ROLE` | passed as `sam deploy --role-arn`, so CloudFormation builds resources under its own role |
-| `ARTIFACTS_BUCKET_NAME` | passed as `sam deploy --s3-bucket` for packaging artifacts |
-
-The OIDC role's trust policy must permit `repo:allenheltondev/llm-eval-harness:*` (or the specific
-branch/environment claims you scope it to) — without that condition, GitHub Actions cannot assume
-`PIPELINE_EXECUTION_ROLE` at all.
-
-The artifacts bucket is not optional in CI, and it does double duty. The pipeline role is scoped
-to it, so letting SAM resolve its own managed bucket fails with `AccessDenied`, and the same
-applies to the server/worker zips — hence the `ArtifactsBucketName` template parameter, which
-points the stack's `CodeUri` at that bucket instead of one the stack creates. Local deploys pass
-no bucket: SAM uses `--resolve-s3` and the stack creates and owns its own artifact bucket.
-
-| Workflow | Trigger | Stack |
+| Workflow | Trigger | Deploys to |
 | --- | --- | --- |
-| `deploy-staging.yaml` | pull request to `main` (or manual) | `llm-eval-harness-staging` |
-| `deploy-production.yaml` | push to `main` (or manual) | `llm-eval-harness-prod` |
+| `pull-request.yaml` | pull request to `main` (or manual) | the `stage` environment |
+| `deploy.yaml` | push to `main` (or manual) | the `prod` environment |
 
-Both call `shared-pre-deploy-validations.yaml` (lint, typecheck, unit tests, `sam validate --lint`)
-and then `shared-deploy.yaml` with `secrets: inherit`. Staging and Production are separate stacks,
-so a PR can never touch production, and each environment deploys one at a time. Fork PRs are
-skipped — they never receive repo secrets.
+Each one runs `changes` → `pre-deploy-validation.yaml` → `deploy-backend` → `deploy-frontend`:
 
-The deploy job runs the same `make deploy` used locally, so there is one deploy definition rather
-than a CI copy that drifts. Local runs use your own credentials; CI assumes the pipeline role and
-passes the artifacts bucket and CloudFormation execution role through `DEPLOY_S3_BUCKET` / `DEPLOY_ROLE_ARN`.
+- **`changes`** classifies the changed files: `app/**` is the frontend; `server/**` and the two
+  packaging scripts are the server; `infra/**`, the `Makefile` and the workflows are infra. The
+  server and infra together are "backend". Nothing changed means nothing runs. Detection fails
+  open, so an empty diff on a merge commit deploys rather than silently skipping.
+- **`pre-deploy-validation.yaml`** is the reusable gate: app (lint, typecheck, coverage, build),
+  server (ruff, pytest with coverage), template (`sam validate --lint`), and the Playwright E2E
+  suite, each skipped when its inputs say the area did not change.
+- **`deploy-backend`** runs `make deploy-backend`; **`deploy-frontend`** runs `make deploy-frontend`
+  and depends on the backend job (it builds the SPA against the deployed stack). Both are the same
+  targets a developer runs locally, so there is one deploy definition rather than a CI copy that
+  drifts.
+- Manual runs (`workflow_dispatch`) take a `force_deploy` input that bypasses change detection.
+- `mutation.yaml` runs Stryker and mutmut as an advisory signal on every PR and push; it never
+  blocks.
 
-#### Permissions the pipeline role needs
+Both workflows deploy the stack `llm-eval-harness`; stage and prod are separate AWS accounts, so a
+PR can never touch production. Deploys to one environment queue behind each other rather than
+cancel, because interrupting `sam deploy` strands the stack in `UPDATE_IN_PROGRESS`. Fork PRs are
+validated but not deployed, since they never receive environment secrets.
 
-`make deploy` does three things *outside* CloudFormation, so they run as `PIPELINE_EXECUTION_ROLE`
-rather than the CloudFormation execution role: upload the server zip, sync the SPA to S3, and
-invalidate CloudFront. The first is covered by the shared artifacts bucket; the other two touch
-`llm-eval-harness-*` resources this stack creates, and need to be allowed on the pipeline role
-once:
+#### Setup owed by the human
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "SyncLlmEvalHarnessSpa",
-      "Effect": "Allow",
-      "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-      "Resource": ["arn:aws:s3:::llm-eval-harness-*", "arn:aws:s3:::llm-eval-harness-*/*"]
-    },
-    {
-      "Sid": "InvalidateLlmEvalHarnessCdn",
-      "Effect": "Allow",
-      "Action": "cloudfront:CreateInvalidation",
-      "Resource": "*"
-    }
-  ]
-}
-```
+Two GitHub **environments** on the repo, each holding an IAM user's access key for its account:
 
-`s3:DeleteObject` is required because the SPA sync runs with `--delete`.
-`cloudfront:CreateInvalidation` cannot be scoped by a resource policy — CloudFront has none — so
-it has to come from the role's identity policy. `make create-user` additionally needs
-`cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
+| Environment | Secrets |
+| --- | --- |
+| `stage` | `STAGE_ACCESS_KEY`, `STAGE_SECRET_KEY` |
+| `prod` | `PROD_ACCESS_KEY`, `PROD_SECRET_KEY` |
+
+The user needs enough to run `sam deploy` for this template (CloudFormation, Lambda, IAM roles,
+DynamoDB, S3, CloudFront, Cognito, Bedrock AgentCore) plus the three things `make deploy` does
+outside CloudFormation: upload the zips to the stack's artifact bucket, sync the SPA with
+`--delete`, and `cloudfront:CreateInvalidation` (which cannot be resource-scoped). `make
+create-user` additionally needs `cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
 
 One sharp edge: `ServerArtifactKey` and `EvalWorkerArtifactKey` are CloudFormation parameters with
-empty defaults, and an empty value deletes the corresponding resource. `make deploy` and
-`make deploy-worker` each read the other's current value back from the stack and pass it through,
-so use those targets rather than a bare `sam deploy` once anything is deployed.
+empty defaults, and an empty value deletes the corresponding resource. `make deploy-backend`
+always passes both, so use it rather than a bare `sam deploy` once anything is deployed.
 
 Details — the adapter layer, packaging and artifact size, the CloudFront origin/behaviour setup,
 exact IAM, and the list of things only a real deploy can prove — are in
@@ -306,9 +284,10 @@ exact IAM, and the list of things only a real deploy can prove — are in
 | `make test` | `app` (`vitest`) + `server` (`pytest`) |
 | `make validate-template` | `sam validate --lint` on `infra/template.yaml` (cfn-lint; no credentials needed) |
 | `make e2e` | Playwright against the fake-model full stack |
-| `make package-server` | Builds the FastAPI server's arm64 Lambda zip. No AWS calls |
-| `make deploy-worker` | Packages and deploys the AgentCore eval worker (the cloud evaluation lane) |
-| `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): package + upload + `sam deploy` + build SPA + S3 sync + CloudFront invalidation |
+| `make package-server` / `make package-eval-worker` | Build the server / eval worker zips. No AWS calls |
+| `make deploy-backend` | Package both zips, upload them, `sam deploy` the whole stack |
+| `make deploy-frontend` | Build the SPA against the deployed stack, sync it to S3, invalidate CloudFront |
+| `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): `deploy-backend` then `deploy-frontend` |
 | `make create-user EMAIL=...` | Invites a user to the deployed stack's Cognito pool ([Sign-in](#sign-in-cognito)); Cognito emails them a temporary password |
 
 `make dev` runs both processes as background jobs of one recipe with a `trap ... EXIT INT TERM`

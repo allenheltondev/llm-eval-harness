@@ -22,12 +22,12 @@ Parameters:
       property it can see has changed. A static key means a stale bundle keeps
       serving forever. `scripts/package-eval-worker.sh` therefore emits a
       content-hash-versioned key (eval-worker/<sha256>.zip) and `make
-      deploy-worker` passes it through.
+      deploy-backend` passes it through.
 
       CAUTION: this is a plain parameter with an empty default, so running a
-      bare `sam deploy` after the worker exists resets
-      it to '' and DELETES the runtime. Once the worker is deployed, use `make
-      deploy-worker`, which deploys the whole stack including the worker.
+      bare `sam deploy` after the worker exists resets it to '' and DELETES the
+      runtime. Always deploy through `make deploy-backend`, which passes both
+      artifact keys every time.
 
   # --------------------------------------------------------------------------
   # Deployed FastAPI server + SPA hosting (see docs/serverless-deploy.md and
@@ -45,23 +45,12 @@ Parameters:
       Same content-hash rule and same footgun as EvalWorkerArtifactKey above:
       the key MUST change whenever the code changes, or CloudFormation sees no
       property change and the old bundle keeps serving.
-      `scripts/package-server.sh` emits server/<sha256>.zip and `make deploy`
-      passes it through -- along with the CURRENT EvalWorkerArtifactKey, so the
-      two opt-in halves of this stack never delete each other.
+      `scripts/package-server.sh` emits server/<sha256>.zip and `make
+      deploy-backend` passes it through alongside EvalWorkerArtifactKey.
 
-      CAUTION: a bare `sam deploy` after the server
-      exists resets this to '' and DELETES the function, bucket and
-      distribution. Use `make deploy`.
-
-  ArtifactsBucketName:
-    Type: String
-    Default: ''
-    Description: >
-      Existing S3 bucket to hold this stack's deployable zips (the eval worker
-      and server CodeZip artifacts). CI passes the shared org artifacts bucket,
-      because the pipeline role is scoped to it and cannot write to a bucket
-      this stack creates. Left empty (local deploys), the stack creates and
-      owns its own bucket instead.
+      CAUTION: a bare `sam deploy` after the server exists resets this to ''
+      and DELETES the function, bucket and distribution. Use `make
+      deploy-backend`.
 
   ServerMemorySize:
     Type: Number
@@ -118,9 +107,6 @@ Parameters:
       not publish.
 
 Conditions:
-  # An artifact bucket was supplied, so do not create one.
-  HasExternalArtifactBucket: !Not [!Equals [!Ref ArtifactsBucketName, '']]
-  CreatesArtifactBucket: !Equals [!Ref ArtifactsBucketName, '']
   # The worker is opt-in. Everything below is skipped entirely until an artifact
   # key is supplied, so the rest of the stack deploys exactly as it did before.
   DeployEvalWorker: !Not [!Equals [!Ref EvalWorkerArtifactKey, '']]
@@ -166,7 +152,6 @@ Resources:
 
   ArtifactBucket:
     Type: AWS::S3::Bucket
-    Condition: CreatesArtifactBucket
     Properties:
       VersioningConfiguration:
         Status: Enabled
@@ -199,7 +184,7 @@ Resources:
         CodeConfiguration:
           Code:
             S3:
-              Bucket: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
+              Bucket: !Ref ArtifactBucket
               Prefix: !Ref EvalWorkerArtifactKey
           # The zip's root-level entry module. AgentCore executes it; it starts
           # the bedrock-agentcore SDK's server on :8080 (/invocations + /ping).
@@ -250,10 +235,10 @@ Resources:
               # Read the CodeZip artifact at create/update time.
               - Effect: Allow
                 Action: s3:GetObject
-                Resource: !Sub ['arn:${AWS::Partition}:s3:::${B}/*', {B: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]}]
+                Resource: !Sub ${ArtifactBucket.Arn}/*
               - Effect: Allow
                 Action: s3:ListBucket
-                Resource: !Sub ['arn:${AWS::Partition}:s3:::${B}', {B: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]}]
+                Resource: !GetAtt ArtifactBucket.Arn
               # The evaluation itself: the model under test, plus the judge.
               - Effect: Allow
                 Action:
@@ -328,7 +313,7 @@ Resources:
       SkipBuild: true
     Properties:
       CodeUri:
-        Bucket: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
+        Bucket: !Ref ArtifactBucket
         Key: !Ref ServerArtifactKey
       # `run.sh` at the root of the zip, exec'd by the adapter's bootstrap.
       Handler: run.sh
@@ -635,7 +620,7 @@ Resources:
           CachedMethods: [GET, HEAD]
           Compress: true
           # Managed CachingOptimized. Vite emits content-hashed asset names, and
-          # index.html is invalidated by `make deploy`.
+          # index.html is invalidated by `make deploy-frontend`.
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
           FunctionAssociations:
             - EventType: viewer-request
@@ -661,18 +646,11 @@ Outputs:
   TableName:
     Description: DynamoDB table holding run/evaluation history and cloud-eval state (EVALHARNESS_EVAL_TABLE)
     Value: !Ref EvalTable
-  EvalWorkerArtifactBucket:
-    Description: >
-      S3 bucket the eval worker's CodeZip artifact is uploaded to (same bucket
-      as the ArtifactBucket output below; kept under this name too because
-      `make deploy-worker` looks it up by it).
-    Value: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
   ArtifactBucket:
     Description: >
-      S3 bucket this stack's deployable zips are uploaded to. It holds BOTH
-      (eval-worker/<sha>.zip and server/<sha>.zip); this neutral name is what
-      `make deploy` looks up.
-    Value: !If [HasExternalArtifactBucket, !Ref ArtifactsBucketName, !Ref ArtifactBucket]
+      S3 bucket this stack's deployable zips are uploaded to (eval-worker/<sha>.zip
+      and server/<sha>.zip); `make deploy-backend` looks it up by this name.
+    Value: !Ref ArtifactBucket
   EvalWorkerRuntimeArn:
     Condition: DeployEvalWorker
     Description: >

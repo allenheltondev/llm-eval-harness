@@ -469,40 +469,42 @@ just `ApplyGuardrail`.
 ## Deploying
 
 ```
-make deploy
+make deploy            # = make deploy-backend && make deploy-frontend
 ```
 
-is the whole flow, and it is **idempotent**:
+is the whole flow, and it is **idempotent**. CI runs the same two targets as
+separate jobs (`.github/workflows/pull-request.yaml` for stage,
+`deploy.yaml` for prod), so there is one deploy definition.
+
+`deploy-backend`:
 
 1. Resolve the artifact bucket from the stack's `ArtifactBucket` output,
    bootstrapping the stack with a plain `sam deploy` if it does not exist yet.
-2. `scripts/package-server.sh` → `server/<sha>.zip`, uploaded.
-3. Read the stack's **current** `EvalWorkerArtifactKey` and pass it back
-   unchanged alongside `ServerArtifactKey`.
-4. `sam build && sam deploy`.
-5. `npm ci && VITE_API_URL=/ npm run build` in `app/`.
-6. `aws s3 sync app/dist s3://<AppBucket> --delete`.
-7. `aws cloudfront create-invalidation --paths '/*'`.
-8. Print the `AppUrl`.
+2. `scripts/package-server.sh` → `server/<sha>.zip` and
+   `scripts/package-eval-worker.sh` → `eval-worker/<sha>.zip`, both uploaded.
+3. `sam build && sam deploy` with **both** `ServerArtifactKey` and
+   `EvalWorkerArtifactKey` set.
+4. Print `AppUrl` and the two env vars a local server needs for the cloud lane.
 
-`make package-server` builds the artifact alone and makes no AWS calls.
+`deploy-frontend` (needs the backend to exist):
 
-### The same sharp edge, now in both directions
+1. Resolve `AppBucket`, `AppDistributionId` and `AppUrl` from the stack.
+2. `npm ci && VITE_API_URL=/ npm run build` in `app/`.
+3. `aws s3 sync app/dist s3://<AppBucket> --delete`.
+4. `aws cloudfront create-invalidation --paths '/*'`.
+5. Print the `AppUrl`.
+
+`make package-server` / `make package-eval-worker` build the artifacts alone
+and make no AWS calls.
+
+### The sharp edge
 
 `EvalWorkerArtifactKey` and `ServerArtifactKey` are both plain CloudFormation
 parameters with empty defaults, and an empty value deletes the corresponding
-resources. So:
-
-| Target | Preserves worker? | Preserves server? |
-|---|---|---|
-| bare `sam deploy` | ❌ **deletes the worker** | ❌ **deletes the server** |
-| `make deploy-worker` | ✅ (sets it) | ✅ (reads it back) |
-| `make deploy` | ✅ (reads it back) | ✅ (sets it) |
-
-Each target reads the other's current parameter back from the stack and
-passes it through, so either is safe once both exist. A bare `sam deploy` is
-not; the mitigation is this table, the parameters' own comments in
-`infra/template.yaml`, and the Makefile comment.
+resources. `make deploy-backend` passes both every time, so it can never
+delete either half; a bare `sam deploy` passes neither and deletes both. The
+mitigation is the parameters' own comments in `infra/template.yaml`, the
+Makefile comment, and this paragraph.
 
 ---
 

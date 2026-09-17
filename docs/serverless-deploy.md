@@ -109,11 +109,12 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
 
 ## Deploy flow
 
-- `make deploy` (new): builds the server zip (reuse the packaging approach from
-  scripts/package-eval-worker.sh — uv, arm64 wheels, manylinux_2_28), uploads,
-  deploys the extended SAM stack (server function + LWA layer ARN parameter +
-  Function URL + S3 bucket + CloudFront), builds the SPA with the discovered
-  CloudFront URL, syncs to S3, invalidates. Idempotent; prints the final URL.
+- `make deploy` = `make deploy-backend` (package the server zip and the eval
+  worker zip — uv, arm64 wheels, manylinux_2_28 — upload both, deploy the SAM
+  stack: table + worker runtime + server function + LWA layer + Function URL +
+  S3 bucket + CloudFront + Cognito) then `make deploy-frontend` (build the SPA
+  with `VITE_API_URL=/`, sync to S3, invalidate). Idempotent; prints the final
+  URL. CI runs the same two targets as separate jobs.
 - Stack outputs added: `ServerFunctionUrl`, `AppUrl` (CloudFront domain),
   `AppBucket`.
 - IAM for the server function role: Bedrock invoke + guardrails, DynamoDB on the
