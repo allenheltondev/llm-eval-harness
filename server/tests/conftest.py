@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from evalharness import auth, models_catalog, stack_discovery
+from evalharness import auth, models_catalog
 from evalharness.errors import BadRequestError
 from evalharness.main import create_app
 
@@ -41,27 +41,10 @@ def isolated_providers(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def isolated_stack_discovery(monkeypatch):
-    """No test talks to CloudFormation/API Gateway unless it opts in.
-
-    ``EVALHARNESS_STACK_DISCOVERY`` defaults on in real usage, but every test
-    that doesn't explicitly enable it (via ``Settings(stack_discovery=True)``
-    or by overriding this env var) must stay offline -- the sandbox's AWS
-    credentials are real enough for boto3 to attempt a live call otherwise.
-    The process-lifetime cache is also cleared on both sides so no test's
-    discovery result leaks into another's.
-    """
-    monkeypatch.setenv("EVALHARNESS_STACK_DISCOVERY", "false")
-    stack_discovery.refresh()
-    yield
-    stack_discovery.refresh()
-
-
-@pytest.fixture(autouse=True)
 def isolated_tool_state():
     """Reset the ported tools' module-level "in-memory database" dicts.
 
-    ``fraud_detection._ACCOUNT_RISK`` and ``shipping_logistics._ACTIONS`` are
+    ``fraud_detection._ACCOUNT_RISK`` is
     intentional process-lifetime state (they mirror what the legacy JS tools
     kept in memory), so a plain single ``pytest`` process never notices: every
     test's account/idempotency-key literal is exercised at most once per run.
@@ -72,13 +55,11 @@ def isolated_tool_state():
     the same literal id. Clearing both before every test removes the
     dependency on process lifetime entirely.
     """
-    from evalharness.tools import fraud_detection, shipping_logistics
+    from evalharness.tools import fraud_detection
 
     fraud_detection._ACCOUNT_RISK.clear()
-    shipping_logistics._ACTIONS.clear()
     yield
     fraud_detection._ACCOUNT_RISK.clear()
-    shipping_logistics._ACTIONS.clear()
 
 
 @pytest.fixture

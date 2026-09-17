@@ -17,8 +17,8 @@
  * calls `configureAuth` with it before anything else runs.
  */
 
-/** localStorage key for the session document. Bump on incompatible change. */
-export const AUTH_STORAGE_KEY = 'evalharness.auth.v1'
+/** localStorage key for the session document. */
+export const AUTH_STORAGE_KEY = 'evalharness.auth'
 
 export interface AuthConfig {
   region: string

@@ -36,9 +36,8 @@ export default {
     'src/stores/historyStore.ts',
     'src/stores/runConfigStore.ts',
     'src/stores/runStore.ts',
-    'src/stores/scenarioStore.ts',
-    'src/stores/settingsStore.ts',
-    'src/utils/chadQuips.ts'
+    'src/stores/modelStore.ts',
+    'src/stores/settingsStore.ts'
   ],
 
   ignorePatterns: ['node_modules', 'dist', 'coverage', 'reports', '.stryker-tmp'],

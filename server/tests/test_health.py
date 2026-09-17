@@ -1,7 +1,5 @@
 """Tests for GET /api/v1/health."""
 
-import httpx
-import respx
 
 
 class _FakeCredentials:
@@ -14,7 +12,8 @@ async def test_health_ok_shape(client):
     body = response.json()
     assert body["status"] == "ok"
     assert "aws" in body
-    assert "config_store" in body
+    assert "providers" in body
+    assert "auth" in body
 
 
 async def test_health_aws_credentials_present(client, monkeypatch):
@@ -49,48 +48,6 @@ async def test_health_aws_region_reported(client, monkeypatch):
     assert response.json()["aws"]["region"] == "eu-west-1"
 
 
-async def test_health_config_store_unconfigured(client, monkeypatch):
-    monkeypatch.delenv("EVALHARNESS_CONFIG_API_URL", raising=False)
-    response = await client.get("/api/v1/health")
-    assert response.status_code == 200
-    assert response.json()["config_store"] == {
-        "configured": False,
-        "reachable": None,
-        "source": None,
-    }
-
-
-@respx.mock
-async def test_health_config_store_reachable(client, monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_CONFIG_API_URL", "https://config.example.com")
-    route = respx.get("https://config.example.com/scenarios").mock(
-        return_value=httpx.Response(200, json=[])
-    )
-    response = await client.get("/api/v1/health")
-    assert response.status_code == 200
-    assert response.json()["config_store"] == {
-        "configured": True,
-        "reachable": True,
-        "source": "env",
-    }
-    assert route.called
-
-
-@respx.mock
-async def test_health_config_store_unreachable(client, monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_CONFIG_API_URL", "https://config.example.com")
-    respx.get("https://config.example.com/scenarios").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-    response = await client.get("/api/v1/health")
-    assert response.status_code == 200
-    assert response.json()["config_store"] == {
-        "configured": True,
-        "reachable": False,
-        "source": "env",
-    }
-
-
 async def test_health_never_raises_on_unexpected_error(client, monkeypatch):
     def _raise(self):
         raise ValueError("unexpected")
@@ -98,20 +55,6 @@ async def test_health_never_raises_on_unexpected_error(client, monkeypatch):
     monkeypatch.setattr("botocore.session.Session.get_credentials", _raise)
     response = await client.get("/api/v1/health")
     assert response.status_code == 200
-
-
-@respx.mock
-async def test_health_config_store_check_sends_the_api_key_header(client, monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_CONFIG_API_URL", "https://config.example.com")
-    monkeypatch.setenv("EVALHARNESS_CONFIG_API_KEY", "secret-key")
-    route = respx.get("https://config.example.com/scenarios").mock(
-        return_value=httpx.Response(200, json=[])
-    )
-
-    response = await client.get("/api/v1/health")
-
-    assert response.status_code == 200
-    assert route.calls.last.request.headers["x-api-key"] == "secret-key"
 
 
 async def test_health_survives_an_unexpected_credentials_orchestration_failure(
@@ -130,20 +73,6 @@ async def test_health_survives_an_unexpected_credentials_orchestration_failure(
 
     assert response.status_code == 200
     assert response.json()["aws"]["credentials"] == "error"
-
-
-async def test_health_survives_an_unexpected_config_store_check_failure(client, monkeypatch):
-    import evalharness.routers.health as health_module
-
-    async def _raise(_settings):
-        raise RuntimeError("orchestration exploded")
-
-    monkeypatch.setattr(health_module, "_check_config_store", _raise)
-
-    response = await client.get("/api/v1/health")
-
-    assert response.status_code == 200
-    assert response.json()["config_store"]["reachable"] is False
 
 
 async def test_health_survives_an_unexpected_provider_check_failure(client, monkeypatch):

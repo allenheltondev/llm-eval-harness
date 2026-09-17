@@ -33,7 +33,7 @@
 #   SERVER_PRUNE=0 scripts/...                  # keep the pruned-by-default deps
 #
 # Writes <build-dir>/artifact.env with ARTIFACT_ZIP / ARTIFACT_SHA /
-# ARTIFACT_KEY for `make deploy` to source. Makes no AWS calls.
+# ARTIFACT_KEY for `make deploy-backend` to source. Makes no AWS calls.
 
 set -euo pipefail
 

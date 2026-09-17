@@ -1,12 +1,7 @@
 /** evalStore: progress derivation from a scripted event log, follow/cancel, list. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type {
-  EvalStreamEvent,
-  EvaluationDetail,
-  EvaluationResult,
-  Page
-} from '../../api'
+import type { EvalStreamEvent, EvaluationDetail, EvaluationResult, Page } from '../../api'
 
 const createMock = vi.fn()
 const eventsMock = vi.fn()
@@ -14,7 +9,7 @@ const cancelMock = vi.fn()
 const listMock = vi.fn()
 const getMock = vi.fn()
 
-vi.mock('../../api', async (importOriginal) => {
+vi.mock('../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../api')>()
   return {
     ...actual,
@@ -94,6 +89,7 @@ const createdRow: EvaluationDetail = {
   ts: '2026-08-11T18:00:00Z',
   kind: 'determinism',
   status: 'pending',
+  execution: 'local',
   config: {
     kind: 'determinism',
     n: 4,
@@ -227,7 +223,11 @@ describe('progress derivation', () => {
       result
     })
     const state = { ...INITIAL_EVAL_STATE, ...primed }
-    const patch = reduceEvalEvent(state, { type: 'eval_complete', status: 'completed', result: null })
+    const patch = reduceEvalEvent(state, {
+      type: 'eval_complete',
+      status: 'completed',
+      result: null
+    })
 
     expect(patch.result).toBeUndefined()
     expect(state.result).toBe(result) // the previously-set result survives
@@ -276,9 +276,11 @@ describe('startEvaluation', () => {
       }
     )
 
-    const id = await useEvalStore
-      .getState()
-      .startEvaluation({ kind: 'determinism', n: 4, run_config: { model_id: 'm', user_prompt: 'p' } })
+    const id = await useEvalStore.getState().startEvaluation({
+      kind: 'determinism',
+      n: 4,
+      run_config: { model_id: 'm', user_prompt: 'p' }
+    })
 
     expect(id).toBe('eval-1')
     expect(createMock).toHaveBeenCalledTimes(1)
@@ -290,7 +292,7 @@ describe('startEvaluation', () => {
     expect(state.progress).toEqual({ completed: 3, failed: 1, total: 4 })
     expect(state.result).toEqual(result)
     expect(state.activeEvaluation?.id).toBe('eval-1')
-    expect(state.evaluations.map((row) => row.id)).toEqual(['eval-1'])
+    expect(state.evaluations.map(row => row.id)).toEqual(['eval-1'])
   })
 
   it('records a create failure and never subscribes', async () => {
@@ -309,16 +311,21 @@ describe('startEvaluation', () => {
     })
   })
 
-  it('seeds progress.total from the created row\'s config.n before any events arrive', async () => {
+  it("seeds progress.total from the created row's config.n before any events arrive", async () => {
     createMock.mockResolvedValueOnce(createdRow) // createdRow.config.n === 4
     let eventsResolve!: () => void
     eventsMock.mockImplementation(
-      () => new Promise<void>((resolve) => { eventsResolve = resolve })
+      () =>
+        new Promise<void>(resolve => {
+          eventsResolve = resolve
+        })
     )
 
-    const pending = useEvalStore
-      .getState()
-      .startEvaluation({ kind: 'determinism', n: 4, run_config: { model_id: 'm', user_prompt: 'p' } })
+    const pending = useEvalStore.getState().startEvaluation({
+      kind: 'determinism',
+      n: 4,
+      run_config: { model_id: 'm', user_prompt: 'p' }
+    })
     await Promise.resolve()
     await Promise.resolve()
 
@@ -328,10 +335,16 @@ describe('startEvaluation', () => {
   })
 
   it('seeds progress.total as 0 when the created row carries no config.n', async () => {
-    createMock.mockResolvedValueOnce({ ...createdRow, config: { ...createdRow.config, n: undefined } })
+    createMock.mockResolvedValueOnce({
+      ...createdRow,
+      config: { ...createdRow.config, n: undefined }
+    })
     let eventsResolve!: () => void
     eventsMock.mockImplementation(
-      () => new Promise<void>((resolve) => { eventsResolve = resolve })
+      () =>
+        new Promise<void>(resolve => {
+          eventsResolve = resolve
+        })
     )
 
     const pending = useEvalStore.getState().startEvaluation({ kind: 'determinism' })
@@ -363,7 +376,10 @@ describe('startEvaluation', () => {
     })
     let resolveCreate!: (row: typeof createdRow) => void
     createMock.mockImplementationOnce(
-      () => new Promise<typeof createdRow>((resolve) => { resolveCreate = resolve })
+      () =>
+        new Promise<typeof createdRow>(resolve => {
+          resolveCreate = resolve
+        })
     )
 
     const pending = useEvalStore.getState().startEvaluation({ kind: 'determinism' })
@@ -371,7 +387,7 @@ describe('startEvaluation', () => {
 
     const mid = useEvalStore.getState()
     expect(mid.status).toBe('starting')
-    expect(mid.evaluations.map((r) => r.id)).toEqual(['old-1'])
+    expect(mid.evaluations.map(r => r.id)).toEqual(['old-1'])
     expect(mid.nextCursor).toBe('cursor-x')
     expect(mid.listLoaded).toBe(true)
 
@@ -389,7 +405,7 @@ describe('startEvaluation', () => {
       .getState()
       .startEvaluation({ kind: 'determinism', run_config: { model_id: 'm', user_prompt: 'p' } })
 
-    expect(useEvalStore.getState().evaluations.map((row) => row.id)).toEqual(['eval-1', 'eval-99'])
+    expect(useEvalStore.getState().evaluations.map(row => row.id)).toEqual(['eval-1', 'eval-99'])
   })
 })
 
@@ -492,12 +508,10 @@ describe('followEvaluation', () => {
     expect(activeEvalController()).toBeNull()
 
     let capturedSignal: AbortSignal | undefined
-    eventsMock.mockImplementation(
-      async (_id: string, options: { signal?: AbortSignal }) => {
-        capturedSignal = options.signal
-        expect(activeEvalController()?.signal).toBe(capturedSignal)
-      }
-    )
+    eventsMock.mockImplementation(async (_id: string, options: { signal?: AbortSignal }) => {
+      capturedSignal = options.signal
+      expect(activeEvalController()?.signal).toBe(capturedSignal)
+    })
 
     await useEvalStore.getState().followEvaluation('eval-1')
 
@@ -521,9 +535,11 @@ describe('cancelEvaluation', () => {
     )
     cancelMock.mockResolvedValue(undefined)
 
-    const pending = useEvalStore
-      .getState()
-      .startEvaluation({ kind: 'determinism', n: 4, run_config: { model_id: 'm', user_prompt: 'p' } })
+    const pending = useEvalStore.getState().startEvaluation({
+      kind: 'determinism',
+      n: 4,
+      run_config: { model_id: 'm', user_prompt: 'p' }
+    })
     // let create() settle and the subscription open
     await Promise.resolve()
     await Promise.resolve()
@@ -555,7 +571,10 @@ describe('cancelEvaluation', () => {
     await useEvalStore.getState().cancelEvaluation()
 
     expect(useEvalStore.getState().status).toBe('cancelled')
-    expect(useEvalStore.getState().error).toEqual({ code: 'http_error', message: 'server exploded' })
+    expect(useEvalStore.getState().error).toEqual({
+      code: 'http_error',
+      message: 'server exploded'
+    })
   })
 
   it('goes straight to cancelled without calling the API when there is no active evaluation', async () => {
@@ -594,8 +613,7 @@ describe('clearActive', () => {
 })
 
 describe('list ops', () => {
-  const rows = (ids: string[]): EvaluationDetail[] =>
-    ids.map((id) => ({ ...createdRow, id }))
+  const rows = (ids: string[]): EvaluationDetail[] => ids.map(id => ({ ...createdRow, id }))
 
   it('loads a page and appends the next one', async () => {
     listMock
@@ -615,7 +633,7 @@ describe('list ops', () => {
     expect(listMock).toHaveBeenLastCalledWith({ kind: 'determinism', cursor: 'c1' })
 
     const state = useEvalStore.getState()
-    expect(state.evaluations.map((row) => row.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(state.evaluations.map(row => row.id)).toEqual(['e1', 'e2', 'e3'])
     expect(state.nextCursor).toBeNull()
     expect(state.listLoaded).toBe(true)
   })
@@ -634,7 +652,7 @@ describe('list ops', () => {
     await useEvalStore.getState().loadMoreEvaluations()
     expect(listMock).toHaveBeenLastCalledWith({ execution: 'cloud', cursor: 'c1' })
 
-    expect(useEvalStore.getState().evaluations.map((row) => row.id)).toEqual(['e1', 'e2'])
+    expect(useEvalStore.getState().evaluations.map(row => row.id)).toEqual(['e1', 'e2'])
   })
 
   it('refreshEvaluation replaces the row in place', async () => {
@@ -719,7 +737,10 @@ describe('list ops', () => {
     useEvalStore.setState({ listError: { code: 'stale', message: 'stale' } })
     let resolveList!: (page: Page<EvaluationDetail>) => void
     listMock.mockImplementationOnce(
-      () => new Promise<Page<EvaluationDetail>>((resolve) => { resolveList = resolve })
+      () =>
+        new Promise<Page<EvaluationDetail>>(resolve => {
+          resolveList = resolve
+        })
     )
 
     const pending = useEvalStore.getState().loadEvaluations()
@@ -735,7 +756,10 @@ describe('list ops', () => {
     useEvalStore.setState({ nextCursor: 'c1', listLoading: false })
     let resolveList!: (page: Page<EvaluationDetail>) => void
     listMock.mockImplementationOnce(
-      () => new Promise<Page<EvaluationDetail>>((resolve) => { resolveList = resolve })
+      () =>
+        new Promise<Page<EvaluationDetail>>(resolve => {
+          resolveList = resolve
+        })
     )
 
     const pending = useEvalStore.getState().loadMoreEvaluations()
@@ -752,14 +776,17 @@ describe('list ops', () => {
       next_cursor: null
     } as Page<EvaluationDetail>)
     await useEvalStore.getState().loadEvaluations()
-    useEvalStore.setState({ activeEvaluationId: 'e2', activeEvaluation: { ...createdRow, id: 'e2' } })
+    useEvalStore.setState({
+      activeEvaluationId: 'e2',
+      activeEvaluation: { ...createdRow, id: 'e2' }
+    })
 
     getMock.mockResolvedValueOnce({ ...createdRow, id: 'e1', status: 'completed' })
     await useEvalStore.getState().refreshEvaluation('e1')
 
     const state = useEvalStore.getState()
-    expect(state.evaluations.find((r) => r.id === 'e1')?.status).toBe('completed')
-    expect(state.evaluations.find((r) => r.id === 'e2')?.status).toBe('pending')
+    expect(state.evaluations.find(r => r.id === 'e1')?.status).toBe('completed')
+    expect(state.evaluations.find(r => r.id === 'e2')?.status).toBe('pending')
     // e1 was refreshed, but the *active* evaluation is e2 — untouched.
     expect(state.activeEvaluation?.id).toBe('e2')
     expect(state.activeEvaluation?.status).toBe('pending')

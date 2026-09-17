@@ -84,7 +84,7 @@ function ToolRow({ entry }: { entry: ToolEventEntry }) {
 }
 
 export default function ToolTimeline() {
-  const toolEvents = useRunStore((state) => state.toolEvents)
+  const toolEvents = useRunStore(state => state.toolEvents)
 
   return (
     <section className="card" aria-labelledby="tool-timeline-heading">
@@ -96,7 +96,7 @@ export default function ToolTimeline() {
         <p className="text-sm text-gray-500">No tools were called.</p>
       ) : (
         <ul className="space-y-2">
-          {toolEvents.map((entry) => (
+          {toolEvents.map(entry => (
             <ToolRow key={entry.tool_use_id} entry={entry} />
           ))}
         </ul>

@@ -26,8 +26,8 @@ import {
   selectIsEvaluating,
   toRunRequest,
   useEvalStore,
+  useModelStore,
   useRunConfigStore,
-  useScenarioStore,
   useSettingsStore
 } from '../../stores'
 import { api } from '../../api'
@@ -67,26 +67,24 @@ interface DeterminismLauncherProps {
 }
 
 export default function DeterminismLauncher({ onStarted }: DeterminismLauncherProps) {
-  const modelId = useRunConfigStore((state) => state.model_id)
-  const scenarioId = useRunConfigStore((state) => state.scenario_id)
-  const systemPrompt = useRunConfigStore((state) => state.system_prompt)
-  const userPrompt = useRunConfigStore((state) => state.user_prompt)
+  const modelId = useRunConfigStore(state => state.model_id)
+  const toolset = useRunConfigStore(state => state.toolset)
+  const systemPrompt = useRunConfigStore(state => state.system_prompt)
+  const userPrompt = useRunConfigStore(state => state.user_prompt)
   const canRun = useRunConfigStore(selectCanRun)
 
-  const models = useScenarioStore((state) => state.models)
-  const modelProviders = useScenarioStore((state) => state.modelProviders)
-  const scenarios = useScenarioStore((state) => state.scenarios)
-  const loadModels = useScenarioStore((state) => state.loadModels)
-  const loadScenarios = useScenarioStore((state) => state.loadScenarios)
+  const models = useModelStore(state => state.models)
+  const modelProviders = useModelStore(state => state.modelProviders)
+  const loadModels = useModelStore(state => state.loadModels)
 
-  const defaultGraderModelId = useSettingsStore((state) => state.defaultGraderModelId)
-  const defaultN = useSettingsStore((state) => state.defaultN)
-  const defaultEvalExecution = useSettingsStore((state) => state.defaultEvalExecution)
-  const setDefaultEvalExecution = useSettingsStore((state) => state.setDefaultEvalExecution)
+  const defaultGraderModelId = useSettingsStore(state => state.defaultGraderModelId)
+  const defaultN = useSettingsStore(state => state.defaultN)
+  const defaultEvalExecution = useSettingsStore(state => state.defaultEvalExecution)
+  const setDefaultEvalExecution = useSettingsStore(state => state.setDefaultEvalExecution)
 
-  const startEvaluation = useEvalStore((state) => state.startEvaluation)
+  const startEvaluation = useEvalStore(state => state.startEvaluation)
   const isEvaluating = useEvalStore(selectIsEvaluating)
-  const startErrorState = useEvalStore((state) => state.error)
+  const startErrorState = useEvalStore(state => state.error)
 
   const [n, setN] = useState(() => clampN(defaultN))
   const [graderModelId, setGraderModelId] = useState(defaultGraderModelId)
@@ -113,17 +111,13 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
   }, [loadModels])
 
   useEffect(() => {
-    void loadScenarios()
-  }, [loadScenarios])
-
-  useEffect(() => {
     let cancelled = false
     api
       .health()
-      .then((health) => {
+      .then(health => {
         if (cancelled) return
-        setCloudConfigured(Boolean(health.cloud_evals?.configured))
-        setLocalAvailable(health.local_evals?.available !== false)
+        setCloudConfigured(health.cloud_evals.configured)
+        setLocalAvailable(health.local_evals.available)
       })
       .catch(() => {
         if (!cancelled) setCloudConfigured(false)
@@ -146,7 +140,6 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
   }
 
   const model = findModel(models, modelId)
-  const scenario = scenarios.find((entry) => entry.id === scenarioId) ?? null
   const graderReady = graderModelId.trim() !== ''
   const graderGroups = groupModelsBySource(models, modelProviders).groups
 
@@ -193,8 +186,8 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
             <dd className="inline font-mono text-xs">{model?.name ?? modelId}</dd>
           </div>
           <div>
-            <dt className="inline font-medium text-gray-900">Scenario: </dt>
-            <dd className="inline">{scenario?.name ?? 'None'}</dd>
+            <dt className="inline font-medium text-gray-900">Tools: </dt>
+            <dd className="inline">{toolset ?? 'None'}</dd>
           </div>
           <div>
             <dt className="font-medium text-gray-900">System prompt</dt>
@@ -215,9 +208,8 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
             role="radiogroup"
             aria-label="Run location"
           >
-            {EXECUTION_OPTIONS.map((option) => {
-              const disabled =
-                option.value === 'cloud' ? !cloudConfigured : !localAvailable
+            {EXECUTION_OPTIONS.map(option => {
+              const disabled = option.value === 'cloud' ? !cloudConfigured : !localAvailable
               const hint =
                 option.value === 'cloud' ? CLOUD_UNAVAILABLE_TOOLTIP : LOCAL_UNAVAILABLE_TOOLTIP
               return (
@@ -246,8 +238,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
           </div>
           {effectiveExecution === 'cloud' && (
             <p className="mt-1 text-xs text-gray-500" data-testid="cloud-execution-note">
-              Runs, prompts, and dataset content are persisted to your AWS account (DynamoDB) for
-              later review.
+              Runs and prompts are persisted to your AWS account (DynamoDB) for later review.
             </p>
           )}
         </div>
@@ -263,7 +254,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
             max={N_MAX}
             className="input-field"
             value={n}
-            onChange={(event) => {
+            onChange={event => {
               const raw = Number(event.target.value)
               if (!Number.isFinite(raw)) return
               setN(clampN(raw))
@@ -272,19 +263,22 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
         </div>
 
         <div>
-          <label htmlFor="grader-model-select" className="block text-xs font-medium text-gray-700 mb-1">
+          <label
+            htmlFor="grader-model-select"
+            className="block text-xs font-medium text-gray-700 mb-1"
+          >
             Grader model
           </label>
           <select
             id="grader-model-select"
             className="select-field"
             value={graderModelId}
-            onChange={(event) => handleGraderModelChange(event.target.value)}
+            onChange={event => handleGraderModelChange(event.target.value)}
           >
             <option value="">Select a model…</option>
-            {graderGroups.map((group) => (
+            {graderGroups.map(group => (
               <optgroup key={group.source} label={group.label} disabled={group.disabled}>
-                {group.models.map((m) => (
+                {group.models.map(m => (
                   <option key={m.model_id} value={m.model_id} disabled={group.disabled}>
                     {m.name}
                   </option>
@@ -304,7 +298,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
             rows={3}
             placeholder="How the judge should score consistency…"
             value={rubric}
-            onChange={(event) => setRubric(event.target.value)}
+            onChange={event => setRubric(event.target.value)}
           />
         </div>
 
@@ -314,7 +308,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
             className="text-xs font-medium text-primary-700 hover:text-primary-800"
             aria-expanded={showAdvanced}
             aria-controls="advanced-grading-fields"
-            onClick={() => setShowAdvanced((open) => !open)}
+            onClick={() => setShowAdvanced(open => !open)}
           >
             {showAdvanced ? '▾' : '▸'} Advanced grading
           </button>
@@ -336,7 +330,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
                 rows={4}
                 placeholder="Override the judge's default system prompt…"
                 value={graderSystemPrompt}
-                onChange={(event) => setGraderSystemPrompt(event.target.value)}
+                onChange={event => setGraderSystemPrompt(event.target.value)}
               />
             </div>
           )}

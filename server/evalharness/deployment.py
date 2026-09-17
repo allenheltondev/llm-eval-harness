@@ -30,8 +30,8 @@ Resolution matrix::
     on               (ignored)                     True
     off              (ignored)                     False
 
-The ``dynamodb`` backend additionally needs a table, resolved through
-:mod:`evalharness.runtime_config` exactly like the cloud lane's. A server that
+The ``dynamodb`` backend additionally needs a table
+(``EVALHARNESS_EVAL_TABLE``, the same one the cloud lane uses). A server that
 resolves to ``dynamodb`` with no table is *misconfigured*, not "running without
 history": :func:`history_table` raises rather than falling back to SQLite,
 because a deployed server silently writing to a Lambda's ephemeral disk is a
@@ -43,7 +43,6 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from evalharness import runtime_config
 from evalharness.config import Settings
 from evalharness.errors import BadRequestError
 
@@ -95,18 +94,15 @@ def history_table(settings: Settings) -> str:
     """The DynamoDB table the history backend writes to.
 
     Raises:
-        HistoryBackendMisconfiguredError: when no table is resolvable. The
-            deployed template injects ``EVALHARNESS_EVAL_TABLE`` directly; a
-            local ``dynamodb`` backend can also discover it from the stack.
+        HistoryBackendMisconfiguredError: when no table is configured. The
+            deployed template injects ``EVALHARNESS_EVAL_TABLE`` directly.
     """
-    resolved = runtime_config.eval_table(settings)
-    if not resolved.value:
+    if not settings.eval_table:
         raise HistoryBackendMisconfiguredError(
             "history_backend resolves to 'dynamodb' but no DynamoDB table is "
-            "configured: set EVALHARNESS_EVAL_TABLE (or enable stack discovery "
-            "so it can be read from the deployed stack's outputs)."
+            "configured: set EVALHARNESS_EVAL_TABLE to the stack's TableName output."
         )
-    return resolved.value
+    return settings.eval_table
 
 
 def local_evals_available(settings: Settings) -> bool:

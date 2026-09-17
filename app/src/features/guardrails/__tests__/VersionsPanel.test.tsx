@@ -31,18 +31,14 @@ beforeEach(() => {
 describe('VersionsPanel', () => {
   it('loads versions for the guardrail on open', async () => {
     useGuardrailStore.setState({ versions: { 'gr-1': VERSIONS } })
-    render(
-      <VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />
-    )
+    render(<VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />)
     expect(loadVersions).toHaveBeenCalledWith('gr-1')
     await screen.findByText('DRAFT')
   })
 
   it('lists each version with its description', async () => {
     useGuardrailStore.setState({ versions: { 'gr-1': VERSIONS } })
-    render(
-      <VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />
-    )
+    render(<VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />)
 
     expect(await screen.findByText('DRAFT')).toBeInTheDocument()
     expect(screen.getByText('Version 1')).toBeInTheDocument()
@@ -51,18 +47,14 @@ describe('VersionsPanel', () => {
 
   it('shows an empty state with no versions', async () => {
     useGuardrailStore.setState({ versions: { 'gr-1': [] } })
-    render(
-      <VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />
-    )
+    render(<VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />)
 
     expect(await screen.findByTestId('versions-empty')).toBeInTheDocument()
   })
 
   it('publishes the current DRAFT with a description', async () => {
     useGuardrailStore.setState({ versions: { 'gr-1': VERSIONS } })
-    render(
-      <VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />
-    )
+    render(<VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Publish current DRAFT' }))
     fireEvent.change(screen.getByLabelText('Version description (optional)'), {
@@ -78,9 +70,7 @@ describe('VersionsPanel', () => {
 
   it('publishes with no description when left blank', async () => {
     useGuardrailStore.setState({ versions: { 'gr-1': VERSIONS } })
-    render(
-      <VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />
-    )
+    render(<VersionsPanel guardrailId="gr-1" guardrailName="fraud-guardrail" onClose={vi.fn()} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Publish current DRAFT' }))
     fireEvent.click(screen.getByRole('button', { name: 'Confirm publish' }))

@@ -31,10 +31,10 @@ const STATUS_CLASSES: Record<RunPhase, string> = {
 const PIN_THRESHOLD_PX = 48
 
 export default function OutputPane() {
-  const status = useRunStore((state) => state.status)
-  const streamedText = useRunStore((state) => state.streamedText)
-  const reasoningText = useRunStore((state) => state.reasoningText)
-  const error = useRunStore((state) => state.error)
+  const status = useRunStore(state => state.status)
+  const streamedText = useRunStore(state => state.streamedText)
+  const reasoningText = useRunStore(state => state.reasoningText)
+  const error = useRunStore(state => state.error)
   const isRunning = useRunStore(selectIsRunning)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -49,8 +49,7 @@ export default function OutputPane() {
   function handleScroll() {
     const node = scrollRef.current
     if (!node) return
-    pinnedRef.current =
-      node.scrollHeight - node.scrollTop - node.clientHeight <= PIN_THRESHOLD_PX
+    pinnedRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= PIN_THRESHOLD_PX
   }
 
   return (

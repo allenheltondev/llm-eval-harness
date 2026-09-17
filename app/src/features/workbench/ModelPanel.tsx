@@ -1,7 +1,7 @@
 /**
  * Model picker.
  *
- * Reads the catalog from `scenarioStore` (one idempotent `loadModels()` on
+ * Reads the catalog from `modelStore` (one idempotent `loadModels()` on
  * mount, so mounting this twice still issues a single request) and writes the
  * choice straight into `runConfigStore.model_id` / `.provider`.
  *
@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo } from 'react'
-import { findModel, groupModelsBySource, useRunConfigStore, useScenarioStore } from '../../stores'
+import { findModel, groupModelsBySource, useRunConfigStore, useModelStore } from '../../stores'
 import type { ModelSource } from '../../api'
 
 const PROVIDER_OPTIONS: Array<{ value: ModelSource; label: string }> = [
@@ -23,18 +23,18 @@ const PROVIDER_OPTIONS: Array<{ value: ModelSource; label: string }> = [
 ]
 
 export default function ModelPanel() {
-  const models = useScenarioStore((state) => state.models)
-  const loading = useScenarioStore((state) => state.modelsLoading)
-  const error = useScenarioStore((state) => state.modelsError)
-  const cached = useScenarioStore((state) => state.modelsCached)
-  const providers = useScenarioStore((state) => state.modelProviders)
-  const loadModels = useScenarioStore((state) => state.loadModels)
+  const models = useModelStore(state => state.models)
+  const loading = useModelStore(state => state.modelsLoading)
+  const error = useModelStore(state => state.modelsError)
+  const cached = useModelStore(state => state.modelsCached)
+  const providers = useModelStore(state => state.modelProviders)
+  const loadModels = useModelStore(state => state.loadModels)
 
-  const modelId = useRunConfigStore((state) => state.model_id)
-  const provider = useRunConfigStore((state) => state.provider)
-  const setModelId = useRunConfigStore((state) => state.setModelId)
-  const setProvider = useRunConfigStore((state) => state.setProvider)
-  const selectModel = useRunConfigStore((state) => state.selectModel)
+  const modelId = useRunConfigStore(state => state.model_id)
+  const provider = useRunConfigStore(state => state.provider)
+  const setModelId = useRunConfigStore(state => state.setModelId)
+  const setProvider = useRunConfigStore(state => state.setProvider)
+  const selectModel = useRunConfigStore(state => state.selectModel)
 
   useEffect(() => {
     void loadModels()
@@ -48,7 +48,7 @@ export default function ModelPanel() {
 
   function handleSelect(id: string) {
     const model = id === '' ? null : findModel(models, id)
-    if (model) selectModel(model.model_id, model.source ?? 'bedrock')
+    if (model) selectModel(model.model_id, model.source)
     else setModelId(id)
   }
 
@@ -72,14 +72,14 @@ export default function ModelPanel() {
         id="model-select"
         className="select-field"
         value={modelId}
-        onChange={(event) => handleSelect(event.target.value)}
+        onChange={event => handleSelect(event.target.value)}
       >
         <option value="">
           {loading && models.length === 0 ? 'Loading models…' : 'Select a model…'}
         </option>
-        {groups.map((group) => (
+        {groups.map(group => (
           <optgroup key={group.source} label={group.label} disabled={group.disabled}>
-            {group.models.map((model) => (
+            {group.models.map(model => (
               <option key={model.model_id} value={model.model_id} disabled={group.disabled}>
                 {model.name}
               </option>
@@ -90,7 +90,7 @@ export default function ModelPanel() {
 
       {unavailable.length > 0 && !loading && (
         <p className="mt-1 text-xs text-gray-500">
-          Not shown: {unavailable.map((entry) => `${entry.label} (not configured)`).join(', ')}
+          Not shown: {unavailable.map(entry => `${entry.label} (not configured)`).join(', ')}
         </p>
       )}
 
@@ -122,7 +122,10 @@ export default function ModelPanel() {
               carries no `source`. */}
           <div className="mt-2 flex gap-2 items-end">
             <div className="flex-1">
-              <label htmlFor="model-id-manual" className="block text-xs font-medium text-gray-700 mb-1">
+              <label
+                htmlFor="model-id-manual"
+                className="block text-xs font-medium text-gray-700 mb-1"
+              >
                 Enter model id manually
               </label>
               <input
@@ -131,20 +134,23 @@ export default function ModelPanel() {
                 className="input-field font-mono text-xs"
                 placeholder="e.g. anthropic.claude-3-5-sonnet-20241022-v2:0"
                 value={modelId}
-                onChange={(event) => setModelId(event.target.value)}
+                onChange={event => setModelId(event.target.value)}
               />
             </div>
             <div>
-              <label htmlFor="model-provider-manual" className="block text-xs font-medium text-gray-700 mb-1">
+              <label
+                htmlFor="model-provider-manual"
+                className="block text-xs font-medium text-gray-700 mb-1"
+              >
                 Provider
               </label>
               <select
                 id="model-provider-manual"
                 className="select-field text-xs"
                 value={provider}
-                onChange={(event) => setProvider(event.target.value as ModelSource)}
+                onChange={event => setProvider(event.target.value as ModelSource)}
               >
-                {PROVIDER_OPTIONS.map((option) => (
+                {PROVIDER_OPTIONS.map(option => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
@@ -154,7 +160,6 @@ export default function ModelPanel() {
           </div>
         </div>
       )}
-
     </section>
   )
 }

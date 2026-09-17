@@ -33,13 +33,7 @@ import { useHistoryStore } from './historyStore'
 
 /** Client-side lifecycle of the followed evaluation. */
 export type EvalPhase =
-  | 'idle'
-  | 'starting'
-  | 'running'
-  | 'grading'
-  | 'completed'
-  | 'error'
-  | 'cancelled'
+  'idle' | 'starting' | 'running' | 'grading' | 'completed' | 'error' | 'cancelled'
 
 /** Run counters for the progress bar. `total` is the planned run count. */
 export interface EvalProgress {
@@ -126,10 +120,7 @@ export const INITIAL_EVAL_STATE: EvalStateData = {
  * the same numbers a live subscriber has. `total` comes from `eval_start.n`,
  * falling back to `fallbackTotal` (the planned `n` on the created row).
  */
-export function computeProgress(
-  events: EvalStreamEvent[],
-  fallbackTotal = 0
-): EvalProgress {
+export function computeProgress(events: EvalStreamEvent[], fallbackTotal = 0): EvalProgress {
   let completed = 0
   let failed = 0
   let total = fallbackTotal
@@ -219,13 +210,13 @@ export function activeEvalController(): AbortController | null {
 export const useEvalStore = create<EvalStore>()((set, get) => ({
   ...INITIAL_EVAL_STATE,
 
-  handleEvent: (event) => {
-    set((state) => reduceEvalEvent(state, event))
+  handleEvent: event => {
+    set(state => reduceEvalEvent(state, event))
     // A determinism evaluation persists one run row per iteration.
     if (event.type === 'eval_complete') useHistoryStore.getState().invalidate()
   },
 
-  startEvaluation: async (request) => {
+  startEvaluation: async request => {
     controller?.abort()
     controller = null
     set({
@@ -244,26 +235,26 @@ export const useEvalStore = create<EvalStore>()((set, get) => ({
       return null
     }
 
-    set((state) => ({
+    set(state => ({
       activeEvaluationId: created.id,
       activeEvaluation: created,
       // Show the planned run count before `eval_start` arrives.
       progress: { ...state.progress, total: created.config?.n ?? 0 },
       // Newest first, matching the list endpoint's ordering.
-      evaluations: [created, ...state.evaluations.filter((row) => row.id !== created.id)]
+      evaluations: [created, ...state.evaluations.filter(row => row.id !== created.id)]
     }))
 
     await get().followEvaluation(created.id)
     return created.id
   },
 
-  followEvaluation: async (evaluationId) => {
+  followEvaluation: async evaluationId => {
     controller?.abort()
     controller = new AbortController()
     const signal = controller.signal
 
     // The server replays the whole log, so start from an empty one.
-    set((state) => ({
+    set(state => ({
       activeEvaluationId: evaluationId,
       events: [],
       result: null,
@@ -278,7 +269,7 @@ export const useEvalStore = create<EvalStore>()((set, get) => ({
 
     try {
       await api.evaluations.events(evaluationId, {
-        onEvent: (event) => get().handleEvent(event),
+        onEvent: event => get().handleEvent(event),
         signal
       })
     } catch (error) {
@@ -353,7 +344,7 @@ export const useEvalStore = create<EvalStore>()((set, get) => ({
         ...listParams,
         cursor: nextCursor
       })
-      set((state) => ({
+      set(state => ({
         evaluations: [...state.evaluations, ...page.items],
         nextCursor: page.next_cursor,
         listLoading: false
@@ -367,13 +358,12 @@ export const useEvalStore = create<EvalStore>()((set, get) => ({
     }
   },
 
-  refreshEvaluation: async (evaluationId) => {
+  refreshEvaluation: async evaluationId => {
     try {
       const detail = await api.evaluations.get(evaluationId)
-      set((state) => ({
-        evaluations: state.evaluations.map((row) => (row.id === detail.id ? detail : row)),
-        activeEvaluation:
-          state.activeEvaluationId === detail.id ? detail : state.activeEvaluation
+      set(state => ({
+        evaluations: state.evaluations.map(row => (row.id === detail.id ? detail : row)),
+        activeEvaluation: state.activeEvaluationId === detail.id ? detail : state.activeEvaluation
       }))
       return detail
     } catch (error) {

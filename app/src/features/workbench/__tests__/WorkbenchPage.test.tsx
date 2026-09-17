@@ -9,17 +9,32 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import WorkbenchPage from '../WorkbenchPage'
-import {
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ModelInfo, ToolsResponse, ModelProviders } from '../../../api'
+
+const toolsMock = vi.fn<() => Promise<ToolsResponse>>()
+
+vi.mock('../../../api', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../api')>()
+  return { ...actual, api: { ...actual.api, tools: toolsMock } }
+})
+
+const WorkbenchPage = (await import('../WorkbenchPage')).default
+const {
   DEFAULT_RUN_CONFIG,
   INITIAL_RUN_STATE,
   useGuardrailStore,
+  useModelStore,
   useRunConfigStore,
-  useRunStore,
-  useScenarioStore
-} from '../../../stores'
-import type { ModelInfo } from '../../../api'
+  useRunStore
+} = await import('../../../stores')
+
+const ALL_PROVIDERS: ModelProviders = {
+  bedrock: { configured: true },
+  anthropic: { configured: true },
+  openai: { configured: true },
+  ollama: { configured: true, reachable: true }
+}
 
 const MODELS: ModelInfo[] = [
   {
@@ -42,19 +57,26 @@ const MODELS: ModelInfo[] = [
 
 const startRun = vi.fn().mockResolvedValue(undefined)
 
+async function renderSettled() {
+  render(<WorkbenchPage />)
+  await waitFor(() =>
+    expect(screen.getByRole('option', { name: 'fraud-detection' })).toBeInTheDocument()
+  )
+}
+
 beforeEach(() => {
   startRun.mockClear()
+  toolsMock.mockReset()
+  toolsMock.mockResolvedValue({
+    toolsets: [{ name: 'fraud-detection', tools: ['lookupAccount'] }]
+  })
   useRunStore.setState({ ...INITIAL_RUN_STATE, startRun })
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
-  useScenarioStore.setState({
+  useModelStore.setState({
     models: MODELS,
     modelsLoaded: true,
-    scenarios: [],
-    scenariosLoaded: true,
-    details: {},
-    loadModels: vi.fn().mockResolvedValue(undefined),
-    loadScenarios: vi.fn().mockResolvedValue(undefined),
-    loadScenario: vi.fn().mockResolvedValue(null)
+    modelProviders: ALL_PROVIDERS,
+    loadModels: vi.fn().mockResolvedValue(undefined)
   })
   useGuardrailStore.setState({
     guardrails: [],
@@ -64,14 +86,23 @@ beforeEach(() => {
 })
 
 describe('WorkbenchPage', () => {
-  it('keeps Run disabled until a model and a user prompt are set', () => {
-    render(<WorkbenchPage />)
+  it('renders no scenario panel', async () => {
+    await renderSettled()
+
+    expect(screen.queryByRole('heading', { name: 'Scenario' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/scenario/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps Run disabled until a model and a user prompt are set', async () => {
+    await renderSettled()
 
     const runButton = screen.getByRole('button', { name: 'Run' })
     expect(runButton).toBeDisabled()
 
     // A model alone is not enough.
-    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), { target: { value: MODELS[0].model_id } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), {
+      target: { value: MODELS[0].model_id }
+    })
     expect(runButton).toBeDisabled()
 
     fireEvent.change(screen.getByLabelText('User prompt'), {
@@ -80,17 +111,19 @@ describe('WorkbenchPage', () => {
     expect(runButton).toBeEnabled()
   })
 
-  it('starts a run with the toRunRequest body built from the form', () => {
-    render(<WorkbenchPage />)
+  it('starts a run with the toRunRequest body built from the form', async () => {
+    await renderSettled()
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), { target: { value: MODELS[1].model_id } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), {
+      target: { value: MODELS[1].model_id }
+    })
     fireEvent.change(screen.getByLabelText('System prompt'), {
       target: { value: 'You are a fraud analyst.' }
     })
     fireEvent.change(screen.getByLabelText('User prompt'), {
       target: { value: 'Is this suspicious?' }
     })
-    fireEvent.click(screen.getByLabelText('Enable tools'))
+    fireEvent.change(screen.getByLabelText('Tools'), { target: { value: 'fraud-detection' } })
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }))
 
@@ -99,19 +132,33 @@ describe('WorkbenchPage', () => {
       model_id: 'amazon.nova-pro-v1:0',
       user_prompt: 'Is this suspicious?',
       system_prompt: 'You are a fraud analyst.',
-      tools_enabled: true,
+      toolset: 'fraud-detection',
       max_tool_iterations: 10,
       provider: 'bedrock',
       stream: true
     })
   })
 
-  it('offers Cancel only while a run is in flight', () => {
-    render(<WorkbenchPage />)
+  it('sends toolset: null when no toolset is picked', async () => {
+    await renderSettled()
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), {
+      target: { value: MODELS[0].model_id }
+    })
+    fireEvent.change(screen.getByLabelText('User prompt'), { target: { value: 'go' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ toolset: null }))
+  })
+
+  it('offers Cancel only while a run is in flight', async () => {
+    await renderSettled()
 
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), { target: { value: MODELS[0].model_id } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), {
+      target: { value: MODELS[0].model_id }
+    })
     fireEvent.change(screen.getByLabelText('User prompt'), { target: { value: 'go' } })
     act(() => useRunStore.setState({ status: 'streaming' }))
 

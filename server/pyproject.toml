@@ -70,10 +70,10 @@ testpaths = ["tests"]
 source = ["evalharness"]
 
 [tool.coverage.report]
-# Ratchet, not a target: set to the actual post-gap-fill percentage (97.4%),
+# Ratchet, not a target: set to the actual post-gap-fill percentage (98.6%),
 # rounded down. Bump it only when real coverage climbs past the next percent
 # point -- never round up speculatively.
-fail_under = 97
+fail_under = 98
 exclude_also = [
     # Type-checking-only branches never execute at runtime.
     "if TYPE_CHECKING:",

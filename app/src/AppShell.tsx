@@ -1,6 +1,6 @@
 /**
- * The application shell: a sticky header (title, mascot, tab bar) over one
- * page per tab.
+ * The application shell: a sticky header (title, tab bar) over one page per
+ * tab.
  *
  * Tab state is deliberately plain `useState` — there is no router, and the
  * active tab is not worth persisting: every tab rebuilds itself from its store
@@ -9,17 +9,13 @@
 
 import { useState } from 'react'
 import { useAuth } from './auth/react'
-import FloatingChad from './components/FloatingChad'
-import RobotMascot from './components/RobotMascot'
 import AboutPage from './features/about/AboutPage'
 import EvalsPage from './features/evals/EvalsPage'
 import GuardrailsPage from './features/guardrails/GuardrailsPage'
 import HistoryPage from './features/history/HistoryPage'
-import ScenariosPage from './features/scenarios/ScenariosPage'
 import WorkbenchPage from './features/workbench/WorkbenchPage'
-import { useSettingsStore } from './stores'
 
-export type TabId = 'workbench' | 'evals' | 'history' | 'guardrails' | 'scenarios' | 'about'
+export type TabId = 'workbench' | 'evals' | 'history' | 'guardrails' | 'about'
 
 interface TabDef {
   id: TabId
@@ -31,7 +27,6 @@ export const TABS: TabDef[] = [
   { id: 'evals', label: 'Evals' },
   { id: 'history', label: 'History' },
   { id: 'guardrails', label: 'Guardrails' },
-  { id: 'scenarios', label: 'Scenarios' },
   { id: 'about', label: 'About' }
 ]
 
@@ -45,8 +40,6 @@ function TabPage({ tab }: { tab: TabId }) {
       return <HistoryPage />
     case 'guardrails':
       return <GuardrailsPage />
-    case 'scenarios':
-      return <ScenariosPage />
     case 'about':
       return <AboutPage />
   }
@@ -54,8 +47,6 @@ function TabPage({ tab }: { tab: TabId }) {
 
 export default function AppShell() {
   const [activeTab, setActiveTab] = useState<TabId>('workbench')
-  const chadEnabled = useSettingsStore((state) => state.chadEnabled)
-  const setChadEnabled = useSettingsStore((state) => state.setChadEnabled)
   // Outside an AuthProvider (every local run) `required` is false and no
   // sign-out control renders; behind AuthGate it is the signed-in user's.
   const { required: authRequired, signedIn, user, signOut } = useAuth()
@@ -65,16 +56,13 @@ export default function AppShell() {
       <header className="sticky top-0 z-40 border-b border-secondary-200 bg-gradient-to-br from-tertiary-50 to-secondary-100 shadow-sm">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <RobotMascot size="md" />
-              <div className="text-center sm:text-left">
-                <h1 className="text-xl md:text-2xl font-bold text-primary-700 leading-tight">
-                  LLM Eval Harness
-                </h1>
-                <p className="text-xs md:text-sm text-secondary-700">
-                  Building enterprise-grade AI agents before it was cool
-                </p>
-              </div>
+            <div className="text-center sm:text-left">
+              <h1 className="text-xl md:text-2xl font-bold text-primary-700 leading-tight">
+                LLM Eval Harness
+              </h1>
+              <p className="text-xs md:text-sm text-secondary-700">
+                Building enterprise-grade AI agents before it was cool
+              </p>
             </div>
 
             <div className="flex items-center gap-2">
@@ -83,7 +71,7 @@ export default function AppShell() {
                 aria-label="Sections"
                 className="flex flex-wrap justify-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm"
               >
-                {TABS.map((tab) => {
+                {TABS.map(tab => {
                   const selected = tab.id === activeTab
                   return (
                     <button
@@ -116,18 +104,6 @@ export default function AppShell() {
                   Sign out
                 </button>
               )}
-
-              {!chadEnabled && (
-                <button
-                  type="button"
-                  aria-label="Bring back Chad"
-                  title="Bring back Chad"
-                  onClick={() => setChadEnabled(true)}
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-white text-base shadow-sm hover:bg-gray-50"
-                >
-                  <span aria-hidden="true">😎</span>
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -141,8 +117,6 @@ export default function AppShell() {
       >
         <TabPage tab={activeTab} />
       </main>
-
-      <FloatingChad />
     </div>
   )
 }

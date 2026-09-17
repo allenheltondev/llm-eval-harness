@@ -32,9 +32,9 @@ function formatMs(value: number | undefined): string {
 }
 
 export default function MetricsBar() {
-  const metrics = useRunStore((state) => state.metrics)
-  const startedAt = useRunStore((state) => state.startedAt)
-  const endedAt = useRunStore((state) => state.endedAt)
+  const metrics = useRunStore(state => state.metrics)
+  const startedAt = useRunStore(state => state.startedAt)
+  const endedAt = useRunStore(state => state.endedAt)
 
   // Computed in render, not via `selectElapsedMs`: that selector calls
   // `Date.now()`, so as a zustand selector it would return a new value on every

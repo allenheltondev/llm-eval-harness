@@ -18,12 +18,11 @@ MAX_RUNS = 25
 class GraderConfig(BaseModel):
     """Which model judges, and with what system prompt.
 
-    ``system_prompt`` is the fix for the legacy bug: ``graderService.js`` accepted
-    a custom grader prompt and then never sent it. Here it reaches the judge
-    agent verbatim (see :mod:`evalharness.evals.grader`).
+    ``system_prompt`` reaches the judge agent verbatim (see
+    :mod:`evalharness.evals.grader`).
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(default=DEFAULT_JUDGE_MODEL_ID, min_length=1)
     #: Which SDK runs the judge. Independent of the graded runs' provider -- an

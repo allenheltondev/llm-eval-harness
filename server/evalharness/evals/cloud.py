@@ -40,7 +40,6 @@ import boto3
 from fastapi import Depends
 from starlette.concurrency import run_in_threadpool
 
-from evalharness import runtime_config
 from evalharness.config import Settings, get_settings
 from evalharness.errors import BadRequestError, ConflictError, NotFoundError
 from evalharness.evals import ddb_reader, jobs
@@ -73,10 +72,7 @@ class CloudLaneUnavailableError(BadRequestError):
 
 def is_configured(settings: Settings) -> bool:
     """The lane needs *both* an AgentCore runtime and a DynamoDB table."""
-    return bool(
-        runtime_config.eval_runtime_arn(settings).value
-        and runtime_config.eval_table(settings).value
-    )
+    return bool(settings.eval_runtime_arn and settings.eval_table)
 
 
 def _require_configured(settings: Settings) -> None:
@@ -84,8 +80,8 @@ def _require_configured(settings: Settings) -> None:
         raise CloudLaneUnavailableError(
             "The cloud evaluation lane is not configured on this server",
             detail={
-                "eval_runtime_arn": runtime_config.eval_runtime_arn(settings).value is not None,
-                "eval_table": runtime_config.eval_table(settings).value is not None,
+                "eval_runtime_arn": settings.eval_runtime_arn is not None,
+                "eval_table": settings.eval_table is not None,
             },
         )
 
@@ -115,8 +111,7 @@ def worker_payload(evaluation_id: str, request: EvaluationRequest) -> dict[str, 
 class Invoker(Protocol):
     """Starts one evaluation on the worker. Synchronous (called off the loop)."""
 
-    def invoke(self, evaluation_id: str, payload: dict[str, Any]) -> Any:
-        ...
+    def invoke(self, evaluation_id: str, payload: dict[str, Any]) -> Any: ...
 
 
 class AgentCoreInvoker:
@@ -135,9 +130,7 @@ class AgentCoreInvoker:
     streamed response body is closed without being read.
     """
 
-    def __init__(
-        self, runtime_arn: str, region_name: str, client: Any | None = None
-    ) -> None:
+    def __init__(self, runtime_arn: str, region_name: str, client: Any | None = None) -> None:
         self._runtime_arn = runtime_arn
         self._region_name = region_name
         self._client = client
@@ -167,7 +160,7 @@ _invokers: dict[tuple[str, str], AgentCoreInvoker] = {}
 
 def get_invoker(settings: Settings = Depends(get_settings)) -> Invoker | None:
     """FastAPI dependency: the AgentCore invoker, or ``None`` when unconfigured."""
-    runtime_arn = runtime_config.eval_runtime_arn(settings).value
+    runtime_arn = settings.eval_runtime_arn
     if not runtime_arn:
         return None
     key = (runtime_arn, settings.aws_region)
@@ -294,14 +287,10 @@ def get_run(table: EvalTable, run_id: str) -> RunDetail:
     return run_detail(item)
 
 
-def list_runs(
-    table: EvalTable, *, cursor: str | None = None, limit: int = 25
-) -> Page[RunSummary]:
+def list_runs(table: EvalTable, *, cursor: str | None = None, limit: int = 25) -> Page[RunSummary]:
     """Newest-first page of cloud runs from the GSI1 ``RUN`` partition."""
     items, next_cursor = table.list_runs(limit=limit, cursor=cursor)
-    return Page[RunSummary](
-        items=[run_summary(item) for item in items], next_cursor=next_cursor
-    )
+    return Page[RunSummary](items=[run_summary(item) for item in items], next_cursor=next_cursor)
 
 
 def cancel_evaluation(table: EvalTable, evaluation_id: str) -> None:

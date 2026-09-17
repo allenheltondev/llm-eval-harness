@@ -1,11 +1,14 @@
 /**
  * Everything between "the prompt is written" and "the run is in flight":
- * inference knobs, the tools toggle, guardrail selection, and Run / Cancel.
+ * inference knobs, the toolset picker, guardrail selection, and Run / Cancel.
  *
  * The submit handler deliberately reads `useRunConfigStore.getState()` rather
  * than subscribing to the whole config — `toRunRequest` builds a fresh object,
  * which cannot be a zustand v5 selector, and the button only needs the boolean
  * from `selectCanRun`.
+ *
+ * Toolsets come from `GET /tools`, fetched once on mount and held locally: the
+ * list is static for the life of the server and nothing else reads it.
  *
  * Guardrails only run against the `bedrock` provider (a guardrail + a
  * non-bedrock provider is a server-side 400), so the guardrail select is
@@ -16,6 +19,8 @@
  */
 
 import { useEffect, useState } from 'react'
+import { api } from '../../api'
+import type { Toolset } from '../../api'
 import {
   readyGuardrails,
   selectCanRun,
@@ -35,32 +40,53 @@ function toOptionalNumber(raw: string): number | undefined {
 
 export default function RunControls() {
   const [showInference, setShowInference] = useState(false)
+  const [toolsets, setToolsets] = useState<Toolset[]>([])
+  const [toolsError, setToolsError] = useState<string | null>(null)
 
-  const inference = useRunConfigStore((state) => state.inference)
-  const toolsEnabled = useRunConfigStore((state) => state.tools_enabled)
-  const maxToolIterations = useRunConfigStore((state) => state.max_tool_iterations)
-  const guardrail = useRunConfigStore((state) => state.guardrail)
-  const provider = useRunConfigStore((state) => state.provider)
-  const setInference = useRunConfigStore((state) => state.setInference)
-  const setToolsEnabled = useRunConfigStore((state) => state.setToolsEnabled)
-  const setMaxToolIterations = useRunConfigStore((state) => state.setMaxToolIterations)
-  const setGuardrail = useRunConfigStore((state) => state.setGuardrail)
+  const inference = useRunConfigStore(state => state.inference)
+  const toolset = useRunConfigStore(state => state.toolset)
+  const maxToolIterations = useRunConfigStore(state => state.max_tool_iterations)
+  const guardrail = useRunConfigStore(state => state.guardrail)
+  const provider = useRunConfigStore(state => state.provider)
+  const setInference = useRunConfigStore(state => state.setInference)
+  const setToolset = useRunConfigStore(state => state.setToolset)
+  const setMaxToolIterations = useRunConfigStore(state => state.setMaxToolIterations)
+  const setGuardrail = useRunConfigStore(state => state.setGuardrail)
   const canRun = useRunConfigStore(selectCanRun)
 
-  const guardrails = useGuardrailStore((state) => state.guardrails)
-  const loadGuardrails = useGuardrailStore((state) => state.loadGuardrails)
+  const guardrails = useGuardrailStore(state => state.guardrails)
+  const loadGuardrails = useGuardrailStore(state => state.loadGuardrails)
 
   const isRunning = useRunStore(selectIsRunning)
-  const startRun = useRunStore((state) => state.startRun)
-  const cancelRun = useRunStore((state) => state.cancelRun)
+  const startRun = useRunStore(state => state.startRun)
+  const cancelRun = useRunStore(state => state.cancelRun)
 
   useEffect(() => {
     void loadGuardrails()
   }, [loadGuardrails])
 
+  useEffect(() => {
+    let cancelled = false
+    api
+      .tools()
+      .then(response => {
+        if (!cancelled) setToolsets(response.toolsets)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setToolsError(error instanceof Error ? error.message : 'Could not load toolsets')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const attachable = readyGuardrails(guardrails)
   const guardrailBlocked = provider !== 'bedrock'
   const guardrailHint = 'Guardrails require the Bedrock provider'
+
+  const toolsEnabled = toolset !== null
+  const selectedToolset = toolsets.find(entry => entry.name === toolset) ?? null
 
   function handleRun() {
     void startRun(toRunRequest(useRunConfigStore.getState()))
@@ -73,15 +99,36 @@ export default function RunControls() {
       </h2>
 
       <div className="space-y-3">
-        <label className="flex items-center gap-2 text-sm text-gray-800">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-gray-300 text-primary-600"
-            checked={toolsEnabled}
-            onChange={(event) => setToolsEnabled(event.target.checked)}
-          />
-          Enable tools
-        </label>
+        <div>
+          <label htmlFor="toolset-select" className="block text-xs font-medium text-gray-700 mb-1">
+            Tools
+          </label>
+          <select
+            id="toolset-select"
+            className="select-field"
+            value={toolset ?? ''}
+            onChange={event => setToolset(event.target.value === '' ? null : event.target.value)}
+          >
+            <option value="">None</option>
+            {toolsets.map(entry => (
+              <option key={entry.name} value={entry.name}>
+                {entry.name}
+              </option>
+            ))}
+          </select>
+          {selectedToolset && (
+            <p className="mt-1 text-xs text-gray-500" data-testid="toolset-tools">
+              {selectedToolset.tools.length > 0
+                ? selectedToolset.tools.join(', ')
+                : 'No tools in this toolset'}
+            </p>
+          )}
+          {toolsError && (
+            <p className="mt-1 text-xs text-red-600" role="alert">
+              Could not load toolsets: {toolsError}
+            </p>
+          )}
+        </div>
 
         <div className={toolsEnabled ? '' : 'opacity-50'}>
           <label
@@ -98,12 +145,15 @@ export default function RunControls() {
             className="input-field"
             disabled={!toolsEnabled}
             value={maxToolIterations}
-            onChange={(event) => setMaxToolIterations(Number(event.target.value) || 1)}
+            onChange={event => setMaxToolIterations(Number(event.target.value) || 1)}
           />
         </div>
 
         <div>
-          <label htmlFor="guardrail-select" className="block text-xs font-medium text-gray-700 mb-1">
+          <label
+            htmlFor="guardrail-select"
+            className="block text-xs font-medium text-gray-700 mb-1"
+          >
             Guardrail
           </label>
           <select
@@ -112,14 +162,14 @@ export default function RunControls() {
             value={guardrail?.id ?? ''}
             disabled={guardrailBlocked}
             title={guardrailBlocked ? guardrailHint : undefined}
-            onChange={(event) =>
+            onChange={event =>
               setGuardrail(
                 event.target.value === '' ? null : { id: event.target.value, trace: true }
               )
             }
           >
             <option value="">None</option>
-            {attachable.map((row) => (
+            {attachable.map(row => (
               <option key={row.id} value={row.id}>
                 {row.name}
               </option>
@@ -134,7 +184,7 @@ export default function RunControls() {
             className="text-xs font-medium text-primary-700 hover:text-primary-800"
             aria-expanded={showInference}
             aria-controls="inference-fields"
-            onClick={() => setShowInference((open) => !open)}
+            onClick={() => setShowInference(open => !open)}
           >
             {showInference ? '▾' : '▸'} Inference parameters
           </button>
@@ -156,7 +206,7 @@ export default function RunControls() {
                   max={1}
                   className="input-field"
                   value={inference.temperature ?? ''}
-                  onChange={(event) =>
+                  onChange={event =>
                     setInference({ temperature: toOptionalNumber(event.target.value) })
                   }
                 />
@@ -173,7 +223,7 @@ export default function RunControls() {
                   max={1}
                   className="input-field"
                   value={inference.top_p ?? ''}
-                  onChange={(event) => setInference({ top_p: toOptionalNumber(event.target.value) })}
+                  onChange={event => setInference({ top_p: toOptionalNumber(event.target.value) })}
                 />
               </div>
               <div>
@@ -186,7 +236,7 @@ export default function RunControls() {
                   min={1}
                   className="input-field"
                   value={inference.max_tokens ?? ''}
-                  onChange={(event) =>
+                  onChange={event =>
                     setInference({ max_tokens: toOptionalNumber(event.target.value) })
                   }
                 />

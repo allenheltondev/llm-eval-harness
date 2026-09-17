@@ -66,7 +66,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from evalharness.config import Settings, get_settings
-from evalharness.configstore.client import ConfigStoreClient
 from evalharness.engine.events import ErrorEvent, RunCompleteEvent, RunStartEvent
 from evalharness.engine.model_factory import ModelFactory, build_model, classify_error
 from evalharness.engine.runner import execute_run
@@ -111,7 +110,6 @@ class EvalDeps:
     settings: Settings
     model_factory: ModelFactory
     judge_factory: JudgeFactory
-    config_client: ConfigStoreClient | None = None
     #: The history backend the repeats and the evaluation row are written
     #: through. ``None`` means "whatever ``settings`` resolves to" -- which is
     #: what the cloud worker wants (its repeats go to the microVM's own SQLite
@@ -267,7 +265,6 @@ async def _execute_once(
 
     events = execute_run(
         request.run_config,
-        config_client=deps.config_client,
         settings=deps.settings,
         model_factory=deps.model_factory,
         repo=deps.repo,
@@ -292,8 +289,8 @@ async def _execute_once(
     except asyncio.CancelledError:
         raise
     except AppError as exc:
-        # Setup failures (an unresolvable dataset, an unreachable config store)
-        # never reach the stream -- they are raised before ``run_start``.
+        # Setup failures (an unknown toolset, a missing provider key) never
+        # reach the stream -- they are raised before ``run_start``.
         outcome.error = {"code": exc.code, "message": exc.message, "retryable": False}
     except Exception as exc:  # pragma: no cover - defensive
         code, message, retryable = classify_error(exc)
@@ -572,9 +569,7 @@ async def execute_evaluation_with_seam(
         seam.publish(GradingCompletedEvent(result=result))
 
         status = "completed" if successes else "error"
-        error = (
-            None if successes else {"code": "no_successful_runs", "message": "Every run failed"}
-        )
+        error = None if successes else {"code": "no_successful_runs", "message": "Every run failed"}
         seam.store.save_evaluation(status=status, result=result, error=error)
         seam.publish(EvalCompleteEvent(status=status, result=result))
         return _terminal(seam, status, outcomes, result, error)

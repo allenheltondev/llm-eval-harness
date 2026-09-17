@@ -123,14 +123,6 @@
     animation: fadeOut 0.3s ease-in-out forwards;
   }
 
-  /* Responsive robot positioning */
-  @media (max-width: 640px) {
-    .robot-size-lg {
-      width: 80px !important;
-      height: 80px !important;
-    }
-  }
-
   /* Essential responsive fixes */
   @media (max-width: 640px) {
     .bg-gradient-container {
@@ -430,52 +422,6 @@
   }
 }
 
-@keyframes chadReveal {
-  0% {
-    opacity: 1;
-    transform: scale(1) rotate(0deg);
-  }
-  25% {
-    opacity: 0.7;
-    transform: scale(1.1) rotate(2deg);
-  }
-  50% {
-    opacity: 0.3;
-    transform: scale(0.9) rotate(-1deg);
-  }
-  75% {
-    opacity: 0.7;
-    transform: scale(1.05) rotate(1deg);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1) rotate(0deg);
-  }
-}
-
-@keyframes chadEmerge {
-  0% {
-    opacity: 0;
-    transform: scale(0.8) translateY(10px);
-    filter: blur(2px);
-  }
-  30% {
-    opacity: 0.6;
-    transform: scale(1.05) translateY(-2px);
-    filter: blur(1px);
-  }
-  70% {
-    opacity: 0.9;
-    transform: scale(0.98) translateY(1px);
-    filter: blur(0.5px);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-    filter: blur(0);
-  }
-}
-
 @keyframes smoothExpand {
   0% {
     max-height: 0;
@@ -499,28 +445,6 @@
     max-height: 0;
     opacity: 0;
     transform: translateY(-10px);
-  }
-}
-
-@keyframes dragStart {
-  0% {
-    transform: scale(1);
-    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.15));
-  }
-  100% {
-    transform: scale(1.1);
-    filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.25)) brightness(1.1);
-  }
-}
-
-@keyframes dragEnd {
-  0% {
-    transform: scale(1.1);
-    filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.25)) brightness(1.1);
-  }
-  100% {
-    transform: scale(1);
-    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.15));
   }
 }
 
@@ -557,8 +481,4 @@
     opacity: 1;
     transform: translateX(0);
   }
-}
-
-.responsive-chad {
-  /* Base size is set via inline styles, responsive scaling handled in component */
 }

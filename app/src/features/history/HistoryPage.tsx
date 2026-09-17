@@ -1,7 +1,6 @@
 /**
  * The History tab: a filterable, paged list of past runs with a detail panel,
- * a two-run compare mode, an NDJSON export, and a one-time banner for
- * pre-revamp local history.
+ * a two-run compare mode and an NDJSON export.
  *
  * Row selection state (detail vs. compare) lives here rather than in the
  * store — it is purely a view concern, and keeping it local means switching
@@ -16,11 +15,10 @@ import {
   selectHasMore,
   selectNeedsRefresh,
   useHistoryStore,
-  useScenarioStore,
+  useModelStore,
   type HistoryFilters
 } from '../../stores'
 import CompareView from './CompareView'
-import LegacyExportBanner from './LegacyExportBanner'
 import RunDetailView from './RunDetailView'
 
 const STATUS_OPTIONS = ['completed', 'error', 'cancelled']
@@ -50,15 +48,17 @@ function formatTokens(run: RunSummary): string {
 /* -------------------------------------------------------------------------- */
 
 function FilterBar({ filters }: { filters: HistoryFilters }) {
-  const setFilters = useHistoryStore((state) => state.setFilters)
-  const models = useScenarioStore((state) => state.models)
-  const modelsLoaded = useScenarioStore((state) => state.modelsLoaded)
-  const scenarios = useScenarioStore((state) => state.scenarios)
+  const setFilters = useHistoryStore(state => state.setFilters)
+  const models = useModelStore(state => state.models)
+  const modelsLoaded = useModelStore(state => state.modelsLoaded)
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       <div>
-        <label htmlFor="history-filter-model" className="block text-xs font-medium text-gray-700 mb-1">
+        <label
+          htmlFor="history-filter-model"
+          className="block text-xs font-medium text-gray-700 mb-1"
+        >
           Model
         </label>
         {modelsLoaded && models.length > 0 ? (
@@ -67,12 +67,12 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
             data-testid="history-filter-model"
             className="select-field"
             value={filters.model_id ?? ''}
-            onChange={(event) =>
+            onChange={event =>
               void setFilters({ model_id: event.target.value === '' ? null : event.target.value })
             }
           >
             <option value="">All models</option>
-            {models.map((model) => (
+            {models.map(model => (
               <option key={model.model_id} value={model.model_id}>
                 {model.name}
               </option>
@@ -86,7 +86,7 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
             className="input-field"
             placeholder="model id…"
             value={filters.model_id ?? ''}
-            onChange={(event) =>
+            onChange={event =>
               void setFilters({ model_id: event.target.value === '' ? null : event.target.value })
             }
           />
@@ -94,29 +94,10 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
       </div>
 
       <div>
-        <label htmlFor="history-filter-scenario" className="block text-xs font-medium text-gray-700 mb-1">
-          Scenario
-        </label>
-        <select
-          id="history-filter-scenario"
-          data-testid="history-filter-scenario"
-          className="select-field"
-          value={filters.scenario_id ?? ''}
-          onChange={(event) =>
-            void setFilters({ scenario_id: event.target.value === '' ? null : event.target.value })
-          }
+        <label
+          htmlFor="history-filter-status"
+          className="block text-xs font-medium text-gray-700 mb-1"
         >
-          <option value="">All scenarios</option>
-          {scenarios.map((scenario) => (
-            <option key={scenario.id} value={scenario.id}>
-              {scenario.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label htmlFor="history-filter-status" className="block text-xs font-medium text-gray-700 mb-1">
           Status
         </label>
         <select
@@ -124,12 +105,12 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
           data-testid="history-filter-status"
           className="select-field"
           value={filters.status ?? ''}
-          onChange={(event) =>
+          onChange={event =>
             void setFilters({ status: event.target.value === '' ? null : event.target.value })
           }
         >
           <option value="">All statuses</option>
-          {STATUS_OPTIONS.map((status) => (
+          {STATUS_OPTIONS.map(status => (
             <option key={status} value={status}>
               {status}
             </option>
@@ -153,10 +134,17 @@ interface RunRowProps {
   onToggleCompare: (checked: boolean) => void
 }
 
-function RunRow({ run, selected, compareChecked, compareDisabled, onSelect, onToggleCompare }: RunRowProps) {
+function RunRow({
+  run,
+  selected,
+  compareChecked,
+  compareDisabled,
+  onSelect,
+  onToggleCompare
+}: RunRowProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
-  const remove = useHistoryStore((state) => state.remove)
-  const loading = useHistoryStore((state) => state.loading)
+  const remove = useHistoryStore(state => state.remove)
+  const loading = useHistoryStore(state => state.loading)
 
   async function handleDelete() {
     await remove(run.id)
@@ -172,7 +160,7 @@ function RunRow({ run, selected, compareChecked, compareDisabled, onSelect, onTo
       data-run-id={run.id}
       onClick={onSelect}
     >
-      <td className="py-2 pr-3" onClick={(event) => event.stopPropagation()}>
+      <td className="py-2 pr-3" onClick={event => event.stopPropagation()}>
         <input
           type="checkbox"
           aria-label={`Compare run ${run.id}`}
@@ -180,19 +168,20 @@ function RunRow({ run, selected, compareChecked, compareDisabled, onSelect, onTo
           className="h-4 w-4 rounded border-gray-300 text-primary-600"
           checked={compareChecked}
           disabled={compareDisabled}
-          onChange={(event) => onToggleCompare(event.target.checked)}
+          onChange={event => onToggleCompare(event.target.checked)}
         />
       </td>
       <td className="py-2 pr-4 text-sm text-gray-700 whitespace-nowrap">{formatTs(run.ts)}</td>
       <td className="py-2 pr-4 text-sm font-mono text-gray-900 break-all">{run.model_id}</td>
-      <td className="py-2 pr-4 text-sm text-gray-700">{run.scenario_id ?? '—'}</td>
       <td className="py-2 pr-4">
-        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(run.status)}`}>
+        <span
+          className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(run.status)}`}
+        >
           {run.status}
         </span>
       </td>
       <td className="py-2 pr-4 text-sm text-gray-700 tabular-nums">{formatTokens(run)}</td>
-      <td className="py-2 pl-2 text-right" onClick={(event) => event.stopPropagation()}>
+      <td className="py-2 pl-2 text-right" onClick={event => event.stopPropagation()}>
         {confirmingDelete ? (
           <div className="flex items-center justify-end gap-2">
             <span className="text-xs text-gray-600">Delete?</span>
@@ -242,8 +231,8 @@ function ExportButton({ filters }: { filters: HistoryFilters }) {
     setExportError(null)
     const rows: RunDetail[] = []
     try {
-      await api.runs.exportAll(filters, { onEvent: (run) => rows.push(run) })
-      const ndjson = rows.map((run) => JSON.stringify(run)).join('\n') + (rows.length > 0 ? '\n' : '')
+      await api.runs.exportAll(filters, { onEvent: run => rows.push(run) })
+      const ndjson = rows.map(run => JSON.stringify(run)).join('\n') + (rows.length > 0 ? '\n' : '')
       const blob = new Blob([ndjson], { type: 'application/x-ndjson' })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
@@ -288,7 +277,7 @@ function ExportButton({ filters }: { filters: HistoryFilters }) {
  * The "Cloud runs" filter reads `GET /runs?execution=cloud` directly (like
  * `ExportButton` above, it bypasses `historyStore` — those rows come from the
  * DynamoDB `RUN` GSI1 partition, not the SQLite-backed store this page's main
- * list/paging is built around). Additive to the model/scenario/status filters:
+ * list/paging is built around). Additive to the model/status filters:
  * whichever of those is set is carried onto the cloud query too.
  */
 function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
@@ -326,7 +315,7 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
     setError(null)
     try {
       const page = await api.runs.list({ ...filters, execution: 'cloud', cursor: nextCursor })
-      setItems((current) => [...current, ...page.items])
+      setItems(current => [...current, ...page.items])
       setNextCursor(page.next_cursor)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load cloud runs')
@@ -341,8 +330,8 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
         Cloud runs
       </h2>
       <p className="text-xs text-gray-500 mb-3" data-testid="cloud-runs-note">
-        These are cloud-lane evaluation runs — executed on Bedrock AgentCore and persisted to
-        your AWS account&apos;s DynamoDB table, not this machine&apos;s local history.
+        These are cloud-lane evaluation runs — executed on Bedrock AgentCore and persisted to your
+        AWS account&apos;s DynamoDB table, not this machine&apos;s local history.
       </p>
 
       {error && (
@@ -367,23 +356,33 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
                 <tr className="border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wide">
                   <th className="py-2 pr-4">Time</th>
                   <th className="py-2 pr-4">Model</th>
-                  <th className="py-2 pr-4">Scenario</th>
                   <th className="py-2 pr-4">Status</th>
                   <th className="py-2 pr-4">Tokens</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((run) => (
-                  <tr key={run.id} className="border-b border-gray-100 last:border-0" data-testid="cloud-run-row">
-                    <td className="py-2 pr-4 text-sm text-gray-700 whitespace-nowrap">{formatTs(run.ts)}</td>
-                    <td className="py-2 pr-4 text-sm font-mono text-gray-900 break-all">{run.model_id}</td>
-                    <td className="py-2 pr-4 text-sm text-gray-700">{run.scenario_id ?? '—'}</td>
+                {items.map(run => (
+                  <tr
+                    key={run.id}
+                    className="border-b border-gray-100 last:border-0"
+                    data-testid="cloud-run-row"
+                  >
+                    <td className="py-2 pr-4 text-sm text-gray-700 whitespace-nowrap">
+                      {formatTs(run.ts)}
+                    </td>
+                    <td className="py-2 pr-4 text-sm font-mono text-gray-900 break-all">
+                      {run.model_id}
+                    </td>
                     <td className="py-2 pr-4">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(run.status)}`}>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(run.status)}`}
+                      >
                         {run.status}
                       </span>
                     </td>
-                    <td className="py-2 pr-4 text-sm text-gray-700 tabular-nums">{formatTokens(run)}</td>
+                    <td className="py-2 pr-4 text-sm text-gray-700 tabular-nums">
+                      {formatTokens(run)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -414,18 +413,17 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
 /* -------------------------------------------------------------------------- */
 
 export default function HistoryPage() {
-  const items = useHistoryStore((state) => state.items)
-  const loading = useHistoryStore((state) => state.loading)
-  const loaded = useHistoryStore((state) => state.loaded)
-  const error = useHistoryStore((state) => state.error)
-  const filters = useHistoryStore((state) => state.filters)
+  const items = useHistoryStore(state => state.items)
+  const loading = useHistoryStore(state => state.loading)
+  const loaded = useHistoryStore(state => state.loaded)
+  const error = useHistoryStore(state => state.error)
+  const filters = useHistoryStore(state => state.filters)
   const needsRefresh = useHistoryStore(selectNeedsRefresh)
   const hasMore = useHistoryStore(selectHasMore)
-  const loadFirstPage = useHistoryStore((state) => state.loadFirstPage)
-  const loadMore = useHistoryStore((state) => state.loadMore)
+  const loadFirstPage = useHistoryStore(state => state.loadFirstPage)
+  const loadMore = useHistoryStore(state => state.loadMore)
 
-  const loadModels = useScenarioStore((state) => state.loadModels)
-  const loadScenarios = useScenarioStore((state) => state.loadScenarios)
+  const loadModels = useModelStore(state => state.loadModels)
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [compareIds, setCompareIds] = useState<string[]>([])
@@ -439,14 +437,10 @@ export default function HistoryPage() {
     void loadModels()
   }, [loadModels])
 
-  useEffect(() => {
-    void loadScenarios()
-  }, [loadScenarios])
-
   function toggleCompare(runId: string, checked: boolean) {
-    setCompareIds((current) => {
+    setCompareIds(current => {
       if (checked) return current.includes(runId) ? current : [...current, runId].slice(-2)
-      return current.filter((id) => id !== runId)
+      return current.filter(id => id !== runId)
     })
   }
 
@@ -454,8 +448,6 @@ export default function HistoryPage() {
 
   return (
     <div className="space-y-4" data-testid="history-page">
-      <LegacyExportBanner />
-
       <section className="card" aria-labelledby="history-heading">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h2 id="history-heading" className="text-lg font-semibold text-gray-900">
@@ -468,7 +460,7 @@ export default function HistoryPage() {
                 data-testid="history-cloud-filter"
                 className="h-4 w-4 rounded border-gray-300 text-primary-600"
                 checked={cloudRunsFilter}
-                onChange={(event) => setCloudRunsFilter(event.target.checked)}
+                onChange={event => setCloudRunsFilter(event.target.checked)}
               />
               Cloud runs
             </label>
@@ -495,9 +487,7 @@ export default function HistoryPage() {
           </p>
         )}
 
-        {loading && items.length === 0 && (
-          <LoadingSpinner text="Loading runs…" />
-        )}
+        {loading && items.length === 0 && <LoadingSpinner text="Loading runs…" />}
 
         {loaded && !loading && items.length === 0 && !error && (
           <p className="text-sm text-gray-600" data-testid="history-empty">
@@ -514,22 +504,23 @@ export default function HistoryPage() {
                     <th className="py-2 pr-3">Compare</th>
                     <th className="py-2 pr-4">Time</th>
                     <th className="py-2 pr-4">Model</th>
-                    <th className="py-2 pr-4">Scenario</th>
                     <th className="py-2 pr-4">Status</th>
                     <th className="py-2 pr-4">Tokens</th>
                     <th className="py-2 pl-2 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((run) => (
+                  {items.map(run => (
                     <RunRow
                       key={run.id}
                       run={run}
                       selected={selectedRunId === run.id}
                       compareChecked={compareIds.includes(run.id)}
                       compareDisabled={comparing && !compareIds.includes(run.id)}
-                      onSelect={() => setSelectedRunId((current) => (current === run.id ? null : run.id))}
-                      onToggleCompare={(checked) => toggleCompare(run.id, checked)}
+                      onSelect={() =>
+                        setSelectedRunId(current => (current === run.id ? null : run.id))
+                      }
+                      onToggleCompare={checked => toggleCompare(run.id, checked)}
                     />
                   ))}
                 </tbody>
@@ -556,10 +547,7 @@ export default function HistoryPage() {
       {cloudRunsFilter && <CloudRunsPanel filters={filters} />}
 
       {comparing ? (
-        <CompareView
-          runIds={[compareIds[0], compareIds[1]]}
-          onClose={() => setCompareIds([])}
-        />
+        <CompareView runIds={[compareIds[0], compareIds[1]]} onClose={() => setCompareIds([])} />
       ) : (
         selectedRunId && <RunDetailView key={selectedRunId} runId={selectedRunId} />
       )}

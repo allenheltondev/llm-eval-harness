@@ -46,7 +46,7 @@ class ConflictError(AppError):
 
 
 class UpstreamError(AppError):
-    """Raised when a dependency (e.g. the config store) fails or is unreachable."""
+    """Raised when a dependency (e.g. a user pool's JWKS endpoint) fails or is unreachable."""
 
     status_code = status.HTTP_502_BAD_GATEWAY
     code = "upstream_error"

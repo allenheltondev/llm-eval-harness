@@ -111,7 +111,7 @@ interface PiiRow {
 function splitExamples(raw: string): string[] {
   return raw
     .split(/[\n,]+/)
-    .map((entry) => entry.trim())
+    .map(entry => entry.trim())
     .filter(Boolean)
     .slice(0, 5)
 }
@@ -120,7 +120,7 @@ function splitExamples(raw: string): string[] {
 function splitLines(raw: string): string[] {
   return raw
     .split('\n')
-    .map((entry) => entry.trim())
+    .map(entry => entry.trim())
     .filter(Boolean)
 }
 
@@ -140,10 +140,10 @@ function emptyToNull(value: string): number | null {
 function hasAnyPolicy(config: GuardrailConfig): boolean {
   return Boolean(
     config.contentPolicy ||
-      (config.deniedTopics && config.deniedTopics.length > 0) ||
-      config.wordPolicy ||
-      config.piiPolicy ||
-      config.contextualGrounding
+    (config.deniedTopics && config.deniedTopics.length > 0) ||
+    config.wordPolicy ||
+    config.piiPolicy ||
+    config.contextualGrounding
   )
 }
 
@@ -167,13 +167,13 @@ export default function GuardrailEditor({
   const [relevanceThreshold, setRelevanceThreshold] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
-  const loadGuardrail = useGuardrailStore((state) => state.loadGuardrail)
-  const createGuardrail = useGuardrailStore((state) => state.createGuardrail)
-  const updateGuardrail = useGuardrailStore((state) => state.updateGuardrail)
-  const saving = useGuardrailStore((state) => state.saving)
-  const saveError = useGuardrailStore((state) => state.saveError)
+  const loadGuardrail = useGuardrailStore(state => state.loadGuardrail)
+  const createGuardrail = useGuardrailStore(state => state.createGuardrail)
+  const updateGuardrail = useGuardrailStore(state => state.updateGuardrail)
+  const saving = useGuardrailStore(state => state.saving)
+  const saveError = useGuardrailStore(state => state.saveError)
   const detail = useGuardrailStore(selectGuardrailDetail(guardrailId))
-  const detailLoading = useGuardrailStore((state) =>
+  const detailLoading = useGuardrailStore(state =>
     guardrailId ? (state.detailLoading[guardrailId] ?? false) : false
   )
 
@@ -203,7 +203,7 @@ export default function GuardrailEditor({
     setFilters(nextFilters)
 
     setDeniedTopics(
-      (detail.deniedTopics ?? []).map((topic) => ({
+      (detail.deniedTopics ?? []).map(topic => ({
         name: topic.name,
         definition: topic.definition,
         examples: (topic.examples ?? []).join('\n')
@@ -214,7 +214,7 @@ export default function GuardrailEditor({
     setManagedProfanity(Boolean(detail.wordPolicy?.managedWordLists?.includes('PROFANITY')))
 
     setPiiRows(
-      (detail.piiPolicy?.entities ?? []).map((entity) => ({
+      (detail.piiPolicy?.entities ?? []).map(entity => ({
         type: entity.type,
         action: entity.action === 'ANONYMIZE' ? 'ANONYMIZE' : 'BLOCK'
       }))
@@ -233,47 +233,45 @@ export default function GuardrailEditor({
   }, [detail])
 
   function updateFilter(type: ContentFilterType, patch: Partial<FilterFormState>) {
-    setFilters((prev) => ({ ...prev, [type]: { ...prev[type], ...patch } }))
+    setFilters(prev => ({ ...prev, [type]: { ...prev[type], ...patch } }))
   }
 
   function addDeniedTopic() {
-    setDeniedTopics((prev) => [...prev, { name: '', definition: '', examples: '' }])
+    setDeniedTopics(prev => [...prev, { name: '', definition: '', examples: '' }])
   }
 
   function updateDeniedTopic(index: number, patch: Partial<DeniedTopicRow>) {
-    setDeniedTopics((prev) =>
-      prev.map((row, i) => (i === index ? { ...row, ...patch } : row))
-    )
+    setDeniedTopics(prev => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   }
 
   function removeDeniedTopic(index: number) {
-    setDeniedTopics((prev) => prev.filter((_, i) => i !== index))
+    setDeniedTopics(prev => prev.filter((_, i) => i !== index))
   }
 
   function addPiiRow() {
-    setPiiRows((prev) => [...prev, { type: 'EMAIL', action: 'BLOCK' }])
+    setPiiRows(prev => [...prev, { type: 'EMAIL', action: 'BLOCK' }])
   }
 
   function updatePiiRow(index: number, patch: Partial<PiiRow>) {
-    setPiiRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+    setPiiRows(prev => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   }
 
   function removePiiRow(index: number) {
-    setPiiRows((prev) => prev.filter((_, i) => i !== index))
+    setPiiRows(prev => prev.filter((_, i) => i !== index))
   }
 
   function buildConfig(): GuardrailConfig {
     const enabledFilters: ContentFilter[] = CONTENT_FILTER_TYPES.filter(
-      (type) => filters[type].enabled
-    ).map((type) => ({
+      type => filters[type].enabled
+    ).map(type => ({
       type,
       inputStrength: filters[type].inputStrength,
       outputStrength: type === 'PROMPT_ATTACK' ? 'NONE' : filters[type].outputStrength
     }))
 
     const cleanedDeniedTopics: DeniedTopic[] = deniedTopics
-      .filter((row) => row.name.trim() !== '' && row.definition.trim() !== '')
-      .map((row) => ({
+      .filter(row => row.name.trim() !== '' && row.definition.trim() !== '')
+      .map(row => ({
         name: row.name.trim(),
         definition: row.definition.trim(),
         examples: splitExamples(row.examples)
@@ -286,7 +284,7 @@ export default function GuardrailEditor({
         ? { words: wordList, managedWordLists }
         : null
 
-    const piiEntities: PiiEntity[] = piiRows.map((row) => ({
+    const piiEntities: PiiEntity[] = piiRows.map(row => ({
       type: row.type,
       action: row.action
     }))
@@ -347,7 +345,7 @@ export default function GuardrailEditor({
     <form
       className="max-w-3xl mx-auto space-y-4"
       data-testid="guardrail-editor"
-      onSubmit={(event) => void handleSubmit(event)}
+      onSubmit={event => void handleSubmit(event)}
     >
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-900">
@@ -362,7 +360,10 @@ export default function GuardrailEditor({
         <h3 className="text-base font-semibold text-gray-900 mb-3">Basics</h3>
         <div className="space-y-3">
           <div>
-            <label htmlFor="guardrail-name" className="block text-xs font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="guardrail-name"
+              className="block text-xs font-medium text-gray-700 mb-1"
+            >
               Name<span aria-hidden="true"> *</span>
             </label>
             <input
@@ -370,7 +371,7 @@ export default function GuardrailEditor({
               type="text"
               className="input-field"
               value={name}
-              onChange={(event) => setName(event.target.value)}
+              onChange={event => setName(event.target.value)}
             />
           </div>
           <div>
@@ -385,7 +386,7 @@ export default function GuardrailEditor({
               type="text"
               className="input-field"
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={event => setDescription(event.target.value)}
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -401,7 +402,7 @@ export default function GuardrailEditor({
                 className="input-field"
                 rows={2}
                 value={blockedInputMessage}
-                onChange={(event) => setBlockedInputMessage(event.target.value)}
+                onChange={event => setBlockedInputMessage(event.target.value)}
               />
             </div>
             <div>
@@ -416,7 +417,7 @@ export default function GuardrailEditor({
                 className="input-field"
                 rows={2}
                 value={blockedOutputMessage}
-                onChange={(event) => setBlockedOutputMessage(event.target.value)}
+                onChange={event => setBlockedOutputMessage(event.target.value)}
               />
             </div>
           </div>
@@ -426,7 +427,7 @@ export default function GuardrailEditor({
       <section className="card">
         <h3 className="text-base font-semibold text-gray-900 mb-3">Content filters</h3>
         <div className="space-y-3">
-          {CONTENT_FILTER_TYPES.map((type) => {
+          {CONTENT_FILTER_TYPES.map(type => {
             const filter = filters[type]
             const isPromptAttack = type === 'PROMPT_ATTACK'
             return (
@@ -441,7 +442,7 @@ export default function GuardrailEditor({
                     className="h-4 w-4 rounded border-gray-300 text-primary-600"
                     data-testid={`filter-enable-${type}`}
                     checked={filter.enabled}
-                    onChange={(event) => updateFilter(type, { enabled: event.target.checked })}
+                    onChange={event => updateFilter(type, { enabled: event.target.checked })}
                   />
                   {FILTER_LABELS[type]}
                 </label>
@@ -457,13 +458,13 @@ export default function GuardrailEditor({
                     className="select-field"
                     disabled={!filter.enabled}
                     value={filter.inputStrength}
-                    onChange={(event) =>
+                    onChange={event =>
                       updateFilter(type, {
                         inputStrength: event.target.value as GuardrailStrength
                       })
                     }
                   >
-                    {STRENGTHS.map((strength) => (
+                    {STRENGTHS.map(strength => (
                       <option key={strength} value={strength}>
                         {strength}
                       </option>
@@ -482,13 +483,13 @@ export default function GuardrailEditor({
                     className="select-field"
                     disabled={!filter.enabled || isPromptAttack}
                     value={isPromptAttack ? 'NONE' : filter.outputStrength}
-                    onChange={(event) =>
+                    onChange={event =>
                       updateFilter(type, {
                         outputStrength: event.target.value as GuardrailStrength
                       })
                     }
                   >
-                    {STRENGTHS.map((strength) => (
+                    {STRENGTHS.map(strength => (
                       <option key={strength} value={strength}>
                         {strength}
                       </option>
@@ -531,7 +532,7 @@ export default function GuardrailEditor({
                 placeholder="Name"
                 aria-label={`Denied topic ${index + 1} name`}
                 value={row.name}
-                onChange={(event) => updateDeniedTopic(index, { name: event.target.value })}
+                onChange={event => updateDeniedTopic(index, { name: event.target.value })}
               />
               <textarea
                 className="input-field"
@@ -539,9 +540,7 @@ export default function GuardrailEditor({
                 placeholder="Definition"
                 aria-label={`Denied topic ${index + 1} definition`}
                 value={row.definition}
-                onChange={(event) =>
-                  updateDeniedTopic(index, { definition: event.target.value })
-                }
+                onChange={event => updateDeniedTopic(index, { definition: event.target.value })}
               />
               <textarea
                 className="input-field"
@@ -549,7 +548,7 @@ export default function GuardrailEditor({
                 placeholder="Examples (comma or newline separated, up to 5)"
                 aria-label={`Denied topic ${index + 1} examples`}
                 value={row.examples}
-                onChange={(event) => updateDeniedTopic(index, { examples: event.target.value })}
+                onChange={event => updateDeniedTopic(index, { examples: event.target.value })}
               />
             </div>
           ))}
@@ -569,14 +568,14 @@ export default function GuardrailEditor({
           className="input-field"
           rows={4}
           value={words}
-          onChange={(event) => setWords(event.target.value)}
+          onChange={event => setWords(event.target.value)}
         />
         <label className="mt-3 flex items-center gap-2 text-sm text-gray-800">
           <input
             type="checkbox"
             className="h-4 w-4 rounded border-gray-300 text-primary-600"
             checked={managedProfanity}
-            onChange={(event) => setManagedProfanity(event.target.checked)}
+            onChange={event => setManagedProfanity(event.target.checked)}
           />
           Use the managed profanity word list
         </label>
@@ -592,21 +591,18 @@ export default function GuardrailEditor({
               data-testid={`pii-row-${index}`}
             >
               <div className="flex-1 min-w-[10rem]">
-                <label
-                  htmlFor={`pii-type-${index}`}
-                  className="block text-xs text-gray-600 mb-1"
-                >
+                <label htmlFor={`pii-type-${index}`} className="block text-xs text-gray-600 mb-1">
                   Entity type
                 </label>
                 <select
                   id={`pii-type-${index}`}
                   className="select-field"
                   value={row.type}
-                  onChange={(event) =>
+                  onChange={event =>
                     updatePiiRow(index, { type: event.target.value as PiiEntityType })
                   }
                 >
-                  {PII_ENTITY_TYPES.map((type) => (
+                  {PII_ENTITY_TYPES.map(type => (
                     <option key={type} value={type}>
                       {type}
                     </option>
@@ -614,17 +610,14 @@ export default function GuardrailEditor({
                 </select>
               </div>
               <div className="min-w-[8rem]">
-                <label
-                  htmlFor={`pii-action-${index}`}
-                  className="block text-xs text-gray-600 mb-1"
-                >
+                <label htmlFor={`pii-action-${index}`} className="block text-xs text-gray-600 mb-1">
                   Action
                 </label>
                 <select
                   id={`pii-action-${index}`}
                   className="select-field"
                   value={row.action}
-                  onChange={(event) =>
+                  onChange={event =>
                     updatePiiRow(index, {
                       action: event.target.value as 'BLOCK' | 'ANONYMIZE'
                     })
@@ -667,7 +660,7 @@ export default function GuardrailEditor({
               max={1}
               className="input-field"
               value={groundingThreshold}
-              onChange={(event) => setGroundingThreshold(event.target.value)}
+              onChange={event => setGroundingThreshold(event.target.value)}
             />
           </div>
           <div>
@@ -685,7 +678,7 @@ export default function GuardrailEditor({
               max={1}
               className="input-field"
               value={relevanceThreshold}
-              onChange={(event) => setRelevanceThreshold(event.target.value)}
+              onChange={event => setRelevanceThreshold(event.target.value)}
             />
           </div>
         </div>

@@ -59,9 +59,9 @@ interface EvalResultViewProps {
 }
 
 export default function EvalResultView({ result }: EvalResultViewProps) {
-  const metricEntries = METRIC_ORDER
-    .filter((key) => key in result.metrics)
-    .map((key) => [key, result.metrics[key]] as const)
+  const metricEntries = METRIC_ORDER.filter(key => key in result.metrics).map(
+    key => [key, result.metrics[key]] as const
+  )
 
   return (
     <section className="card" aria-labelledby="eval-result-heading" data-testid="eval-result">
@@ -123,7 +123,10 @@ export default function EvalResultView({ result }: EvalResultViewProps) {
           {metricEntries.map(([key, value]) => (
             <div key={key} className="min-w-0">
               <dt className="text-xs text-gray-500">{METRIC_LABELS[key]}</dt>
-              <dd className="text-sm font-medium text-gray-900 truncate" title={formatMetric(value)}>
+              <dd
+                className="text-sm font-medium text-gray-900 truncate"
+                title={formatMetric(value)}
+              >
                 {formatMetric(value)}
               </dd>
             </div>
@@ -137,7 +140,7 @@ export default function EvalResultView({ result }: EvalResultViewProps) {
             Failed runs ({result.failed_runs.length})
           </h4>
           <ul className="text-xs text-red-700 space-y-0.5">
-            {result.failed_runs.map((failure) => (
+            {result.failed_runs.map(failure => (
               <li key={failure.index}>
                 Run {failure.index + 1}: {describeFailure(failure.error)}
               </li>

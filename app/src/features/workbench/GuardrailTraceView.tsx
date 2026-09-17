@@ -9,7 +9,7 @@
 import { useRunStore } from '../../stores'
 
 export default function GuardrailTraceView() {
-  const guardrailTrace = useRunStore((state) => state.guardrailTrace)
+  const guardrailTrace = useRunStore(state => state.guardrailTrace)
 
   if (!guardrailTrace) return null
 

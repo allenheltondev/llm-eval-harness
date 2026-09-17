@@ -1,11 +1,8 @@
 """Simplified schema <-> Bedrock CreateGuardrail/GetGuardrail shape translation.
 
-Ports the mapping tables from ``app/src/services/guardrailSchemaTranslator.js``
-(``translateToAWSFormat`` and its per-policy helpers) plus the response
-normalization logic from ``guardrailConfigurationManager.js``'s
-``normalizeForUpdate`` (which accepts both the bare GetGuardrail response
-shape - e.g. ``topicPolicy`` - and the *Config-suffixed request shape - e.g.
-``topicPolicyConfig`` - interchangeably).
+``from_bedrock`` accepts both the bare GetGuardrail response shape (e.g.
+``topicPolicy``) and the *Config-suffixed request shape (e.g.
+``topicPolicyConfig``) interchangeably.
 
 ``to_bedrock`` produces kwargs suitable for both ``create_guardrail`` and
 ``update_guardrail`` (update additionally requires ``guardrailIdentifier``,
@@ -34,10 +31,8 @@ from evalharness.guardrails.schemas import (
     WordPolicy,
 )
 
-# Bedrock hardcodes the CLASSIC tier for topic/content policies in the
-# ported JS translator (translateTopicPolicy/translateContentPolicy always
-# set tierConfig.tierName = 'CLASSIC'); tier selection is not exposed in the
-# simplified schema, so it is fixed here rather than made configurable.
+# Tier selection is not exposed in the simplified schema, so topic/content
+# policies are fixed to the CLASSIC tier rather than made configurable.
 _TIER_CONFIG = {"tierName": "CLASSIC"}
 
 
@@ -114,8 +109,8 @@ def _content_policy_to_bedrock(policy: ContentPolicy) -> dict[str, Any]:
 
 
 def _filter_to_bedrock(f: ContentFilter) -> dict[str, Any]:
-    # AWS requirement ported from translateContentPolicy: PROMPT_ATTACK filters
-    # must have NONE output strength, enforced regardless of the configured value.
+    # AWS requirement: PROMPT_ATTACK filters must have NONE output strength,
+    # enforced regardless of the configured value.
     output_strength = (
         GuardrailStrength.NONE if f.type == ContentFilterType.PROMPT_ATTACK else f.output_strength
     )
@@ -209,8 +204,7 @@ def from_bedrock(response: dict[str, Any]) -> GuardrailConfig:
     Accepts either the bare GetGuardrail response key names (topicPolicy,
     contentPolicy, ...) or the *Config-suffixed request shape (topicPolicyConfig,
     contentPolicyConfig, ...) -- and likewise for the nested array keys
-    (topics/topicsConfig, filters/filtersConfig, ...) -- mirroring
-    guardrailConfigurationManager.js's normalizeForUpdate dual-shape handling.
+    (topics/topicsConfig, filters/filtersConfig, ...).
     """
     return GuardrailConfig(
         name=response["name"],
@@ -269,8 +263,7 @@ def _word_policy_from_bedrock(response: dict[str, Any]) -> WordPolicy | None:
         return None
 
     # input/output action are uniform across all entries in the simplified
-    # model (matching wordPolicy.input/output in the JS translator); take
-    # them from whichever entry list is populated first.
+    # model; take them from whichever entry list is populated first.
     sample = (words or managed_lists)[0]
     return WordPolicy(
         words=[w["text"] for w in words],
@@ -281,9 +274,9 @@ def _word_policy_from_bedrock(response: dict[str, Any]) -> WordPolicy | None:
 
 
 def _pii_policy_from_bedrock(response: dict[str, Any]) -> PiiPolicy | None:
-    sensitive_policy = _first(
-        response, "sensitiveInformationPolicyConfig", "sensitiveInformationPolicy"
-    ) or {}
+    sensitive_policy = (
+        _first(response, "sensitiveInformationPolicyConfig", "sensitiveInformationPolicy") or {}
+    )
     entities = _first(sensitive_policy, "piiEntitiesConfig", "piiEntities") or []
     if not entities:
         return None
@@ -299,9 +292,9 @@ def _pii_policy_from_bedrock(response: dict[str, Any]) -> PiiPolicy | None:
 
 
 def _contextual_grounding_from_bedrock(response: dict[str, Any]) -> ContextualGrounding | None:
-    grounding_policy = _first(
-        response, "contextualGroundingPolicyConfig", "contextualGroundingPolicy"
-    ) or {}
+    grounding_policy = (
+        _first(response, "contextualGroundingPolicyConfig", "contextualGroundingPolicy") or {}
+    )
     filters = _first(grounding_policy, "filtersConfig", "filters") or []
     if not filters:
         return None

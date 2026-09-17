@@ -7,7 +7,7 @@ const listMock = vi.fn()
 const getMock = vi.fn()
 const removeMock = vi.fn()
 
-vi.mock('../../api', async (importOriginal) => {
+vi.mock('../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../api')>()
   return {
     ...actual,
@@ -33,8 +33,6 @@ function summary(id: string, overrides: Partial<RunSummary> = {}): RunSummary {
     id,
     ts: '2026-08-11T18:00:00Z',
     model_id: 'anthropic.claude-3-sonnet',
-    scenario_id: 'shipping',
-    dataset_id: null,
     status: 'completed',
     metrics: { total_tokens: 100 },
     ...overrides
@@ -60,7 +58,7 @@ describe('paging', () => {
 
     expect(listMock).toHaveBeenCalledWith({ limit: 25 })
     const state = useHistoryStore.getState()
-    expect(state.items.map((item) => item.id)).toEqual(['r1', 'r2'])
+    expect(state.items.map(item => item.id)).toEqual(['r1', 'r2'])
     expect(state.next_cursor).toBe('cursor-1')
     expect(state.loading).toBe(false)
     expect(state.loaded).toBe(true)
@@ -79,7 +77,7 @@ describe('paging', () => {
     expect(listMock).toHaveBeenLastCalledWith({ limit: 25, cursor: 'cursor-1' })
 
     const state = useHistoryStore.getState()
-    expect(state.items.map((item) => item.id)).toEqual(['r1', 'r2', 'r3'])
+    expect(state.items.map(item => item.id)).toEqual(['r1', 'r2', 'r3'])
     expect(state.next_cursor).toBeNull()
     expect(state.loaded).toBe(true)
     expect(selectHasMore(state)).toBe(false)
@@ -149,7 +147,7 @@ describe('filters', () => {
     expect(listMock).toHaveBeenLastCalledWith({ limit: 25, status: 'error' })
     const state = useHistoryStore.getState()
     expect(state.filters).toEqual({ status: 'error' })
-    expect(state.items.map((item) => item.id)).toEqual(['r9'])
+    expect(state.items.map(item => item.id)).toEqual(['r9'])
     // the old cursor was dropped, not carried into the new query
     expect(state.next_cursor).toBeNull()
     expect(selectHasFilters(state)).toBe(true)
@@ -159,24 +157,22 @@ describe('filters', () => {
     listMock.mockResolvedValue(page([], null))
 
     await useHistoryStore.getState().setFilters({ model_id: 'm1' })
-    await useHistoryStore.getState().setFilters({ scenario_id: 'shipping' })
+    await useHistoryStore.getState().setFilters({ status: 'completed' })
     expect(useHistoryStore.getState().filters).toEqual({
       model_id: 'm1',
-      scenario_id: 'shipping'
+      status: 'completed'
     })
 
     await useHistoryStore.getState().setFilters({ model_id: null })
-    expect(useHistoryStore.getState().filters).toEqual({ scenario_id: 'shipping' })
-    expect(listMock).toHaveBeenLastCalledWith({ limit: 25, scenario_id: 'shipping' })
+    expect(useHistoryStore.getState().filters).toEqual({ status: 'completed' })
+    expect(listMock).toHaveBeenLastCalledWith({ limit: 25, status: 'completed' })
   })
 
   it('listParams omits each filter field individually when falsy, and includes it when set', () => {
     expect(listParams({}, null, 25)).toEqual({ limit: 25 })
     expect(listParams({ model_id: '' }, null, 25)).toEqual({ limit: 25 })
-    expect(listParams({ scenario_id: '' }, null, 25)).toEqual({ limit: 25 })
     expect(listParams({ status: '' }, null, 25)).toEqual({ limit: 25 })
     expect(listParams({ model_id: 'nova' }, null, 25)).toEqual({ limit: 25, model_id: 'nova' })
-    expect(listParams({ scenario_id: 's1' }, null, 25)).toEqual({ limit: 25, scenario_id: 's1' })
     expect(listParams({ status: 'completed' }, null, 25)).toEqual({
       limit: 25,
       status: 'completed'
@@ -188,16 +184,16 @@ describe('filters', () => {
   it('setFilters clears a key set to undefined or to an empty string, same as null', async () => {
     listMock.mockResolvedValue(page([], null))
 
-    await useHistoryStore.getState().setFilters({ model_id: 'm1', scenario_id: 's1', status: 'error' })
+    await useHistoryStore.getState().setFilters({ model_id: 'm1', status: 'error' })
     await useHistoryStore.getState().setFilters({ model_id: undefined })
     // `toEqual` ignores undefined-valued keys, so assert the key is actually
     // gone (not merely set to undefined) via `toStrictEqual`/key presence.
-    expect(useHistoryStore.getState().filters).toStrictEqual({ scenario_id: 's1', status: 'error' })
+    expect(useHistoryStore.getState().filters).toStrictEqual({ status: 'error' })
     expect(useHistoryStore.getState().filters).not.toHaveProperty('model_id')
 
-    await useHistoryStore.getState().setFilters({ scenario_id: '' })
-    expect(useHistoryStore.getState().filters).toStrictEqual({ status: 'error' })
-    expect(useHistoryStore.getState().filters).not.toHaveProperty('scenario_id')
+    await useHistoryStore.getState().setFilters({ status: '' })
+    expect(useHistoryStore.getState().filters).toStrictEqual({})
+    expect(useHistoryStore.getState().filters).not.toHaveProperty('status')
   })
 
   it('setFilters resets items to empty and loaded to false synchronously, before loadFirstPage resolves', async () => {
@@ -207,7 +203,10 @@ describe('filters', () => {
 
     let resolveList!: (p: ReturnType<typeof page>) => void
     listMock.mockImplementationOnce(
-      () => new Promise((resolve) => { resolveList = resolve })
+      () =>
+        new Promise(resolve => {
+          resolveList = resolve
+        })
     )
 
     const pending = useHistoryStore.getState().setFilters({ status: 'error' })
@@ -261,7 +260,10 @@ describe('in-flight loading state', () => {
     useHistoryStore.setState({ error: { code: 'stale', message: 'stale' } })
     let resolveList!: (p: ReturnType<typeof page>) => void
     listMock.mockImplementationOnce(
-      () => new Promise((resolve) => { resolveList = resolve })
+      () =>
+        new Promise(resolve => {
+          resolveList = resolve
+        })
     )
 
     const pending = useHistoryStore.getState().loadFirstPage()
@@ -280,7 +282,10 @@ describe('in-flight loading state', () => {
 
     let resolveList!: (p: ReturnType<typeof page>) => void
     listMock.mockImplementationOnce(
-      () => new Promise((resolve) => { resolveList = resolve })
+      () =>
+        new Promise(resolve => {
+          resolveList = resolve
+        })
     )
     const pending = useHistoryStore.getState().loadMore()
     expect(useHistoryStore.getState().loading).toBe(true)
@@ -368,11 +373,11 @@ describe('detail cache and removal', () => {
 
     expect(removeMock).toHaveBeenCalledWith('r1')
     const state = useHistoryStore.getState()
-    expect(state.items.map((item) => item.id)).toEqual(['r2'])
+    expect(state.items.map(item => item.id)).toEqual(['r2'])
     expect(state.details.r1).toBeUndefined()
   })
 
-  it('remove() drops only the targeted run\'s cached detail, keeping another run\'s detail cache', async () => {
+  it("remove() drops only the targeted run's cached detail, keeping another run's detail cache", async () => {
     listMock.mockResolvedValueOnce(page([summary('r1'), summary('r2')], null))
     getMock.mockImplementation(async (id: string) => ({ ...detail, id }))
     removeMock.mockResolvedValue(undefined)
@@ -409,7 +414,7 @@ describe('detail cache and removal', () => {
     await useHistoryStore.getState().remove('r1')
 
     const state = useHistoryStore.getState()
-    expect(state.items.map((item) => item.id)).toEqual(['r1'])
+    expect(state.items.map(item => item.id)).toEqual(['r1'])
     expect(state.error).toEqual({ code: 'not_found', message: 'gone' })
   })
 })

@@ -31,19 +31,7 @@ class Settings(BaseSettings):
     )
 
     aws_region: str = "us-east-1"
-    config_api_url: str | None = None
-    config_api_key: str | None = None
     db_path: str = "./data/evalharness.db"
-    #: Name of the deployed ``api/template.yaml`` stack, used to auto-discover
-    #: ``config_api_url``/``config_api_key``/``eval_table``/``eval_runtime_arn``
-    #: from its outputs when they are not set explicitly (see
-    #: ``evalharness.runtime_config``). Change this if you deployed the stack
-    #: under a different name than the Makefile default.
-    stack_name: str = "llm-eval-harness"
-    #: Set false to disable CloudFormation-stack auto-discovery entirely -- no
-    #: ``cloudformation``/``apigateway`` calls are ever made, and the four
-    #: settings above behave exactly as before (env-or-unconfigured).
-    stack_discovery: bool = True
     cors_origins: list[str] = ["http://localhost:3000"]
     fake_model: bool = False
 
@@ -68,8 +56,11 @@ class Settings(BaseSettings):
 
     # -- the cloud evaluation lane (docs/cloud-evals.md) -------------------- #
     #: AgentCore Runtime ARN of the evaluation worker. None = lane unavailable.
+    #: The deployed template injects it; locally, copy it from the stack's
+    #: ``EvalWorkerRuntimeArn`` output.
     eval_runtime_arn: str | None = None
-    #: DynamoDB table holding cloud evaluation state (the config-store table).
+    #: DynamoDB table holding cloud evaluation state and deployed history
+    #: (the stack's ``TableName`` output). None = lane unavailable.
     eval_table: str | None = None
 
     # -- deployment shape (docs/serverless-deploy.md) ----------------------- #
@@ -91,9 +82,7 @@ class Settings(BaseSettings):
     #: ``aud``/``client_id`` every accepted token must carry.
     auth_client_id: str | None = None
 
-    @field_validator(
-        "anthropic_api_key", "openai_api_key", "auth_user_pool_id", "auth_client_id"
-    )
+    @field_validator("anthropic_api_key", "openai_api_key", "auth_user_pool_id", "auth_client_id")
     @classmethod
     def _blank_key_is_unset(cls, value: str | None) -> str | None:
         """``FOO_API_KEY=`` in a shell profile means unset, not "empty key"."""

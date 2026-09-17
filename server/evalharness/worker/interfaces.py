@@ -153,8 +153,7 @@ def validate_payload(payload: Any) -> tuple[str, dict[str, Any]]:
     evaluation_id = payload.get("evaluation_id")
     if not isinstance(evaluation_id, str) or not _EVALUATION_ID_RE.match(evaluation_id):
         raise InvalidPayload(
-            "evaluation_id must be a non-empty identifier matching "
-            f"{_EVALUATION_ID_RE.pattern!r}"
+            f"evaluation_id must be a non-empty identifier matching {_EVALUATION_ID_RE.pattern!r}"
         )
 
     request = payload.get("request")
@@ -205,9 +204,7 @@ def load_seam() -> Callable[..., Any]:
     try:
         from evalharness.evals import engine
     except ImportError as exc:  # pragma: no cover - engine is vendored in the artifact
-        raise EvalEngineUnavailable(
-            f"evalharness.evals.engine is not importable: {exc}"
-        ) from exc
+        raise EvalEngineUnavailable(f"evalharness.evals.engine is not importable: {exc}") from exc
 
     seam = getattr(engine, SEAM_FUNCTION_NAME, None)
     if not callable(seam):

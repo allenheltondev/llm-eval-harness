@@ -1,0 +1,224 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: Force backend + frontend deploy regardless of detected changes
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: llm-eval-harness-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app_changed: ${{ steps.detect.outputs.app_changed }}
+      server_changed: ${{ steps.detect.outputs.server_changed }}
+      infra_changed: ${{ steps.detect.outputs.infra_changed }}
+      backend_changed: ${{ steps.detect.outputs.backend_changed }}
+      frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
+      deploy_needed: ${{ steps.detect.outputs.deploy_needed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Detect changes
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          emit_all() {
+            for key in app_changed server_changed infra_changed backend_changed frontend_changed deploy_needed; do
+              echo "${key}=$1" >> "$GITHUB_OUTPUT"
+            done
+          }
+
+          # workflow_dispatch: honour the force_deploy input directly.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            emit_all "${{ inputs.force_deploy }}"
+            exit 0
+          fi
+
+          BASE_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-parse "${HEAD_SHA}^" 2>/dev/null || true)"
+          fi
+
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            emit_all true
+            exit 0
+          fi
+
+          # `git log --name-only` over BASE..HEAD rather than `git diff BASE HEAD`:
+          # the diff form has been seen to return empty on the runner for valid
+          # SHA pairs around merge commits; the log form lists files touched by
+          # every commit in the range.
+          changed_files="$(git log --name-only --pretty=format: "${BASE_SHA}..${HEAD_SHA}" 2>/dev/null | sort -u | grep -v '^$' || true)"
+
+          # Fail open: skipping a real change is worse than a no-op deploy.
+          if [[ -z "${changed_files}" && "${BASE_SHA}" != "${HEAD_SHA}" ]]; then
+            echo "WARNING: no files detected between ${BASE_SHA}..${HEAD_SHA}; forcing everything" >&2
+            emit_all true
+            exit 0
+          fi
+
+          app_changed=false
+          server_changed=false
+          infra_changed=false
+
+          while IFS= read -r file; do
+            [[ -z "${file}" ]] && continue
+            case "${file}" in
+              app/*) app_changed=true ;;
+            esac
+            case "${file}" in
+              server/*|scripts/package-server.sh|scripts/package-eval-worker.sh) server_changed=true ;;
+            esac
+            case "${file}" in
+              infra/*|Makefile|.github/workflows/*) infra_changed=true ;;
+            esac
+          done <<< "${changed_files}"
+
+          # The backend deploy ships the server and worker zips plus the
+          # template; the frontend deploy builds the SPA against the stack.
+          backend_changed=false
+          if [[ "${server_changed}" == "true" || "${infra_changed}" == "true" ]]; then backend_changed=true; fi
+          frontend_changed="${app_changed}"
+          deploy_needed=false
+          if [[ "${backend_changed}" == "true" || "${frontend_changed}" == "true" ]]; then deploy_needed=true; fi
+
+          echo "app_changed=${app_changed}" >> "$GITHUB_OUTPUT"
+          echo "server_changed=${server_changed}" >> "$GITHUB_OUTPUT"
+          echo "infra_changed=${infra_changed}" >> "$GITHUB_OUTPUT"
+          echo "backend_changed=${backend_changed}" >> "$GITHUB_OUTPUT"
+          echo "frontend_changed=${frontend_changed}" >> "$GITHUB_OUTPUT"
+          echo "deploy_needed=${deploy_needed}" >> "$GITHUB_OUTPUT"
+
+  predeploy-validations:
+    name: Pre-deploy validations
+    needs: changes
+    if: needs.changes.outputs.deploy_needed == 'true'
+    uses: ./.github/workflows/pre-deploy-validation.yaml
+    with:
+      run_app: ${{ needs.changes.outputs.app_changed == 'true' }}
+      run_server: ${{ needs.changes.outputs.server_changed == 'true' }}
+      run_infra: ${{ needs.changes.outputs.infra_changed == 'true' }}
+      run_e2e: ${{ needs.changes.outputs.app_changed == 'true' || needs.changes.outputs.server_changed == 'true' }}
+
+  deploy-backend:
+    name: Deploy backend
+    needs: [changes, predeploy-validations]
+    if: |
+      
+      needs.changes.outputs.backend_changed == 'true'
+    environment: Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+      - uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@6.2.2
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-LlmEvalHarness-ProductionDeploy
+          aws-region: us-east-1
+      # The same target a developer runs locally: one deploy definition.
+      - name: Package and deploy the stack
+        run: make deploy-backend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1
+
+      - name: Diagnose failed deploy
+        if: ${{ failure() }}
+        run: |
+          STACK=llm-eval-harness
+          echo "Deploy failed. Dumping CloudFormation diagnostics for ${STACK}."
+          echo "==== describe-stacks ===="
+          aws cloudformation describe-stacks --stack-name "${STACK}" || true
+          echo "==== describe-stack-events (latest 50) ===="
+          aws cloudformation describe-stack-events --stack-name "${STACK}" \
+            --query "StackEvents[:50].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]" \
+            --output table || true
+          echo "==== list-change-sets (latest 5) ===="
+          aws cloudformation list-change-sets --stack-name "${STACK}" \
+            --query "sort_by(Summaries,&CreationTime)[-5:].[ChangeSetName,Status,ExecutionStatus,StatusReason,CreationTime]" \
+            --output table || true
+          LATEST=$(aws cloudformation list-change-sets --stack-name "${STACK}" \
+            --query "sort_by(Summaries,&CreationTime)[-1].ChangeSetName" --output text 2>/dev/null || true)
+          if [ -n "$LATEST" ] && [ "$LATEST" != "None" ]; then
+            echo "==== describe-change-set ($LATEST) ===="
+            aws cloudformation describe-change-set --stack-name "${STACK}" --change-set-name "$LATEST" || true
+          fi
+
+  deploy-frontend:
+    name: Deploy frontend
+    needs: [changes, predeploy-validations, deploy-backend]
+    if: |
+      always() &&
+      github.actor != 'dependabot[bot]' &&
+      
+      needs.predeploy-validations.result == 'success' &&
+      (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') &&
+      (needs.changes.outputs.frontend_changed == 'true' || needs.changes.outputs.backend_changed == 'true')
+    environment:
+      name: Production
+      # Surfaces on the PR / deployment as the link reviewers click through to.
+      url: ${{ steps.deploy.outputs.app_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@6.2.2
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-LlmEvalHarness-ProductionDeploy
+          aws-region: us-east-1
+      - name: Build and publish the SPA
+        id: deploy
+        run: |
+          set -euo pipefail
+          make deploy-frontend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1 | tee deploy.log
+          echo "app_url=$(awk '/^Deployed: /{print $2}' deploy.log | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Write deployment summary
+        run: |
+          {
+            echo "## LLM Eval Harness production deploy"
+            echo
+            echo "- **App URL:** ${{ steps.deploy.outputs.app_url }}"
+            echo "- **Stack:** \`llm-eval-harness\`"
+            echo "- **Region:** \`us-east-1\`"
+            echo "- **Commit:** \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

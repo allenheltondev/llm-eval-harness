@@ -51,7 +51,9 @@ describe('EvalResultView', () => {
   })
 
   it('colors the grade green for A and red for F, and handles a null grade/score', () => {
-    const { rerender } = render(<EvalResultView result={{ ...baseResult, grade: 'A', score: 97 }} />)
+    const { rerender } = render(
+      <EvalResultView result={{ ...baseResult, grade: 'A', score: 97 }} />
+    )
     expect(screen.getByTestId('eval-grade')).toHaveClass('text-green-600')
 
     rerender(<EvalResultView result={{ ...baseResult, grade: 'F', score: 12 }} />)

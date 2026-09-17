@@ -15,7 +15,6 @@ from sqlmodel import Session
 from strands.models.openai import OpenAIModel
 
 from evalharness.config import Settings
-from evalharness.configstore.client import ConfigStoreClient
 from evalharness.engine.fake_model import FakeModel, Text
 from evalharness.engine.schemas import RunRequest
 from evalharness.errors import BadRequestError, register_exception_handlers
@@ -25,7 +24,6 @@ from evalharness.evals.judge import FakeJudgeModel, build_judge_model, call_judg
 from evalharness.evals.outcomes import RunOutcome
 from evalharness.evals.schemas import EvaluationRequest, GraderConfig
 from evalharness.routers import runs
-from evalharness.routers.scenarios import get_config_store_client
 from evalharness.store import db, history
 from evalharness.worker import interfaces
 
@@ -51,9 +49,6 @@ def app(initialized_db) -> FastAPI:
     application.include_router(runs.router, prefix="/api/v1")
     application.dependency_overrides[runs.get_model_factory] = lambda: (
         lambda _request: FakeModel(script=[Text("hi")])
-    )
-    application.dependency_overrides[get_config_store_client] = lambda: ConfigStoreClient(
-        base_url="https://configstore.test", api_key="test-api-key"
     )
     return application
 

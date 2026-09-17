@@ -31,11 +31,11 @@ export default function VersionsPanel({
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(true)
 
-  const versions = useGuardrailStore((state) => state.versions[guardrailId]) ?? EMPTY_VERSIONS
-  const loadVersions = useGuardrailStore((state) => state.loadVersions)
-  const publishVersion = useGuardrailStore((state) => state.publishVersion)
-  const saving = useGuardrailStore((state) => state.saving)
-  const saveError = useGuardrailStore((state) => state.saveError)
+  const versions = useGuardrailStore(state => state.versions[guardrailId]) ?? EMPTY_VERSIONS
+  const loadVersions = useGuardrailStore(state => state.loadVersions)
+  const publishVersion = useGuardrailStore(state => state.publishVersion)
+  const saving = useGuardrailStore(state => state.saving)
+  const saveError = useGuardrailStore(state => state.saveError)
 
   useEffect(() => {
     let cancelled = false
@@ -69,9 +69,7 @@ export default function VersionsPanel({
         </button>
       </div>
 
-      {loading && (
-        <LoadingSpinner text="Loading versions…" />
-      )}
+      {loading && <LoadingSpinner text="Loading versions…" />}
 
       {!loading && versions.length === 0 && (
         <p className="text-sm text-gray-600" data-testid="versions-empty">
@@ -81,7 +79,7 @@ export default function VersionsPanel({
 
       {!loading && versions.length > 0 && (
         <ul className="divide-y divide-gray-100" data-testid="versions-list">
-          {versions.map((version) => (
+          {versions.map(version => (
             <li key={version.version} className="py-2 flex items-center justify-between">
               <div>
                 <span className="text-sm font-medium text-gray-900">
@@ -110,7 +108,7 @@ export default function VersionsPanel({
               type="text"
               className="input-field"
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={event => setDescription(event.target.value)}
               placeholder="What changed in this version?"
             />
             <div className="flex gap-2">

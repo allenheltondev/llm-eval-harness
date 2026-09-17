@@ -1,15 +1,10 @@
-"""Grading prompts, ported from the legacy JS grader, plus the A--F bands.
+"""Grading prompts and the A--F bands.
 
-Source of the substance: ``app/src/services/graderService.js``
-(``GRADER_SYSTEM_PROMPT``). The legacy grader handed *all* N responses to one
-Nova Pro call and asked for a single JSON blob. Here the same criteria are
-expressed as a ``strands_evals`` judge: the priority order, the tool-usage
-emphasis and the A--F bands are preserved verbatim in substance, but each run is
-judged against the **modal** (most common) run of the batch, which is what turns
+The criteria are expressed as a ``strands_evals`` judge: each run is judged
+against the **modal** (most common) run of the batch, which is what turns
 "how deterministic was this?" into something a per-case LLM judge can answer.
 
-Two knobs reach the judge, and both are honoured (the legacy code accepted a
-custom grader prompt and then silently dropped it):
+Two knobs reach the judge, and both are honoured:
 
 ``system_prompt``
     ``grader.system_prompt`` from the request, else
@@ -137,12 +132,12 @@ Pass the test when the score is 0.70 or above."""
 # Bands
 # --------------------------------------------------------------------------- #
 
-# Legacy bands (graderService.js): A >90, B 70-90, C 50-70, D 30-50, F <30.
+# Bands: A >90, B 70-90, C 50-70, D 30-50, F <30.
 GRADE_BANDS: tuple[tuple[int, str], ...] = ((90, "A"), (70, "B"), (50, "C"), (30, "D"))
 
 
 def score_to_grade(score: float) -> str:
-    """Map a 0-100 score onto the legacy A--F determinism bands."""
+    """Map a 0-100 score onto the A--F determinism bands."""
     for threshold, grade in GRADE_BANDS:
         if score >= threshold:
             return grade

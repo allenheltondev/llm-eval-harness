@@ -6,8 +6,8 @@ document deliberately left open: **how the worker is packaged, how it is
 invoked, and what about that is proven versus assumed.**
 
 Everything here concerns `server/evalharness/worker/`, the
-`AWS::BedrockAgentCore::Runtime` resource in `api/template.yaml`,
-`scripts/package-eval-worker.sh`, and `make deploy-worker`.
+`AWS::BedrockAgentCore::Runtime` resource in `infra/template.yaml`,
+`scripts/package-eval-worker.sh`, and `make deploy-backend`.
 
 ## Where the facts came from
 
@@ -60,9 +60,9 @@ real fork in the road, and the zip side wins on every axis that matters here:
   path differs only in the `Runtime` enum value and the entry point's file
   extension — `AgentManagedRuntimeType` accepts `PYTHON_3_10`, `PYTHON_3_11`,
   `PYTHON_3_12`, `PYTHON_3_13`, `PYTHON_3_14` and `NODE_22` **[model]**.
-- **This repository has no container toolchain.** `api/` builds Node Lambdas
-  with esbuild; there is no Dockerfile, no buildx, no ECR repository, and no CI
-  step that could produce a cross-architecture arm64 image. Adding one to ship a
+- **This repository has no container toolchain.** There is no Dockerfile, no
+  buildx, no ECR repository, and no CI step that could produce a
+  cross-architecture arm64 image. Adding one to ship a
   pure-Python worker would be the largest single piece of new machinery in the
   change.
 - **`uv` already does the hard part.** The one genuinely awkward requirement —
@@ -247,7 +247,7 @@ binding; if it ever became so, `LifecycleConfiguration.maxLifetime` raises it to
 configure — IAM (SigV4) is what you get when the property is absent, and a
 runtime is JWT- *or* IAM-authorized, never both **[rsc]**.
 
-`api/template.yaml` therefore omits `AuthorizerConfiguration` entirely. That is
+`infra/template.yaml` therefore omits `AuthorizerConfiguration` entirely. That is
 the right choice here: the only caller is the FastAPI server, which already
 holds AWS credentials, and unlike rsc-core there is no browser opening a socket
 directly to the runtime. The server needs `bedrock-agentcore:InvokeAgentRuntime`
@@ -276,48 +276,36 @@ The trust policy is `bedrock-agentcore.amazonaws.com` with both
 
 ## Deploying
 
-The worker is **opt-in**. `EvalWorkerArtifactKey` defaults to `''` and the
-`DeployEvalWorker` condition gates the runtime and its role, so the config-store
-stack deploys exactly as it did before.
+`EvalWorkerArtifactKey` defaults to `''` and the `DeployEvalWorker` condition
+gates the runtime and its role, so the template still stands up without the
+worker; in practice `make deploy-backend` always ships it:
 
 ```
-make deploy-worker
+make deploy-backend
 ```
 
-does the whole thing: bootstraps the stack if the artifact bucket does not exist
-yet, builds the artifact, uploads it under its hashed key, deploys with
-`EvalWorkerArtifactKey` set, and prints the runtime ARN with the two environment
-variables the server needs.
+bootstraps the stack if the artifact bucket does not exist yet, builds the
+worker and server artifacts, uploads both under their hashed keys, deploys with
+both keys set, and prints the runtime ARN with the two environment variables a
+local server needs to use the deployed lane.
 
 ```
 EVALHARNESS_EVAL_RUNTIME_ARN=arn:aws:bedrock-agentcore:…:runtime/evalharness_eval_worker-…
-EVALHARNESS_EVAL_TABLE=llm-eval-harness-ScenariosTable-…
+EVALHARNESS_EVAL_TABLE=llm-eval-harness-EvalTable-…
 ```
 
 `make package-eval-worker` builds the artifact alone and makes no AWS calls.
 
 ### One sharp edge
 
-`deploy-worker` is a **superset** of `deploy-api` — same stack, plus the
-runtime. Once the worker exists, keep using `deploy-worker`: a bare
-`make deploy-api` passes no `EvalWorkerArtifactKey`, the parameter falls back to
-its empty default, and CloudFormation deletes the runtime. This is inherent to
+Once the worker exists, deploy through `make deploy-backend` (it passes both
+artifact keys every time): a bare `sam deploy` passes no
+`EvalWorkerArtifactKey`, the parameter falls back to its empty default, and
+CloudFormation deletes the runtime. This is inherent to
 plain CloudFormation parameters with defaults; the alternatives (SSM-backed
-parameters, or persisting the value into `api/samconfig.toml`) both add moving
+parameters, or persisting the value into `infra/samconfig.toml`) both add moving
 parts, so the mitigation is a loud comment on the parameter, in the Makefile,
 and here.
-
-### Config store access
-
-If evaluations reference stored scenarios/prompts/datasets, the worker needs the
-config store's API key. CloudFormation cannot read an
-`AWS::ApiGateway::ApiKey`'s value, so it is passed in:
-
-```
-EVAL_WORKER_CONFIG_API_KEY=$(aws apigateway get-api-key \
-    --api-key <ApiKeyId output> --include-value --query value --output text) \
-  make deploy-worker
-```
 
 ---
 
@@ -392,10 +380,28 @@ ignore it.
 
 ---
 
-## Open risks
+## What the first deploy proved
 
-Mirroring rsc-core's "verify on first deploy" list. Everything here is
-unverifiable without an AWS account, and this branch has none.
+The worker deployed for the first time on 2026-09-17 **[measured]**:
+`AWS::BedrockAgentCore::Runtime` created cleanly from the CodeZip artifact,
+and both outputs resolved —
+`arn:aws:bedrock-agentcore:us-east-1:<account>:runtime/evalharness_eval_worker-<id>`
+and the matching runtime id. That settles two items below:
+
+- **`!GetAtt EvalWorkerRuntime.AgentRuntimeArn` / `.AgentRuntimeId`.** Both
+  attribute names are real; the `!Sub`-over-`!Ref` fallback is not needed.
+- **The `s3:GetObject` grant's timing.** AgentCore read the artifact at create
+  time with no IAM-propagation flake on the first attempt.
+
+Because AgentCore reads the zip when the runtime is created, this is also
+mild evidence that the artifact is *well-formed*. It is not evidence that
+`EntryPoint: agentcore_app.py` loads correctly or that the shim runs — the
+runtime has never been invoked. Everything under "Runtime behaviour" below
+still needs a real evaluation.
+
+## Open risks — still unverified
+
+Mirroring rsc-core's "verify on first deploy" list.
 
 **Packaging and boot**
 

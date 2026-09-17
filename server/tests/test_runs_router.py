@@ -86,8 +86,6 @@ async def test_list_runs_page_envelope_and_summary_shape(client, make_run):
             "id",
             "ts",
             "model_id",
-            "scenario_id",
-            "dataset_id",
             "status",
             "metrics",
         }

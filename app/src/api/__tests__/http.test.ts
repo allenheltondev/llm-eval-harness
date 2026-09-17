@@ -124,7 +124,7 @@ describe('request', () => {
   it('does not clobber a caller-supplied content-type header', async () => {
     const spy = mockFetch(jsonResponse({ ok: true }))
 
-    await request('POST', '/scenarios', {
+    await request('POST', '/guardrails', {
       body: { a: 1 },
       headers: { 'content-type': 'application/merge-patch+json' }
     })

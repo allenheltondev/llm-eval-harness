@@ -29,7 +29,7 @@ const fixtureNdjson = readFileSync(
 
 const streamMock = vi.fn()
 
-vi.mock('../../api', async (importOriginal) => {
+vi.mock('../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../api')>()
   return {
     ...actual,
@@ -43,8 +43,6 @@ vi.mock('../../api', async (importOriginal) => {
 const { StreamAbortedError } = await import('../../api')
 const {
   useRunStore,
-  robotMoodFor,
-  selectRobotMood,
   selectIsRunning,
   selectHasOutput,
   elapsedMs,
@@ -59,9 +57,9 @@ const { useHistoryStore } = await import('../historyStore')
 function fixtureEvents(): RunStreamEvent[] {
   return fixtureNdjson
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-    .map((line) => JSON.parse(line) as RunStreamEvent)
+    .map(line => line.trim())
+    .filter(line => line !== '')
+    .map(line => JSON.parse(line) as RunStreamEvent)
 }
 
 beforeEach(() => {
@@ -72,7 +70,7 @@ beforeEach(() => {
 
 describe('fixture replay through handleEvent', () => {
   it('parses the fixture into the expected event sequence', () => {
-    expect(fixtureEvents().map((event) => event.type)).toEqual([
+    expect(fixtureEvents().map(event => event.type)).toEqual([
       'run_start',
       'text_delta',
       'text_delta',
@@ -171,12 +169,12 @@ describe('fixture replay through handleEvent', () => {
     handleEvent({ type: 'tool_input_delta', tool_use_id: 'a', json: '{"y":2}' })
 
     const toolEvents = useRunStore.getState().toolEvents
-    expect(toolEvents.map((entry) => entry.tool_use_id)).toEqual(['a', 'b'])
+    expect(toolEvents.map(entry => entry.tool_use_id)).toEqual(['a', 'b'])
     expect(toolEvents[0].inputJson).toBe('{"y":2}')
     expect(toolEvents[1].inputJson).toBe('{"x":1}')
   })
 
-  it('concatenates onto the correct entry\'s prior inputJson, not the first tool event in the list', () => {
+  it("concatenates onto the correct entry's prior inputJson, not the first tool event in the list", () => {
     const { handleEvent } = useRunStore.getState()
     handleEvent({ type: 'tool_use_start', tool_use_id: 'a', name: 'first' })
     handleEvent({ type: 'tool_use_start', tool_use_id: 'b', name: 'second' })
@@ -186,10 +184,10 @@ describe('fixture replay through handleEvent', () => {
     handleEvent({ type: 'tool_input_delta', tool_use_id: 'b', json: 'BBB' })
 
     const toolEvents = useRunStore.getState().toolEvents
-    expect(toolEvents.find((e) => e.tool_use_id === 'a')?.inputJson).toBe('AAA')
+    expect(toolEvents.find(e => e.tool_use_id === 'a')?.inputJson).toBe('AAA')
     // If the lookup ignored tool_use_id and grabbed the first entry's stale
     // inputJson, this would wrongly read 'AAABBB'.
-    expect(toolEvents.find((e) => e.tool_use_id === 'b')?.inputJson).toBe('BBB')
+    expect(toolEvents.find(e => e.tool_use_id === 'b')?.inputJson).toBe('BBB')
   })
 
   it('collects messages and the guardrail trace', () => {
@@ -206,57 +204,6 @@ describe('fixture replay through handleEvent', () => {
     expect(useHistoryStore.getState().stale).toBe(false)
     for (const event of fixtureEvents()) useRunStore.getState().handleEvent(event)
     expect(useHistoryStore.getState().stale).toBe(true)
-  })
-})
-
-describe('robot mood', () => {
-  it('maps every phase', () => {
-    expect(robotMoodFor('idle')).toBe('idle')
-    expect(robotMoodFor('starting')).toBe('thinking')
-    expect(robotMoodFor('streaming')).toBe('talking')
-    expect(robotMoodFor('completed')).toBe('idle')
-    expect(robotMoodFor('cancelled')).toBe('idle')
-    expect(robotMoodFor('error')).toBe('error')
-  })
-
-  it('transitions idle -> thinking -> talking -> idle across the fixture', () => {
-    const moods: string[] = [selectRobotMood(useRunStore.getState())]
-    for (const event of fixtureEvents()) {
-      useRunStore.getState().handleEvent(event)
-      moods.push(selectRobotMood(useRunStore.getState()))
-    }
-
-    // one entry per event, plus the initial mood
-    expect(moods).toEqual([
-      'idle', // before anything
-      'thinking', // run_start
-      'talking', // text_delta
-      'talking',
-      'talking',
-      'talking', // tool_use_start
-      'talking', // tool_input_delta
-      'talking', // tool_result
-      'talking', // metrics
-      'idle' // run_complete
-    ])
-  })
-
-  it('goes to error on an in-band error event', () => {
-    const { handleEvent } = useRunStore.getState()
-    handleEvent({
-      type: 'run_start',
-      run_id: 'r1',
-      ts: '2026-08-11T18:04:11Z',
-      model_id: 'm'
-    })
-    handleEvent({ type: 'error', code: 'upstream_error', message: 'throttled', retryable: true })
-
-    expect(useRunStore.getState().status).toBe('error')
-    expect(useRunStore.getState().error).toEqual({
-      code: 'upstream_error',
-      message: 'throttled'
-    })
-    expect(selectRobotMood(useRunStore.getState())).toBe('error')
   })
 })
 
@@ -323,7 +270,6 @@ describe('startRun', () => {
     expect(state.status).toBe('cancelled')
     expect(state.error).toBeNull()
     expect(state.endedAt).not.toBeNull()
-    expect(selectRobotMood(state)).toBe('idle')
     // a cancelled run is still persisted server-side
     expect(useHistoryStore.getState().stale).toBe(true)
   })
@@ -375,7 +321,10 @@ describe('startRun', () => {
     // clear the controller the second call just installed.
     let releaseFirst!: () => void
     streamMock.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseFirst = resolve })
+      () =>
+        new Promise<void>(resolve => {
+          releaseFirst = resolve
+        })
     )
     const firstPending = useRunStore.getState().startRun({ model_id: 'm', user_prompt: 'first' })
 

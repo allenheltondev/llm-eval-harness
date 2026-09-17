@@ -2,9 +2,9 @@
  * The single active run: lifecycle, streamed text, tool calls, metrics.
  *
  * Everything the Workbench renders while a run is in flight lives here — the
- * output pane, the reasoning pane, the tool timeline, the metrics strip and the
- * robot mascot all subscribe to slices of this one store, so a single
- * `handleEvent` call updates all of them in one notification.
+ * output pane, the reasoning pane, the tool timeline and the metrics strip all
+ * subscribe to slices of this one store, so a single `handleEvent` call
+ * updates all of them in one notification.
  *
  * `handleEvent` is written to be called from *outside* React: the NDJSON
  * callback in `startRun` is `useRunStore.getState().handleEvent`, and any other
@@ -18,20 +18,12 @@
 
 import { create } from 'zustand'
 import { api } from '../api'
-import type {
-  RunMetrics,
-  RunRequest,
-  RunStatus as WireRunStatus,
-  RunStreamEvent
-} from '../api'
+import type { RunMetrics, RunRequest, RunStatus as WireRunStatus, RunStreamEvent } from '../api'
 import { isAborted, toStoreError, type StoreError } from './errors'
 import { useHistoryStore } from './historyStore'
 
 /** Client-side lifecycle. Wider than the server's `RunStatus`. */
 export type RunPhase = 'idle' | 'starting' | 'streaming' | 'completed' | 'error' | 'cancelled'
-
-/** What the `RobotGraphic` renders. */
-export type RobotMood = 'idle' | 'thinking' | 'talking' | 'error'
 
 /** One tool call, merged from `tool_use_start` + `tool_input_delta`* + `tool_result`. */
 export interface ToolEventEntry {
@@ -114,7 +106,7 @@ function mergeToolEvent(
   tool_use_id: string,
   patch: Partial<ToolEventEntry>
 ): ToolEventEntry[] {
-  const index = toolEvents.findIndex((entry) => entry.tool_use_id === tool_use_id)
+  const index = toolEvents.findIndex(entry => entry.tool_use_id === tool_use_id)
   if (index === -1) {
     return [...toolEvents, { tool_use_id, name: '', inputJson: '', ...patch }]
   }
@@ -167,7 +159,7 @@ export function reduceRunEvent(
       }
 
     case 'tool_input_delta': {
-      const existing = state.toolEvents.find((e) => e.tool_use_id === event.tool_use_id)
+      const existing = state.toolEvents.find(e => e.tool_use_id === event.tool_use_id)
       return {
         toolEvents: mergeToolEvent(state.toolEvents, event.tool_use_id, {
           inputJson: (existing?.inputJson ?? '') + event.json
@@ -231,31 +223,6 @@ export function isTerminalPhase(status: RunPhase): boolean {
 /* Derived selectors (all return primitives — safe as zustand selectors)      */
 /* -------------------------------------------------------------------------- */
 
-/**
- * The mascot's mood, derived purely from the run phase:
- *
- *   idle      -> 'idle'      nothing running
- *   starting  -> 'thinking'  request sent / stream open, no tokens yet
- *   streaming -> 'talking'   tokens are arriving
- *   completed -> 'idle'      back to rest
- *   cancelled -> 'idle'      back to rest
- *   error     -> 'error'
- */
-export function robotMoodFor(status: RunPhase): RobotMood {
-  switch (status) {
-    case 'starting':
-      return 'thinking'
-    case 'streaming':
-      return 'talking'
-    case 'error':
-      return 'error'
-    default:
-      return 'idle'
-  }
-}
-
-export const selectRobotMood = (state: RunStateData): RobotMood => robotMoodFor(state.status)
-
 export const selectIsRunning = (state: RunStateData): boolean =>
   state.status === 'starting' || state.status === 'streaming'
 
@@ -289,13 +256,13 @@ export function activeRunController(): AbortController | null {
 export const useRunStore = create<RunStore>()((set, get) => ({
   ...INITIAL_RUN_STATE,
 
-  handleEvent: (event) => {
-    set((state) => reduceRunEvent(state, event))
+  handleEvent: event => {
+    set(state => reduceRunEvent(state, event))
     // The server has persisted the run row by the time `run_complete` ships.
     if (event.type === 'run_complete') useHistoryStore.getState().invalidate()
   },
 
-  startRun: async (config) => {
+  startRun: async config => {
     controller?.abort()
     controller = new AbortController()
     const signal = controller.signal
@@ -305,7 +272,7 @@ export const useRunStore = create<RunStore>()((set, get) => ({
     try {
       await api.runs.stream(
         { ...config, stream: true },
-        { onEvent: (event) => get().handleEvent(event), signal }
+        { onEvent: event => get().handleEvent(event), signal }
       )
       // A well-behaved stream ends with `run_complete`, which already set a
       // terminal phase. Close it out defensively if the server just hung up.

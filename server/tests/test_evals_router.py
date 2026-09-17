@@ -243,8 +243,7 @@ async def test_tool_runs_are_graded_for_tool_consistency(client, models, judge_m
             run_config={
                 "model_id": "anthropic.claude-3-sonnet",
                 "user_prompt": "Assess order B456",
-                "scenario_id": "shipping-logistics",
-                "tools_enabled": True,
+                "toolset": "fraud-detection",
             },
         ),
     )

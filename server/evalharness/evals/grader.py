@@ -17,8 +17,7 @@ How the judge is actually invoked
 * ``OutputEvaluator(rubric=..., model=..., system_prompt=...)`` is the judge.
   ``model`` is a ``Model`` *instance* (see :mod:`evalharness.evals.judge`), and
   both ``rubric`` and ``system_prompt`` come straight from the request when the
-  caller supplied them -- the legacy bug (a custom grader prompt silently
-  dropped) is fixed here, and the tests assert both strings reach the judge.
+  caller supplied them, and the tests assert both strings reach the judge.
 * When any run used tools, a second evaluator -- ``TrajectoryEvaluator`` -- grades
   each run's tool-call sequence against the batch's modal sequence. The purely
   objective counterpart lives in :mod:`evalharness.evals.metrics`. A custom

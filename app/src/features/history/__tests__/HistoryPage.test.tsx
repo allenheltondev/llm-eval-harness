@@ -1,5 +1,5 @@
 /**
- * HistoryPage against a directly-stubbed `historyStore`/`scenarioStore` —
+ * HistoryPage against a directly-stubbed `historyStore`/`modelStore` —
  * paging, filter merging and the detail cache are the stores' job (see
  * `stores/__tests__/historyStore.test.ts`); what's asserted here is the wiring:
  * the list renders store state, controls call the right actions, and the
@@ -16,7 +16,7 @@ import type { RunDetail, RunSummary } from '../../../api'
 const exportAllMock = vi.fn()
 const runsListMock = vi.fn()
 
-vi.mock('../../../api', async (importOriginal) => {
+vi.mock('../../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../api')>()
   return {
     ...actual,
@@ -28,20 +28,14 @@ vi.mock('../../../api', async (importOriginal) => {
 })
 
 const HistoryPage = (await import('../HistoryPage')).default
-const {
-  INITIAL_HISTORY_STATE,
-  INITIAL_SCENARIO_STATE,
-  useHistoryStore,
-  useScenarioStore
-} = await import('../../../stores')
+const { INITIAL_HISTORY_STATE, INITIAL_MODEL_STATE, useHistoryStore, useModelStore } =
+  await import('../../../stores')
 
 function summary(id: string, overrides: Partial<RunSummary> = {}): RunSummary {
   return {
     id,
     ts: '2026-08-11T18:00:00Z',
     model_id: 'anthropic.claude-3-sonnet',
-    scenario_id: 'shipping',
-    dataset_id: null,
     status: 'completed',
     metrics: { total_tokens: 100 },
     ...overrides
@@ -53,15 +47,24 @@ function detail(id: string, overrides: Partial<RunDetail> = {}): RunDetail {
     id,
     ts: '2026-08-11T18:00:00Z',
     model_id: 'anthropic.claude-3-sonnet',
-    scenario_id: 'shipping',
     system_prompt: '',
     user_prompt: 'hi',
-    dataset_id: null,
-    dataset_hash: null,
-    config: { inference: {}, tools_enabled: false, max_tool_iterations: 10, guardrail: null, stream: false },
+    config: {
+      inference: {},
+      toolset: null,
+      max_tool_iterations: 10,
+      guardrail: null,
+      stream: false
+    },
     output: 'the output',
     tool_transcript: [],
-    metrics: { total_tokens: 100, input_tokens: 40, output_tokens: 60, latency_ms: 200, cycle_count: 1 },
+    metrics: {
+      total_tokens: 100,
+      input_tokens: 40,
+      output_tokens: 60,
+      latency_ms: 200,
+      cycle_count: 1
+    },
     guardrail_trace: null,
     status: 'completed',
     error: null,
@@ -89,9 +92,16 @@ beforeEach(() => {
     ...INITIAL_HISTORY_STATE,
     items: [
       summary('r1'),
-      summary('r2', { status: 'error', model_id: 'amazon.nova-pro-v1:0', metrics: { total_tokens: 250 } })
+      summary('r2', {
+        status: 'error',
+        model_id: 'amazon.nova-pro-v1:0',
+        metrics: { total_tokens: 250 }
+      })
     ],
-    details: { r1: detail('r1'), r2: detail('r2', { status: 'error', model_id: 'amazon.nova-pro-v1:0' }) },
+    details: {
+      r1: detail('r1'),
+      r2: detail('r2', { status: 'error', model_id: 'amazon.nova-pro-v1:0' })
+    },
     loaded: true,
     setFilters,
     loadFirstPage,
@@ -100,16 +110,11 @@ beforeEach(() => {
     getRunDetail
   })
 
-  useScenarioStore.setState({
-    ...INITIAL_SCENARIO_STATE,
+  useModelStore.setState({
+    ...INITIAL_MODEL_STATE,
     models: [],
     modelsLoaded: false,
-    scenarios: [
-      { id: 'shipping', name: 'Shipping', description: null, createdAt: '', updatedAt: '' }
-    ],
-    scenariosLoaded: true,
-    loadModels: vi.fn().mockResolvedValue(undefined),
-    loadScenarios: vi.fn().mockResolvedValue(undefined)
+    loadModels: vi.fn().mockResolvedValue(undefined)
   })
 })
 
@@ -162,10 +167,17 @@ describe('HistoryPage: filters', () => {
   })
 
   it('renders a model select once the catalog is loaded, wired to setFilters', () => {
-    useScenarioStore.setState({
+    useModelStore.setState({
       modelsLoaded: true,
       models: [
-        { model_id: 'm1', name: 'Model One', provider: 'Amazon', supports_streaming: true, kind: 'foundation-model' }
+        {
+          model_id: 'm1',
+          name: 'Model One',
+          provider: 'Amazon',
+          supports_streaming: true,
+          kind: 'foundation-model',
+          source: 'bedrock'
+        }
       ]
     })
     render(<HistoryPage />)
@@ -176,10 +188,10 @@ describe('HistoryPage: filters', () => {
     expect(setFilters).toHaveBeenCalledWith({ model_id: 'm1' })
   })
 
-  it('the scenario filter calls setFilters', () => {
+  it('offers no scenario filter or column', () => {
     render(<HistoryPage />)
-    fireEvent.change(screen.getByTestId('history-filter-scenario'), { target: { value: 'shipping' } })
-    expect(setFilters).toHaveBeenCalledWith({ scenario_id: 'shipping' })
+    expect(screen.queryByTestId('history-filter-scenario')).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Scenario' })).not.toBeInTheDocument()
   })
 
   it('the status filter calls setFilters, and clearing it sends null', () => {
@@ -263,7 +275,7 @@ describe('HistoryPage: compare', () => {
 
     const compareView = screen.getByTestId('compare-view')
     const runDetails = within(compareView).getAllByTestId('run-detail-view')
-    expect(runDetails.map((el) => el.getAttribute('data-run-id'))).toEqual(['r1', 'r2'])
+    expect(runDetails.map(el => el.getAttribute('data-run-id'))).toEqual(['r1', 'r2'])
 
     // model_id and status differ between r1 and r2, so both sides ring them.
     const modelIds = within(compareView).getAllByTestId('run-detail-model-id')
@@ -315,7 +327,7 @@ describe('HistoryPage: compare', () => {
     expect(checkboxes[2]).toBeChecked()
     const compareView = screen.getByTestId('compare-view')
     const runDetails = within(compareView).getAllByTestId('run-detail-view')
-    expect(runDetails.map((el) => el.getAttribute('data-run-id'))).toEqual(['r2', 'r3'])
+    expect(runDetails.map(el => el.getAttribute('data-run-id'))).toEqual(['r2', 'r3'])
   })
 })
 
@@ -333,12 +345,16 @@ describe('HistoryPage: NDJSON export', () => {
     const revokeObjectURL = vi.fn()
     window.URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL
     window.URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined)
 
-    exportAllMock.mockImplementation(async (_filters: unknown, options: { onEvent: (run: RunDetail) => void }) => {
-      options.onEvent(detail('r1'))
-      options.onEvent(detail('r2'))
-    })
+    exportAllMock.mockImplementation(
+      async (_filters: unknown, options: { onEvent: (run: RunDetail) => void }) => {
+        options.onEvent(detail('r1'))
+        options.onEvent(detail('r2'))
+      }
+    )
 
     render(<HistoryPage />)
     await act(async () => {
@@ -390,7 +406,7 @@ describe('HistoryPage: Cloud runs filter', () => {
     expect(await screen.findByTestId('cloud-run-row')).toBeInTheDocument()
   })
 
-  it('carries the existing model/scenario/status filters onto the cloud query', async () => {
+  it('carries the existing model/status filters onto the cloud query', async () => {
     useHistoryStore.setState({ filters: { model_id: 'nova', status: 'completed' } })
     render(<HistoryPage />)
 
@@ -438,10 +454,12 @@ describe('HistoryPage: Cloud runs filter', () => {
     runsListMock.mockResolvedValueOnce({ items: [summary('cr2')], next_cursor: null })
     fireEvent.click(loadMore)
 
-    await waitFor(() => expect(runsListMock).toHaveBeenLastCalledWith({
-      execution: 'cloud',
-      cursor: 'cursor-1'
-    }))
+    await waitFor(() =>
+      expect(runsListMock).toHaveBeenLastCalledWith({
+        execution: 'cloud',
+        cursor: 'cursor-1'
+      })
+    )
     expect(await screen.findAllByTestId('cloud-run-row')).toHaveLength(2)
     // Cursor exhausted: the button disappears.
     expect(screen.queryByTestId('cloud-runs-load-more-btn')).not.toBeInTheDocument()

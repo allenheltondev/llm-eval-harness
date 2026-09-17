@@ -38,7 +38,6 @@ from typing import Any
 import boto3
 from boto3.dynamodb.conditions import Key
 
-from evalharness import runtime_config
 from evalharness.config import Settings
 from evalharness.store.ddb_items import (
     CANCEL_SK,
@@ -215,7 +214,7 @@ def build_eval_table(settings: Settings) -> EvalTable | None:
     Cached per (table, region): a ``boto3`` resource is expensive to build and
     entirely stateless once built.
     """
-    table_name = runtime_config.eval_table(settings).value
+    table_name = settings.eval_table
     if not table_name:
         return None
     key = (table_name, settings.aws_region)

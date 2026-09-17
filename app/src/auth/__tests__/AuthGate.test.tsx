@@ -74,16 +74,6 @@ describe('AuthGate', () => {
     expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
   })
 
-  it('renders the app when /health omits the auth block (older server)', async () => {
-    mockFetch(jsonResponse({ status: 'ok' }))
-    render(
-      <AuthGate>
-        <p>app</p>
-      </AuthGate>
-    )
-    expect(await screen.findByText('app')).toBeInTheDocument()
-  })
-
   it('renders the app when /health fails — a down server must not lock a local tool', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('refused')))
     render(

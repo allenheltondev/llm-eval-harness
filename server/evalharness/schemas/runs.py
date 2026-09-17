@@ -29,8 +29,6 @@ class RunSummary(BaseModel):
     id: str
     ts: datetime
     model_id: str
-    scenario_id: str | None = None
-    dataset_id: str | None = None
     status: str
     metrics: dict[str, Any] | None = None
 
@@ -43,11 +41,8 @@ class RunDetail(BaseModel):
     id: str
     ts: datetime
     model_id: str
-    scenario_id: str | None = None
     system_prompt: str
     user_prompt: str
-    dataset_id: str | None = None
-    dataset_hash: str | None = None
     config: dict[str, Any]
     output: str | None = None
     tool_transcript: Any | None = None
@@ -71,7 +66,7 @@ class EvaluationDetail(BaseModel):
     result: Any | None = None
     progress: Any | None = None
     error: Any | None = None
-    #: Which lane ran this evaluation. SQLite rows carry no such column, so a
-    #: local row (including every row that predates the cloud lane) falls back
-    #: to the default. See ``docs/cloud-evals.md``.
+    #: Which lane ran this evaluation. SQLite is the local lane's store and
+    #: carries no such column, so a local row takes the default; cloud rows
+    #: set it explicitly. See ``docs/cloud-evals.md``.
     execution: Literal["local", "cloud"] = "local"

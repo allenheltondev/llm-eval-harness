@@ -10,24 +10,27 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from sqlmodel import Session
 
 from evalharness.config import get_settings
-from evalharness.configstore.client import ConfigStoreClient
 from evalharness.engine.fake_model import Error, FakeModel, Text, ToolUseStep
 from evalharness.errors import register_exception_handlers
 from evalharness.routers import runs
-from evalharness.routers.scenarios import get_config_store_client
 from evalharness.store import db, history
 
-CONFIG_BASE_URL = "https://configstore.test"
+FREEZE_INPUT = {
+    "account_id": "A1234",
+    "transaction_ids": ["T1", "T2"],
+    "reason": "velocity spike",
+    "severity": "high",
+    "freeze_duration": "temporary",
+}
 
-SHIPPING_SCRIPT = [
+FRAUD_SCRIPT = [
     Text("Hello "),
     Text("world"),
-    ToolUseStep("getCarrierStatus", {"order_id": "B456"}),
+    ToolUseStep("freeze_account", FREEZE_INPUT),
     Text(" done"),
 ]
 
@@ -50,9 +53,6 @@ def app(initialized_db, model_holder) -> FastAPI:
     application.include_router(runs.router, prefix="/api/v1")
     application.dependency_overrides[runs.get_model_factory] = (
         lambda: (lambda _request: model_holder["model"])
-    )
-    application.dependency_overrides[get_config_store_client] = lambda: ConfigStoreClient(
-        base_url=CONFIG_BASE_URL, api_key="test-api-key"
     )
     return application
 
@@ -88,10 +88,10 @@ def stored(run_id: str):
 
 
 async def test_streaming_run_emits_the_full_ndjson_event_sequence(client, model_holder):
-    model_holder["model"] = FakeModel(script=SHIPPING_SCRIPT)
+    model_holder["model"] = FakeModel(script=FRAUD_SCRIPT)
 
     events = await post_ndjson(
-        client, body(scenario_id="shipping-logistics", tools_enabled=True)
+        client, body(toolset="fraud-detection")
     )
     kinds = [event["type"] for event in events]
 
@@ -130,13 +130,13 @@ async def test_streaming_run_emits_the_full_ndjson_event_sequence(client, model_
 
 
 async def test_run_row_is_persisted_before_run_complete_reaches_the_client(client, model_holder):
-    model_holder["model"] = FakeModel(script=SHIPPING_SCRIPT)
+    model_holder["model"] = FakeModel(script=FRAUD_SCRIPT)
 
     observed = None
     async with client.stream(
         "POST",
         "/api/v1/runs",
-        json=body(scenario_id="shipping-logistics", tools_enabled=True),
+        json=body(toolset="fraud-detection"),
     ) as response:
         async for line in response.aiter_lines():
             if not line:
@@ -186,11 +186,11 @@ async def test_each_line_is_standalone_json(client, model_holder):
 
 
 async def test_non_streaming_run_returns_the_stored_run_detail(client, model_holder):
-    model_holder["model"] = FakeModel(script=SHIPPING_SCRIPT)
+    model_holder["model"] = FakeModel(script=FRAUD_SCRIPT)
 
     response = await client.post(
         "/api/v1/runs",
-        json=body(scenario_id="shipping-logistics", tools_enabled=True, stream=False),
+        json=body(toolset="fraud-detection", stream=False),
     )
 
     assert response.status_code == 200
@@ -207,15 +207,15 @@ async def test_non_streaming_run_returns_the_stored_run_detail(client, model_hol
 
 
 async def test_non_streaming_and_streaming_agree_on_content(client, model_holder):
-    model_holder["model"] = FakeModel(script=SHIPPING_SCRIPT)
+    model_holder["model"] = FakeModel(script=FRAUD_SCRIPT)
     streamed = await post_ndjson(
-        client, body(scenario_id="shipping-logistics", tools_enabled=True)
+        client, body(toolset="fraud-detection")
     )
 
-    model_holder["model"] = FakeModel(script=SHIPPING_SCRIPT)
+    model_holder["model"] = FakeModel(script=FRAUD_SCRIPT)
     buffered = await client.post(
         "/api/v1/runs",
-        json=body(scenario_id="shipping-logistics", tools_enabled=True, stream=False),
+        json=body(toolset="fraud-detection", stream=False),
     )
 
     assert buffered.json()["output"] == streamed[-1]["final_text"]
@@ -247,7 +247,6 @@ async def test_client_disconnect_persists_the_run_as_cancelled(app, model_holder
     response = await runs.create_run(
         payload=runs.RunRequest(model_id="m", user_prompt="hi"),
         settings=get_settings(),
-        config_client=None,
         model_factory=lambda _request: model_holder["model"],
     )
     body_iterator = response.body_iterator
@@ -262,49 +261,19 @@ async def test_client_disconnect_persists_the_run_as_cancelled(app, model_holder
 
 
 # --------------------------------------------------------------------------- #
-# Datasets and validation
+# Validation
 # --------------------------------------------------------------------------- #
 
 
-@respx.mock
-async def test_dataset_content_is_composed_and_hashed(client, model_holder):
-    content = "order_id,status\nB456,delayed\n"
-    respx.get(
-        f"{CONFIG_BASE_URL}/scenarios/shipping-logistics/datasets/orders-csv"
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "orders-csv",
-                "name": "Orders",
-                "contentType": "text/csv",
-                "content": content,
-            },
-        )
-    )
-    model = FakeModel(script=[Text("ok")])
-    model_holder["model"] = model
-
-    response = await client.post(
-        "/api/v1/runs",
-        json=body(
-            user_prompt="Analyze these orders",
-            scenario_id="shipping-logistics",
-            dataset_id="orders-csv",
-            stream=False,
-        ),
-    )
-
-    assert response.status_code == 200
-    assert model.first_user_text == f"Analyze these orders\n\nData to analyze:\n{content}"
-    assert response.json()["dataset_hash"]
-
-
-async def test_dataset_without_scenario_is_a_400_envelope(client):
-    response = await client.post("/api/v1/runs", json=body(dataset_id="orders-csv"))
+async def test_unknown_toolset_is_a_400_envelope(client):
+    response = await client.post("/api/v1/runs", json=body(toolset="nope"))
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "bad_request"
+    assert response.json()["error"] == {
+        "code": "unknown_toolset",
+        "message": "Unknown toolset 'nope'",
+        "detail": {"toolset": "nope", "available": ["fraud-detection"]},
+    }
 
 
 async def test_missing_required_fields_is_a_422_envelope(client):
@@ -314,16 +283,19 @@ async def test_missing_required_fields_is_a_422_envelope(client):
     assert response.json()["error"]["code"] == "validation_error"
 
 
-async def test_unknown_body_fields_are_ignored(client, model_holder):
-    model_holder["model"] = FakeModel(script=[Text("ok")])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"mystery_field": 42},
+        {"tools_enabled": True},
+        {"inference": {"temperature": 0.5, "nope": 1}},
+    ],
+)
+async def test_unknown_body_fields_are_a_422(client, extra):
+    response = await client.post("/api/v1/runs", json=body(stream=False, **extra))
 
-    response = await client.post(
-        "/api/v1/runs",
-        json=body(stream=False, mystery_field=42, inference={"temperature": 0.5, "nope": 1}),
-    )
-
-    assert response.status_code == 200
-    assert response.json()["config"]["inference"] == {"temperature": 0.5}
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
 
 
 async def test_out_of_range_inference_values_are_rejected(client):

@@ -11,7 +11,7 @@ from evalharness.providers import DEFAULT_PROVIDER, Provider
 class InferenceConfig(BaseModel):
     """Sampling knobs forwarded to the model provider (all optional)."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -33,13 +33,9 @@ class GuardrailConfig(BaseModel):
 
 
 class RunRequest(BaseModel):
-    """Body of ``POST /api/v1/runs``.
+    """Body of ``POST /api/v1/runs``. Unknown fields are a 422."""
 
-    Unknown fields are ignored rather than rejected, so a newer client can post
-    additional keys against an older server without a 422.
-    """
-
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(min_length=1)
     #: Which SDK executes this run. ``model_id`` is interpreted in that
@@ -48,10 +44,10 @@ class RunRequest(BaseModel):
     provider: Provider = DEFAULT_PROVIDER
     system_prompt: str = ""
     user_prompt: str = Field(min_length=1)
-    scenario_id: str | None = None
-    dataset_id: str | None = None
     inference: InferenceConfig = Field(default_factory=InferenceConfig)
-    tools_enabled: bool = False
+    #: Name of a registered toolset (``GET /tools``) the agent may call during
+    #: this run. ``None`` runs without tools.
+    toolset: str | None = None
     max_tool_iterations: int = Field(default=10, ge=1, le=100)
     guardrail: GuardrailConfig | None = None
     stream: bool = True
@@ -77,7 +73,7 @@ class RunRequest(BaseModel):
         return {
             "provider": self.provider,
             "inference": self.inference.as_model_config(),
-            "tools_enabled": self.tools_enabled,
+            "toolset": self.toolset,
             "max_tool_iterations": self.max_tool_iterations,
             "guardrail": self.guardrail.model_dump() if self.guardrail else None,
             "stream": self.stream,

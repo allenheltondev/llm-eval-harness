@@ -12,7 +12,12 @@ export interface ProgressBarProps {
 /**
  * ProgressBar component for showing progress during operations
  */
-function ProgressBar({ progress = 0, status, indeterminate = false, color = 'primary' }: ProgressBarProps) {
+function ProgressBar({
+  progress = 0,
+  status,
+  indeterminate = false,
+  color = 'primary'
+}: ProgressBarProps) {
   const colorClasses = {
     primary: 'bg-primary-600',
     success: 'bg-green-600',
@@ -32,9 +37,7 @@ function ProgressBar({ progress = 0, status, indeterminate = false, color = 'pri
       {status && (
         <div className="flex justify-between items-center mb-2">
           <span className="text-sm font-medium text-gray-700">{status}</span>
-          {!indeterminate && (
-            <span className="text-sm text-gray-500">{Math.round(progress)}%</span>
-          )}
+          {!indeterminate && <span className="text-sm text-gray-500">{Math.round(progress)}%</span>}
         </div>
       )}
 

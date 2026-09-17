@@ -113,9 +113,6 @@ def test_create_run_sets_id_ts_and_defaults(repo):
 def test_get_run_round_trips_every_column(repo):
     created = make_run(
         repo,
-        scenario_id="scenario-1",
-        dataset_id="dataset-1",
-        dataset_hash="abc123",
         output="hi there",
         tool_transcript=[{"tool": "search", "input": {"q": "x"}}],
         metrics={"latency_ms": 42},
@@ -128,11 +125,8 @@ def test_get_run_round_trips_every_column(repo):
 
     assert fetched.id == created.id
     assert fetched.model_id == created.model_id
-    assert fetched.scenario_id == "scenario-1"
     assert fetched.system_prompt == created.system_prompt
     assert fetched.user_prompt == created.user_prompt
-    assert fetched.dataset_id == "dataset-1"
-    assert fetched.dataset_hash == "abc123"
     assert fetched.config == {"temperature": 0.5}
     assert fetched.output == "hi there"
     assert fetched.tool_transcript == [{"tool": "search", "input": {"q": "x"}}]
@@ -155,7 +149,7 @@ def test_explicit_id_and_ts_are_honoured(repo):
 
 
 def test_update_run_only_touches_the_fields_passed(repo):
-    created = make_run(repo, scenario_id="scenario-1", output="draft")
+    created = make_run(repo, output="draft")
 
     updated = repo.update_run(created.id, status="completed", metrics={"latency_ms": 7})
 
@@ -163,20 +157,19 @@ def test_update_run_only_touches_the_fields_passed(repo):
     assert updated.metrics == {"latency_ms": 7}
     # Untouched fields survive.
     assert updated.output == "draft"
-    assert updated.scenario_id == "scenario-1"
     assert updated.system_prompt == created.system_prompt
     assert updated.config == {"temperature": 0.5}
     assert repo.get_run(created.id).status == "completed"
 
 
 def test_update_run_distinguishes_none_from_omitted(repo):
-    created = make_run(repo, scenario_id="scenario-1", metrics={"latency_ms": 1})
+    created = make_run(repo, output="draft", metrics={"latency_ms": 1})
 
-    updated = repo.update_run(created.id, scenario_id=None, metrics=None)
+    updated = repo.update_run(created.id, output=None, metrics=None)
 
-    assert updated.scenario_id is None
+    assert updated.output is None
     assert updated.metrics is None
-    assert repo.get_run(created.id).scenario_id is None
+    assert repo.get_run(created.id).output is None
 
 
 def test_update_run_raises_not_found(repo):
@@ -244,16 +237,6 @@ def test_list_runs_filters_by_model_id(repo):
     assert [record.model_id for record in items] == ["model-a"]
 
 
-def test_list_runs_filters_by_scenario_id(repo):
-    make_run(repo, scenario_id="scenario-1", ts=BASE_TS)
-    make_run(repo, scenario_id="scenario-2", ts=BASE_TS + timedelta(seconds=1))
-    make_run(repo, ts=BASE_TS + timedelta(seconds=2))
-
-    items, _ = repo.list_runs(scenario_id="scenario-1")
-
-    assert [record.scenario_id for record in items] == ["scenario-1"]
-
-
 def test_list_runs_filters_by_status(repo):
     make_run(repo, status="completed", ts=BASE_TS)
     make_run(repo, status="error", ts=BASE_TS + timedelta(seconds=1))
@@ -319,15 +302,6 @@ def test_iter_runs_export_filters_by_status_and_since(repo):
     exported = list(
         repo.iter_runs_export(status="error", since=BASE_TS - timedelta(hours=1))
     )
-
-    assert [record.id for record in exported] == [wanted.id]
-
-
-def test_iter_runs_export_filters_by_scenario(repo):
-    wanted = make_run(repo, scenario_id="scenario-a", ts=BASE_TS)
-    make_run(repo, scenario_id="scenario-b", ts=BASE_TS + timedelta(seconds=1))
-
-    exported = list(repo.iter_runs_export(scenario_id="scenario-a"))
 
     assert [record.id for record in exported] == [wanted.id]
 
@@ -472,7 +446,7 @@ def test_a_run_lands_in_the_contract_item_shape(ddb_repo, table):
     assert json.loads(item["metrics"]) == {"latency_ms": 1200}
     # Nullable fields are present-and-null, never absent -- including the
     # cloud-lane-only evaluation_id, which a plain server run does not have.
-    for field in ("scenario_id", "dataset_id", "dataset_hash", "guardrail_trace", "error"):
+    for field in ("guardrail_trace", "error"):
         assert field in item and item[field] is None
     assert item["evaluation_id"] is None
     assert item[ddb_items.TTL_ATTRIBUTE] > 0

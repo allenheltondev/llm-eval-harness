@@ -1,9 +1,8 @@
 """Pydantic models for the simplified Bedrock guardrail policy schema.
 
-These mirror the "simplified" configuration shape that the legacy
-frontend services consumed (see ``app/src/services/guardrailSchemaTranslator.js``),
-ported to snake_case with camelCase aliases so the API can accept either
-naming convention from clients.
+A flattened configuration shape (snake_case fields with camelCase aliases, so
+the API accepts either) that :mod:`evalharness.guardrails.translator` turns
+into Bedrock's ``CreateGuardrail`` request.
 
 Field constraints (lengths, patterns) are taken directly from the Bedrock
 ``CreateGuardrail`` service model so validation errors surface locally
@@ -17,10 +16,8 @@ validation attach the raised exception instance itself to the error's
 modifiable here) serializes that with a plain ``json.dumps`` rather than
 ``jsonable_encoder``, which raises ``TypeError: Object of type ValueError is
 not JSON serializable`` for any request that trips such a validator. Instead,
-``validate_business_rules`` below returns a list of error strings -- mirroring
-``GuardrailSchemaTranslator.validateSimplifiedSchema``'s ``{isValid, errors}``
-shape in the legacy JS translator -- for callers (the router) to turn into a
-``BadRequestError``.
+``validate_business_rules`` below returns a list of error strings for callers
+(the router) to turn into a ``BadRequestError``.
 """
 
 from __future__ import annotations
@@ -31,7 +28,6 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-# Defaults ported from guardrailService.js / guardrailConfigurationManager.js
 DEFAULT_BLOCKED_INPUT_MESSAGE = "This content violates our content policy."
 DEFAULT_BLOCKED_OUTPUT_MESSAGE = "I cannot provide that type of content."
 
@@ -159,10 +155,8 @@ class ContentPolicy(_CamelModel):
 class DeniedTopic(_CamelModel):
     """A denied topic definition (topicPolicyConfig.topicsConfig[], type=DENY).
 
-    The legacy JS translator only ever produced a single hardcoded topic
-    named 'restricted-topics' with BLOCK/BLOCK actions. This model
-    generalizes to a named list (matching Bedrock's real capability) while
-    keeping the same BLOCK/BLOCK, always-enabled defaults.
+    A named list, matching Bedrock's capability, with BLOCK/BLOCK,
+    always-enabled defaults.
     """
 
     name: str = Field(min_length=1, max_length=100, pattern=r"^[0-9a-zA-Z-_ !?.]+$")
@@ -176,8 +170,7 @@ class WordPolicy(_CamelModel):
     """Custom words and managed word lists (wordPolicyConfig).
 
     input_action/output_action apply uniformly to both words and managed
-    lists, matching wordPolicy.input/output in the JS translator
-    (defaults BLOCK / NONE).
+    lists (defaults BLOCK / NONE).
     """
 
     words: list[str] = Field(default_factory=list)
@@ -187,13 +180,10 @@ class WordPolicy(_CamelModel):
 
 
 class PiiEntity(_CamelModel):
-    """A single PII entity detector with one collapsed action.
+    """A single PII entity detector with one action.
 
-    The JS translator tracked separate input/output actions (defaulting to
-    BLOCK input / ANONYMIZE output) and always sent a dummy 'NONE' legacy
-    action. This schema collapses that to a single `action`, applied to
-    Bedrock's legacy top-level `action` field so it governs both input and
-    output uniformly. See translator.py "not ported" notes.
+    The one `action` is applied to Bedrock's top-level `action` field so it
+    governs both input and output uniformly.
     """
 
     type: PiiEntityType
