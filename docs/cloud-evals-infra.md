@@ -380,10 +380,28 @@ ignore it.
 
 ---
 
-## Open risks
+## What the first deploy proved
 
-Mirroring rsc-core's "verify on first deploy" list. Everything here is
-unverifiable without an AWS account, and this branch has none.
+The worker deployed for the first time on 2026-09-17 **[measured]**:
+`AWS::BedrockAgentCore::Runtime` created cleanly from the CodeZip artifact,
+and both outputs resolved —
+`arn:aws:bedrock-agentcore:us-east-1:<account>:runtime/evalharness_eval_worker-<id>`
+and the matching runtime id. That settles two items below:
+
+- **`!GetAtt EvalWorkerRuntime.AgentRuntimeArn` / `.AgentRuntimeId`.** Both
+  attribute names are real; the `!Sub`-over-`!Ref` fallback is not needed.
+- **The `s3:GetObject` grant's timing.** AgentCore read the artifact at create
+  time with no IAM-propagation flake on the first attempt.
+
+Because AgentCore reads the zip when the runtime is created, this is also
+mild evidence that the artifact is *well-formed*. It is not evidence that
+`EntryPoint: agentcore_app.py` loads correctly or that the shim runs — the
+runtime has never been invoked. Everything under "Runtime behaviour" below
+still needs a real evaluation.
+
+## Open risks — still unverified
+
+Mirroring rsc-core's "verify on first deploy" list.
 
 **Packaging and boot**
 

@@ -508,10 +508,38 @@ Makefile comment, and this paragraph.
 
 ---
 
-## Open risks — unverified without a deploy
+## What the first deploy proved
 
-This branch has no AWS account. Everything below is reasoned or read, not
-observed.
+The stack deployed for the first time on 2026-09-17 from the `Staging`
+environment (`Successfully created/updated stack - llm-eval-harness in
+us-east-1`) **[measured]**. That converge, plus the resolved outputs,
+settles the CloudFormation half of the list below:
+
+- **The template converges.** Every resource created: table, worker runtime,
+  server function, Function URL, artifact bucket, SPA bucket, OAC, CloudFront
+  Function, distribution, Cognito pool and client.
+- **`!Select [2, !Split ['/', !GetAtt ServerFunctionUrl.FunctionUrl]]`.** The
+  distribution was created with that origin, so the implicit `<Function>Url`
+  logical id and the string surgery both resolve to a real host.
+- **OAC + `S3OriginConfig: {OriginAccessIdentity: ''}`** and **the
+  bucket-policy / distribution ordering** are both accepted as written.
+- **Auto-naming lengths hold.** `AppBucket` came back as
+  `llm-eval-harness-appbucket-<11 chars>` (38 total), comfortably inside the
+  63-char cap — though the longest stack name is still the one to compute
+  against.
+- **The post-CloudFormation steps run.** `aws s3 sync --delete` and
+  `cloudfront create-invalidation` both succeeded under the deploy role, which
+  is the exact point the predecessor repo's deploys used to fail.
+
+**Still unproven, and deliberately so: everything that requires serving a
+request.** Creating a Lambda function does not invoke it, so nothing below
+under "Packaging and boot", "Streaming through CloudFront" or "Auth" is
+settled by a successful deploy. The first `GET /api/v1/health` through
+`AppUrl` is what proves the adapter boots at all.
+
+## Open risks — still unverified
+
+Everything below is reasoned or read, not observed.
 
 **Packaging and boot**
 
@@ -580,6 +608,6 @@ observed.
   the distribution and the distribution references the bucket's domain name;
   CloudFormation should order this fine (the policy is not an input to the
   distribution), but a first-create failure here would be unsurprising.
-- **`sam validate` passes and `sam build` preserves the S3 `CodeUri`
-  unchanged** — both actually run on this branch **[measured]** — but neither
-  proves the stack converges.
+- **A second deploy over an existing stack.** The first create is proven; an
+  *update* (new artifact keys against live resources, CloudFront distribution
+  in place) is a different code path and has not run yet.
