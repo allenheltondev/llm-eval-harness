@@ -135,9 +135,10 @@ jobs:
     name: Deploy backend
     needs: [changes, predeploy-validations]
     if: |
+      github.actor != 'dependabot[bot]' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.changes.outputs.backend_changed == 'true'
-    environment: stage
+    environment: Staging
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -146,30 +147,55 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
-      - uses: aws-actions/setup-sam@v2
+      - uses: aws-actions/setup-sam@v3
         with:
           use-installer: true
-      # OIDC: the job's identity token is exchanged for the role held in the
-      # environment's PIPELINE_EXECUTION_ROLE secret. No long-lived keys.
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v6
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@6.2.2
         with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-LlmEvalHarness-StagingDeploy
           aws-region: us-east-1
-          role-to-assume: ${{ secrets.PIPELINE_EXECUTION_ROLE }}
       # The same target a developer runs locally: one deploy definition.
       - name: Package and deploy the stack
         run: make deploy-backend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1
+
+      - name: Diagnose failed deploy
+        if: ${{ failure() }}
+        run: |
+          STACK=llm-eval-harness
+          echo "Deploy failed. Dumping CloudFormation diagnostics for ${STACK}."
+          echo "==== describe-stacks ===="
+          aws cloudformation describe-stacks --stack-name "${STACK}" || true
+          echo "==== describe-stack-events (latest 50) ===="
+          aws cloudformation describe-stack-events --stack-name "${STACK}" \
+            --query "StackEvents[:50].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]" \
+            --output table || true
+          echo "==== list-change-sets (latest 5) ===="
+          aws cloudformation list-change-sets --stack-name "${STACK}" \
+            --query "sort_by(Summaries,&CreationTime)[-5:].[ChangeSetName,Status,ExecutionStatus,StatusReason,CreationTime]" \
+            --output table || true
+          LATEST=$(aws cloudformation list-change-sets --stack-name "${STACK}" \
+            --query "sort_by(Summaries,&CreationTime)[-1].ChangeSetName" --output text 2>/dev/null || true)
+          if [ -n "$LATEST" ] && [ "$LATEST" != "None" ]; then
+            echo "==== describe-change-set ($LATEST) ===="
+            aws cloudformation describe-change-set --stack-name "${STACK}" --change-set-name "$LATEST" || true
+          fi
 
   deploy-frontend:
     name: Deploy frontend
     needs: [changes, predeploy-validations, deploy-backend]
     if: |
       always() &&
+      github.actor != 'dependabot[bot]' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.predeploy-validations.result == 'success' &&
       (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') &&
       (needs.changes.outputs.frontend_changed == 'true' || needs.changes.outputs.backend_changed == 'true')
-    environment: stage
+    environment:
+      name: Staging
+      # Surfaces on the PR / deployment as the link reviewers click through to.
+      url: ${{ steps.deploy.outputs.app_url }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -182,12 +208,26 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: app/package-lock.json
-      # OIDC: the job's identity token is exchanged for the role held in the
-      # environment's PIPELINE_EXECUTION_ROLE secret. No long-lived keys.
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v6
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@6.2.2
         with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-LlmEvalHarness-StagingDeploy
           aws-region: us-east-1
-          role-to-assume: ${{ secrets.PIPELINE_EXECUTION_ROLE }}
       - name: Build and publish the SPA
-        run: make deploy-frontend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1
+        id: deploy
+        run: |
+          set -euo pipefail
+          make deploy-frontend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1 | tee deploy.log
+          echo "app_url=$(awk '/^Deployed: /{print $2}' deploy.log | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Write deployment summary
+        run: |
+          {
+            echo "## LLM Eval Harness staging deploy"
+            echo
+            echo "- **App URL:** ${{ steps.deploy.outputs.app_url }}"
+            echo "- **Stack:** \`llm-eval-harness\`"
+            echo "- **Region:** \`us-east-1\`"
+            echo "- **Commit:** \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

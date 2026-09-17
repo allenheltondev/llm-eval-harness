@@ -223,8 +223,8 @@ push touched, only the relevant validations run, and only the affected halves de
 
 | Workflow | Trigger | Deploys to |
 | --- | --- | --- |
-| `pull-request.yaml` | pull request to `main` (or manual) | the `stage` environment |
-| `deploy.yaml` | push to `main` (or manual) | the `prod` environment |
+| `pull-request.yaml` | pull request to `main` (or manual) | the `Staging` GitHub environment |
+| `deploy.yaml` | push to `main` (or manual) | the `Production` GitHub environment |
 
 Each one runs `changes` → `pre-deploy-validation.yaml` → `deploy-backend` → `deploy-frontend`:
 
@@ -240,6 +240,11 @@ Each one runs `changes` → `pre-deploy-validation.yaml` → `deploy-backend` �
   targets a developer runs locally, so there is one deploy definition rather than a CI copy that
   drifts.
 - Manual runs (`workflow_dispatch`) take a `force_deploy` input that bypasses change detection.
+- A failed backend deploy dumps CloudFormation diagnostics (recent stack events, latest change
+  set) into the log; a successful frontend deploy writes the app URL to the step summary and to
+  the environment, so it shows up on the PR as a "Deployed to Staging" link.
+- Dependabot PRs are validated but not deployed: they run with Dependabot's secret source, which
+  cannot see the deploy role.
 - `mutation.yaml` runs Stryker and mutmut as an advisory signal on every PR and push; it never
   blocks.
 
@@ -248,20 +253,32 @@ PR can never touch production. Deploys to one environment queue behind each othe
 cancel, because interrupting `sam deploy` strands the stack in `UPDATE_IN_PROGRESS`. Fork PRs are
 validated but not deployed, since they never receive environment secrets.
 
-#### Setup owed by the human
+#### Setup owed by the human (same shape as `allenheltondev/content-tracking`)
 
-Two GitHub **environments** on the repo, `stage` and `prod`, each holding one secret,
-`PIPELINE_EXECUTION_ROLE`: the ARN of an IAM role in that environment's account that GitHub
-Actions assumes through the OIDC connector. No access keys anywhere.
+Two GitHub **environments** on the repo, `Staging` and `Production`, each with one
+environment-scoped secret, `AWS_DEPLOY_ROLE_ARN`: the IAM role in that environment's account that
+GitHub Actions assumes through the OIDC provider. No access keys anywhere.
 
-The role's trust policy must allow `token.actions.githubusercontent.com` with a subject condition
-covering this repo, e.g. `repo:allenheltondev/llm-eval-harness:environment:stage` (or `:prod`, or
-`repo:allenheltondev/llm-eval-harness:*` to cover both). Its permissions need enough to run
-`sam deploy` for this template (CloudFormation, Lambda, IAM roles, DynamoDB, S3, CloudFront,
-Cognito, Bedrock AgentCore) plus the three things `make deploy` does outside CloudFormation: upload
-the zips to the stack's artifact bucket, sync the SPA with `--delete`, and
-`cloudfront:CreateInvalidation` (which cannot be resource-scoped). `make create-user` additionally
-needs `cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
+Each role's trust policy allows `token.actions.githubusercontent.com` with a subject condition
+scoped to this repository. Staging accepts anything from the repo (every PR deploys there);
+Production is scoped to `main`:
+
+```json
+{ "StringLike": { "token.actions.githubusercontent.com:sub": "repo:allenheltondev/llm-eval-harness:*" } }
+```
+
+```json
+{ "StringLike": { "token.actions.githubusercontent.com:sub": "repo:allenheltondev/llm-eval-harness:ref:refs/heads/main" } }
+```
+
+Attach a deploy policy that grants CloudFormation, S3 (the SAM-managed bucket, the stack's artifact
+bucket **and** the SPA bucket, including `s3:DeleteObject` for the `--delete` sync), Lambda (and
+the Lambda Web Adapter layer's `lambda:GetLayerVersion`), IAM (role creation and `iam:PassRole`),
+DynamoDB, CloudFront (distributions, origin access controls, functions, and
+`cloudfront:CreateInvalidation`, which cannot be resource-scoped), Cognito user pools, and Bedrock
+AgentCore runtimes (`bedrock-agentcore:*` on runtimes plus `iam:CreateServiceLinkedRole` for its
+first use). `make create-user` additionally needs `cognito-idp:AdminCreateUser` on the pool, for
+whoever runs it.
 
 One sharp edge: `ServerArtifactKey` and `EvalWorkerArtifactKey` are CloudFormation parameters with
 empty defaults, and an empty value deletes the corresponding resource. `make deploy-backend`
