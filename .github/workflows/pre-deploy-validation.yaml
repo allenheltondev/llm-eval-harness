@@ -57,7 +57,7 @@ jobs:
         working-directory: server
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync --dev
       - run: uv run ruff check .
       - run: uv run pytest --cov=evalharness --cov-report=term-missing
@@ -87,7 +87,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: app/package-lock.json
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync --dev
         working-directory: server
       - run: npm ci

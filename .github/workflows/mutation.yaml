@@ -43,7 +43,7 @@ jobs:
         working-directory: server
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync --dev
       - run: uv run mutmut run
       - run: uv run mutmut results
