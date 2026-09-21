@@ -208,6 +208,31 @@ class TestRun:
         assert result.code == 1
         assert "Guardrails are a Bedrock feature" in result.err
 
+    def test_a_model_failure_mid_stream_exits_one_and_persists_the_row(self, cli, monkeypatch):
+        """A failure *during* a run reports in-band; the row still settles as error.
+
+        Only the model is scripted here -- the real engine, store and renderer
+        run, which is what makes the exit code and the persisted status mean
+        something.
+        """
+        from strands.types.exceptions import ModelThrottledException
+
+        from evalharness.engine import runner
+        from evalharness.engine.fake_model import Error, FakeModel, Text
+
+        script = [Text("partial answer"), Error(ModelThrottledException("slow down"))]
+        monkeypatch.setattr(runner, "build_model", lambda request, settings: FakeModel(script))
+
+        result = cli("run", "-m", "m1", "-p", "hi")
+        assert result.code == 1
+        assert result.out == "partial answer\n"
+        assert "| error [model_throttled] slow down  (retryable)" in result.err
+
+        stored = cli("runs", "--json").json()["items"][0]
+        assert stored["status"] == "error"
+        assert stored["output"] == "partial answer"
+        assert stored["error"]["code"] == "model_throttled"
+
     def test_a_registered_toolset_is_accepted(self, cli):
         assert cli("run", "-m", "m1", "-p", "hi", "--toolset", "fraud-detection").code == 0
 

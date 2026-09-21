@@ -140,6 +140,52 @@ class TestEvalProgressLine:
         assert render.eval_progress_line({}) is None
 
 
+class TestPartialEvents:
+    """Every field the renderers read has a fallback; these pin what it renders.
+
+    The engine populates these dicts fully, so the fallbacks only matter when
+    something upstream changes shape. That is exactly when a renderer must
+    degrade to a readable line instead of raising KeyError mid-run.
+    """
+
+    def test_a_bare_eval_start_renders_empty_fields_and_zero(self):
+        assert render.eval_progress_line({"type": "eval_start"}) == "| evaluation   kind=  n=0"
+
+    def test_a_bare_run_started_renders_index_zero(self):
+        assert render.eval_progress_line({"type": "run_started"}) == "| run 0 started"
+
+    def test_a_bare_run_completed_renders_blanks_and_zeros(self):
+        assert render.eval_progress_line({"type": "run_completed"}) == (
+            "| run 0   id=  0 chars, 0 tools, 0ms"
+        )
+
+    def test_a_bare_run_failed_renders_the_missing_error_as_none(self):
+        assert render.eval_progress_line({"type": "run_failed"}) == "| run 0 failed: None"
+
+    def test_a_bare_eval_complete_renders_an_empty_status(self):
+        assert render.eval_progress_line({"type": "eval_complete"}) == "| "
+
+
+class TestDurationFormatting:
+    """The ms/seconds boundary, pinned from both sides."""
+
+    def _rendered(self, milliseconds: int) -> str:
+        event = ToolResultEvent(tool_use_id="t", name="n", duration_ms=milliseconds)
+        return render.run_progress_line(event).split("(")[1].rstrip(")")
+
+    def test_zero_is_milliseconds(self):
+        assert self._rendered(0) == "0ms"
+
+    def test_just_under_a_second_is_milliseconds(self):
+        assert self._rendered(999) == "999ms"
+
+    def test_exactly_a_second_is_seconds(self):
+        assert self._rendered(1000) == "1.0s"
+
+    def test_seconds_are_divided_not_multiplied(self):
+        assert self._rendered(90_000) == "90.0s"
+
+
 class TestEvalResultLines:
     def test_no_result_produces_nothing(self):
         assert render.eval_result_lines(None) == []
@@ -160,6 +206,17 @@ class TestEvalResultLines:
         line = render.eval_result_lines(result)[1]
         assert line.endswith("…")
         assert len(line.removeprefix("|").strip()) == 160
+
+    def test_reasoning_of_exactly_the_limit_is_not_truncated(self):
+        """The boundary: 160 characters fit, so nothing is dropped and no ellipsis."""
+        line = render.eval_result_lines({"grade": "A", "score": 1, "reasoning": "x" * 160})[1]
+        assert line.removeprefix("|").strip() == "x" * 160
+
+    def test_non_string_reasoning_is_still_rendered(self):
+        """`reasoning` comes off a judge payload, so it is not guaranteed a str."""
+        assert render.eval_result_lines({"grade": "A", "score": 1, "reasoning": 42})[1] == (
+            "|        42"
+        )
 
     def test_empty_reasoning_adds_no_second_line(self):
         assert len(render.eval_result_lines({"grade": "A", "score": 9, "reasoning": ""})) == 1

@@ -111,10 +111,15 @@ exclude_also = [
 #
 # Every file below is business logic with no boto3/AWS/network call in it
 # (translation, parsing, cursor math, event rendering) so a surviving mutant is
-# informative rather than "the mock didn't notice". The list last measured at
-# ~2862 mutants / 6.5-8.5 minutes end to end, but that was before
-# `configstore/client.py` (deleted with the config store) was swapped out for
-# `cli/render.py`, so treat the figure as approximate until the next run.
+# informative rather than "the mock didn't notice". `configstore/client.py` went
+# with the config store; `cli/render.py` took its place, keeping the list at
+# nine files.
+#
+# Measured on that list: 2507 mutants, 2092 killed, 415 survived (83%), ~4
+# minutes end to end at ~12 mutations/second. Survivor counts move by one or
+# two between runs, so treat them as approximate. Where they sit is the useful
+# part: worker/ddb.py (118), guardrails/translator.py (100) and engine/mapper.py
+# (84) carry most of them and are where the next round of test work pays off.
 [tool.mutmut]
 source_paths = ["evalharness"]
 only_mutate = [
