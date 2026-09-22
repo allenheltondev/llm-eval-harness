@@ -66,12 +66,21 @@ FastAPI → the worker Lambda via `lambda:Invoke` with
 
 The invoke is asynchronous, so AWS queues the event and answers immediately
 while the worker runs the whole evaluation inside one invocation: FastAPI never
-holds a connection open for it. The worker writes META pending→running before
-any model call, so the id in the `202` is usable against
-`/evaluations/{id}` straight away.
+holds a connection open for it.
+
+**The server writes META `pending` before it invokes.** The `202` from AWS only
+means the event was queued — the worker may not start for seconds, longer on a
+cold start — so the id in the `202` would otherwise 404 against
+`/evaluations/{id}` and its event stream. Both sides may write the item; the
+worker's `begin` is a conditional put, so whichever goes first wins.
+
+The worker's conditional `pending` → `running` update is an **ownership
+claim**. Asynchronous delivery is at-least-once, so a duplicate event can
+arrive; the delivery that loses the claim executes nothing.
 
 An evaluation that would exceed Lambda's 15-minute limit is stopped
-cooperatively at a run boundary and settled as `error` with code
+cooperatively at a run boundary, or cancelled outright if it is inside a run or
+grading when the hard bound is reached, and settled as `error` with code
 `deadline_exceeded`, keeping whatever runs finished. See
 `docs/cloud-evals-infra.md`.
 

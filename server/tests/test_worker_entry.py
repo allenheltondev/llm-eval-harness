@@ -229,7 +229,11 @@ async def test_execute_settles_a_deadline_as_an_error_not_a_cancellation(
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
     store.mark_running()
-    deadline = lambda_app.Deadline(lambda: 0.0)
+    # The moment the cooperative stop trips: exactly at the margin, so there is
+    # still hard budget left for the engine to return through. An invocation
+    # never sees this the other way round, because the margin is the larger of
+    # the two reserves.
+    deadline = lambda_app.Deadline(lambda: lambda_app.DEADLINE_MARGIN_SECONDS)
 
     status = await lambda_app.execute(EVAL_ID, REQUEST, store, deadline)
 
@@ -239,6 +243,7 @@ async def test_execute_settles_a_deadline_as_an_error_not_a_cancellation(
     assert json.loads(item["error"]["S"])["code"] == lambda_app.DEADLINE_ERROR_CODE
     # The finished runs survive -- that is the point of stopping cleanly.
     assert json.loads(item["run_ids"]["S"]) == ["run-1"]
+    assert "run boundary" in json.loads(item["error"]["S"])["message"]
 
 
 async def test_a_user_cancel_still_settles_as_cancelled(monkeypatch, client, store_factory):
@@ -462,3 +467,99 @@ async def test_build_store_refuses_an_unconfigured_runtime(monkeypatch):
     monkeypatch.delenv("TABLE_NAME", raising=False)
     with pytest.raises(ValueError, match="TABLE_NAME"):
         lambda_app.build_store(EVAL_ID)
+
+
+async def test_a_run_that_ignores_the_cooperative_stop_is_cut_off(
+    monkeypatch, client, store_factory
+):
+    """The cooperative stop is a request; the hard deadline is the enforcement.
+
+    `cancelled` is polled between runs and before grading. A single streaming
+    model call, or the whole grading phase, can start just inside the margin
+    and then run for minutes with nothing polling it. Without a hard bound
+    Lambda kills the environment mid-write and the evaluation reads `running`
+    until its TTL -- the exact outcome the deadline exists to prevent.
+    """
+    async def hangs_forever(request, emit, store, cancelled=None, **_kwargs):
+        # A run already finished and was mirrored to DynamoDB before the stall.
+        store.put_run({"id": "run-1", "status": "completed"})
+        await asyncio.sleep(3600)
+        raise AssertionError("should have been cancelled")
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: hangs_forever)
+
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    # Past the cooperative margin, with a sliver of hard budget left -- enough
+    # for the engine to start and mirror its finished run, not enough for the
+    # stall that follows.
+    deadline = lambda_app.Deadline(lambda: lambda_app.HARD_DEADLINE_RESERVE_SECONDS + 0.25)
+
+    status = await lambda_app.execute(EVAL_ID, REQUEST, store, deadline)
+
+    assert status == "error"
+    item = meta(client)
+    assert item["status"] == {"S": "error"}
+    error = json.loads(item["error"]["S"])
+    assert error["code"] == lambda_app.DEADLINE_ERROR_CODE
+    assert "in flight" in error["message"]
+    # Whatever finished before the stall is still reported.
+    assert json.loads(item["run_ids"]["S"]) == ["run-1"]
+
+
+async def test_a_broken_clock_imposes_no_hard_bound(monkeypatch, client, store_factory):
+    """A clock that cannot be read must not cut an evaluation short."""
+
+    async def finishes(request, emit, store, cancelled=None, **_kwargs):
+        return {"status": "completed", "result": {"ok": True}, "error": None, "run_ids": []}
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: finishes)
+
+    def broken() -> float:
+        raise RuntimeError("no clock")
+
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    deadline = lambda_app.Deadline(broken)
+    assert deadline.budget() is None
+
+    assert await lambda_app.execute(EVAL_ID, REQUEST, store, deadline) == "completed"
+
+
+def test_a_duplicate_delivery_does_not_execute_anything(client, store_factory):
+    """Lambda async delivery is at-least-once; MaximumRetryAttempts: 0 does not change that.
+
+    A second delivery that ran the evaluation again would buy every model run
+    twice and overwrite the first delivery's EVENT# items, because each store
+    numbers its events from zero. Losing the conditional pending -> running
+    update is what says "someone else owns this".
+    """
+    first = store_factory(EVAL_ID)
+    first.begin(REQUEST)
+    assert first.mark_running() is True
+
+    second = store_factory(EVAL_ID)
+    second.begin(REQUEST)
+    assert second.mark_running() is False
+
+
+def test_the_handler_skips_a_delivery_it_did_not_claim(monkeypatch, client, store_factory):
+    """And the handler must act on the claim, not merely record it."""
+
+    def exploding_seam():
+        raise AssertionError("a duplicate delivery must not execute the evaluation")
+
+    monkeypatch.setattr(interfaces, "load_seam", exploding_seam)
+
+    winner = store_factory(EVAL_ID)
+    winner.begin(REQUEST)
+    assert winner.mark_running() is True
+
+    result = lambda_app.handler(PAYLOAD, store_factory=store_factory)
+
+    assert result["status"] == "duplicate"
+    assert result["evaluation_id"] == EVAL_ID
+    # Untouched: still running under the delivery that won.
+    assert meta(client)["status"] == {"S": "running"}

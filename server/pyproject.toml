@@ -28,6 +28,10 @@ evalharness = "evalharness.cli.main:main"
 dev = [
     "mutmut>=3.7.0",
     "pytest>=8.0",
+    # tests/test_infra_template.py reads infra/template.yaml. Declared even
+    # though boto3's chain already pulls it in, so the test does not depend on
+    # a transitive dependency staying put.
+    "pyyaml>=6.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=7.1.0",
     "respx>=0.21",

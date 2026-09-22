@@ -307,12 +307,21 @@ class DynamoEvalStore:
                 return
             raise
 
-    def mark_running(self) -> None:
-        """Transition ``pending`` → ``running``.
+    def mark_running(self) -> bool:
+        """Transition ``pending`` → ``running``, and report whether *we* did it.
 
-        Conditioned on the current status being ``pending`` so a duplicate
-        invoke of an already-finished evaluation cannot resurrect it into
-        ``running``.
+        This is the ownership claim for the invocation, not a status update.
+        Lambda's asynchronous delivery is **at-least-once**: AWS can deliver the
+        same event twice even with ``MaximumRetryAttempts: 0``, which only
+        governs retries after a failure. Two deliveries executing the same
+        evaluation would buy the model runs twice and overwrite each other's
+        ``EVENT#`` items, because every store starts its sequence at zero.
+
+        The conditional update is what makes that impossible: exactly one
+        caller can move the row out of ``pending``. ``True`` means this
+        invocation owns the evaluation and must execute it; ``False`` means
+        another delivery already claimed it (or it is already terminal), and
+        the caller must not run anything.
         """
         try:
             self.client.update_item(
@@ -329,11 +338,12 @@ class DynamoEvalStore:
         except Exception as exc:  # noqa: BLE001 - narrowed below
             if _is_conditional_check_failure(exc):
                 logger.warning(
-                    "eval %s was not pending; not transitioning to running",
+                    "eval %s was not pending; another delivery owns it",
                     self.evaluation_id,
                 )
-                return
+                return False
             raise
+        return True
 
     def save_evaluation(self, **fields: Any) -> None:
         """Partially update the evaluation record (the :class:`EvalStore` hook).

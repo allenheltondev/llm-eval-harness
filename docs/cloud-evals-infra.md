@@ -64,11 +64,32 @@ worker then settles the evaluation as `error` / `deadline_exceeded` rather than
 the `cancelled` the engine would otherwise record, because nobody cancelled it.
 
 The margin has to cover the terminal DynamoDB writes (an `eval_complete` event
-plus the META update) with room for a retry, and it is only checked *between*
-runs — so it also absorbs the tail of whatever run is in flight when the
-deadline passes.
+plus the META update) with room for a retry.
 
-### Retries are off
+### The cooperative stop is a request, not a guarantee
+
+`cancelled` is polled *between* runs and before grading, and nowhere else. So
+the 60-second margin cannot bound what it has to absorb: a single streaming
+model call, or the whole grading phase, can begin with 61 seconds left and run
+for minutes with nothing polling anything. Lambda then kills the environment
+mid-write and the evaluation reads `running` until its TTL — the exact outcome
+the deadline exists to prevent.
+
+So there is a second, enforcing bound. The whole evaluation runs under
+`asyncio.wait_for` with a timeout of `remaining − HARD_DEADLINE_RESERVE_SECONDS`
+(25s), which cancels in-flight work rather than asking it to stop, and the
+worker then writes the same `error` / `deadline_exceeded` terminal state.
+
+The two reserves are deliberately different sizes. The cooperative stop trips
+first (60s > 25s) and gets its chance, because stopping at a run boundary keeps
+the run in progress; the hard stop only fires when that was ignored, and loses
+the run in flight. Losing one run beats losing the evaluation's terminal state.
+
+A clock that cannot be read imposes no hard bound at all: `Deadline.budget()`
+returns `None` and the evaluation runs unbounded, because a broken clock must
+not cut a healthy evaluation short.
+
+### Retries are off, but delivery is still at-least-once
 
 `EventInvokeConfig.MaximumRetryAttempts: 0`. AWS retries a failed asynchronous
 invocation twice by default **[aws]**; that is wrong here. The handler routes
@@ -76,6 +97,45 @@ every *evaluation* failure into DynamoDB rather than raising, so a retry would
 only ever mean the invocation itself died — most likely by exhausting its 15
 minutes — and re-running it would burn another 15 minutes and overwrite the
 first attempt's state.
+
+That setting governs retries *after a failure*. It does not make delivery
+exactly-once: asynchronous invocation is **at-least-once** **[aws]**, so the
+same event can arrive twice regardless. Two deliveries executing the same
+evaluation would buy every model run twice and overwrite each other's `EVENT#`
+items, because each store numbers its events from zero.
+
+The conditional `pending` → `running` update is therefore an **ownership
+claim**, not a status change: exactly one caller can move the row out of
+`pending`. `DynamoEvalStore.mark_running()` returns whether it won, and the
+handler executes nothing when it did not — it returns `{"status":
+"duplicate"}` and writes nothing at all, because writing anything would step on
+the delivery that does own the job.
+
+## Who writes the pending row
+
+The server, before it invokes — and the ordering is the contract.
+
+`InvocationType="Event"` means the `202` from AWS says only that the event was
+queued. The worker may not start, and so may not write `META`, for seconds;
+longer on a cold start. The SPA follows its own `202` straight into
+`GET /evaluations/{id}/events`, which preflights the row and `404`s while it is
+absent. A successfully queued evaluation would surface to the user as an error.
+
+Two details make this safe:
+
+- **The row goes into DynamoDB, not through the server's history repository.**
+  They are the same thing in a deployed stack, but not on a laptop driving the
+  cloud lane against one, where history is SQLite. The detail and event routes
+  read the repository *first* and fall back to DynamoDB only on
+  `NotFoundError`, so a stray local row would shadow the worker's and replay an
+  empty `pending` record forever.
+- **Both sides may write it.** `DynamoEvalStore.begin` is a conditional put
+  (`attribute_not_exists(pk)`) and leaves the existing item alone when it
+  loses, so whichever of server and worker gets there first wins and the result
+  is the same row either way.
+
+If the invoke fails after the row is written, the server settles it as `error`
+/ `eval_worker_unavailable` rather than leaving a `pending` that never moves.
 
 ## The artifact
 
@@ -202,9 +262,16 @@ ignore it.
   `AWS::BedrockAgentCore::Runtime`, for which cfn-lint ships *no schema at all*,
   `AWS::Serverless::Function` is fully checked. Every property on this resource
   is now validated, which the previous host's never were.
-- The handler, the deadline guard and the terminal-state writes are covered by
-  tests against an in-memory DynamoDB, including that a deadline settles as
-  `deadline_exceeded` rather than `cancelled` and keeps its finished runs.
+- The handler, both deadline guards and the terminal-state writes are covered
+  by tests against an in-memory DynamoDB: that a cooperative deadline settles
+  as `deadline_exceeded` rather than `cancelled` and keeps its finished runs;
+  that a run which ignores the cooperative stop is cancelled by the hard bound
+  and still settles, keeping whatever was mirrored before the stall; that a
+  clock which cannot be read imposes no bound at all; and that a second
+  delivery loses the ownership claim and executes nothing.
+- That the server writes the `pending` row *before* the invoke, that the row
+  never lands in the local history repository, and that a failed invoke settles
+  the row rather than leaving it `pending`.
 
 **Not proven — needs a real deploy and a real evaluation:**
 

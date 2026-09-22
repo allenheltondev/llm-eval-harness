@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -171,6 +171,20 @@ def get_invoker(settings: Settings = Depends(get_settings)) -> Invoker | None:
     return _invokers[key]
 
 
+def get_eval_writer_factory(
+    settings: Settings = Depends(get_settings),
+) -> EvalWriterFactory | None:
+    """FastAPI dependency: how ``submit`` writes the ``pending`` row, or ``None``.
+
+    Separate from :func:`get_eval_table`, which is the *reader*. Kept as a
+    dependency rather than built inside ``submit`` so a test can substitute it
+    exactly the way it substitutes :func:`get_invoker`.
+    """
+    if not settings.eval_table:
+        return None
+    return build_eval_writer_factory(settings)
+
+
 def get_eval_table(settings: Settings = Depends(get_settings)) -> EvalTable | None:
     """FastAPI dependency: the DynamoDB reader, or ``None`` when unconfigured."""
     return ddb_reader.build_eval_table(settings)
@@ -182,14 +196,34 @@ def get_eval_table(settings: Settings = Depends(get_settings)) -> EvalTable | No
 
 
 async def submit(
-    request: EvaluationRequest, *, settings: Settings, invoker: Invoker | None
+    request: EvaluationRequest,
+    *,
+    settings: Settings,
+    invoker: Invoker | None,
+    store_factory: EvalWriterFactory | None,
 ) -> EvaluationDetail:
     """Hand an evaluation to the worker and answer with its ``pending`` detail.
 
-    The id is minted here and travels in the payload, so the ``202`` body is
-    immediately usable against ``/evaluations/{id}`` and its event stream even
-    though the server itself writes nothing: the worker's first act is the
-    ``META`` item under that id.
+    The ``pending`` row is written **before** the invoke, and that ordering is
+    the contract rather than an implementation detail. ``InvocationType="Event"``
+    means the ``202`` from AWS says only that the event was queued: the worker
+    may not start -- and so may not write ``META`` -- for seconds, longer on a
+    cold start. The SPA follows the ``202`` straight into
+    ``GET /evaluations/{id}/events``, which preflights the row and 404s while it
+    is absent, so a successfully queued evaluation would surface as an error.
+
+    The row goes into DynamoDB, *not* through this server's history repository.
+    That distinction matters when the two differ -- a laptop running the cloud
+    lane against a deployed stack keeps its history in SQLite -- because a local
+    row would shadow the worker's: ``GET /evaluations/{id}/events`` reads the
+    repository first and only falls back to DynamoDB on ``NotFoundError``, so a
+    stray SQLite row would replay an empty ``pending`` record forever instead of
+    streaming the real thing.
+
+    :class:`DynamoEvalStore` is the writer for the same reason: it is the one
+    place that knows this item's shape, and its ``begin`` is a conditional put,
+    so whichever of the two sides goes first wins and the other leaves the row
+    alone. Either order produces the same item.
 
     ``kind="grade"`` run ids are *not* validated here the way the local lane
     validates them -- the runs they name may live in DynamoDB rather than this
@@ -201,7 +235,18 @@ async def submit(
 
     evaluation_id = uuid4().hex
     payload = worker_payload(evaluation_id, request)
-    await run_in_threadpool(invoker.invoke, evaluation_id, payload)
+    factory = store_factory or build_eval_writer_factory(settings)
+    store = factory(evaluation_id)
+    store.begin(payload["request"], kind=request.kind)
+
+    try:
+        await run_in_threadpool(invoker.invoke, evaluation_id, payload)
+    except Exception:
+        # The row exists and nothing is going to run it, so settle it here
+        # rather than leave a `pending` that never moves. Best effort: the
+        # caller gets the invoke's own error either way.
+        _abandon(store, evaluation_id)
+        raise
     logger.info("submitted cloud evaluation %s", evaluation_id)
 
     return EvaluationDetail(
@@ -216,6 +261,57 @@ async def submit(
         error=None,
         execution="cloud",
     )
+
+
+class EvalWriter(Protocol):
+    """The slice of :class:`DynamoEvalStore` this module writes through."""
+
+    def begin(self, request: dict[str, Any], *, kind: str | None = ...) -> None: ...
+
+    def complete(
+        self,
+        status: str,
+        *,
+        result: dict[str, Any] | None = ...,
+        error: dict[str, Any] | None = ...,
+        run_ids: list[str] | None = ...,
+    ) -> None: ...
+
+
+EvalWriterFactory = Callable[[str], EvalWriter]
+
+
+def build_eval_writer_factory(settings: Settings) -> EvalWriterFactory:
+    """Build DynamoDB eval stores for this server's table.
+
+    Imported lazily: the worker's store pulls in the DynamoDB client, and a
+    server with the cloud lane switched off should not pay for that at import.
+    """
+    from evalharness.worker.ddb import DynamoEvalStore
+
+    def build(evaluation_id: str) -> EvalWriter:
+        return DynamoEvalStore(
+            table_name=settings.eval_table or "",
+            evaluation_id=evaluation_id,
+            region_name=settings.aws_region,
+        )
+
+    return build
+
+
+def _abandon(store: EvalWriter, evaluation_id: str) -> None:
+    """Settle a row whose worker was never reached."""
+    try:
+        store.complete(
+            "error",
+            error={
+                "code": "eval_worker_unavailable",
+                "message": "The evaluation was never handed to the worker.",
+            },
+            run_ids=[],
+        )
+    except Exception:  # noqa: BLE001 - the invoke's own error is the one to report
+        logger.exception("could not settle unstarted evaluation %s", evaluation_id)
 
 
 # --------------------------------------------------------------------------- #

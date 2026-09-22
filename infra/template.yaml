@@ -234,6 +234,21 @@ Resources:
           # space for the run engine, which writes each run there before
           # save_run mirrors it to DynamoDB.
           EVALHARNESS_DB_PATH: /tmp/evalharness-worker.db
+          # Setting the path is NOT enough to select SQLite, and getting this
+          # wrong costs the whole evaluation. `history_backend` defaults to
+          # `auto`, and `auto` resolves by looking for AWS_LAMBDA_FUNCTION_NAME
+          # -- which Lambda sets, and AgentCore did not. So the same env that
+          # resolved to SQLite on the old host resolves to DynamoDB here, and
+          # since the worker deliberately has no EVALHARNESS_EVAL_TABLE,
+          # get_history_repo() raises HistoryBackendMisconfiguredError before
+          # the first run starts. Pin it.
+          #
+          # SQLite is right for the worker: the run engine writes each run to
+          # this scratch database and DynamoEvalStore.save_run then copies the
+          # row into a RUN# item, which is what makes it durable and readable
+          # from another machine. The worker's own DynamoDB writes go through
+          # that store, not through the history repo.
+          EVALHARNESS_HISTORY_BACKEND: sqlite
       Policies:
         - Version: 2012-10-17
           Statement:

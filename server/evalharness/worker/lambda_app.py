@@ -22,13 +22,29 @@ backoff. Being killed at the ceiling would be the worst outcome -- the
 execution environment vanishes mid-write and the evaluation sits at ``running``
 until its 90-day TTL, with nothing to tell the reader it is never coming back.
 
-So the deadline is cooperative. :class:`Deadline` watches the invocation's own
-remaining time and, with :data:`DEADLINE_MARGIN_SECONDS` to spare, reports
-itself through the engine's ``cancelled`` seam -- polled between runs and
-before grading. The engine stops at a clean boundary with every finished run
-already persisted, and the worker then settles the evaluation as ``error``
-with ``deadline_exceeded`` rather than the ``cancelled`` the engine would
-otherwise record, because nobody cancelled it.
+So the deadline is cooperative *first*. :class:`Deadline` watches the
+invocation's own remaining time and, with :data:`DEADLINE_MARGIN_SECONDS` to
+spare, reports itself through the engine's ``cancelled`` seam -- polled between
+runs and before grading. The engine stops at a clean boundary with every
+finished run already persisted, and the worker then settles the evaluation as
+``error`` with ``deadline_exceeded`` rather than the ``cancelled`` the engine
+would otherwise record, because nobody cancelled it.
+
+Asking is not enough on its own, because ``cancelled`` is polled *between*
+runs and nowhere inside one. A single streaming model call, or the whole
+grading phase, can begin just inside the margin and run for minutes unpolled.
+So the evaluation is additionally bounded by ``asyncio.wait_for`` at
+:data:`HARD_DEADLINE_RESERVE_SECONDS`, which cancels in-flight work instead of
+requesting it. The smaller reserve is what makes the cooperative stop the one
+that normally fires: it keeps the run in progress, where the hard stop loses
+it.
+
+Duplicate deliveries
+--------------------
+Asynchronous invocation is at-least-once, and ``MaximumRetryAttempts: 0`` does
+not change that -- it governs retries after a *failure*. So the conditional
+``pending`` -> ``running`` update is an ownership claim: exactly one delivery
+can win it, and a delivery that loses executes nothing and writes nothing.
 """
 
 from __future__ import annotations
@@ -47,17 +63,35 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEADLINE_MARGIN_SECONDS",
+    "HARD_DEADLINE_RESERVE_SECONDS",
     "Deadline",
     "build_store",
     "execute",
     "handler",
 ]
 
-#: Seconds of the invocation reserved for settling up. Has to cover the
-#: terminal DynamoDB writes (an ``eval_complete`` event plus the META update)
-#: with room for a retry, and is checked only *between* runs -- so it also
-#: absorbs the tail of whatever run is in flight when the deadline passes.
+#: Seconds of the invocation reserved for settling up, as seen by the
+#: *cooperative* stop. Checked only between runs and before grading, so it also
+#: has to absorb the tail of whatever run is in flight when the deadline
+#: passes -- which is exactly the part it cannot bound. See
+#: :data:`HARD_DEADLINE_RESERVE_SECONDS`.
 DEADLINE_MARGIN_SECONDS = 60.0
+
+#: Seconds reserved for the terminal DynamoDB writes after the *hard* stop.
+#:
+#: The cooperative stop is a request; this is the enforcement. A single
+#: streaming model call, or the whole grading phase, can start with just over
+#: ``DEADLINE_MARGIN_SECONDS`` left and run for minutes -- and nothing polls
+#: ``cancelled`` while it does. Lambda would then kill the environment
+#: mid-write and the evaluation would read ``running`` until its 90-day TTL,
+#: which is the precise outcome the deadline exists to prevent. So the whole
+#: evaluation is additionally bounded by ``asyncio.wait_for``, leaving this
+#: much of the invocation to write the terminal row.
+#:
+#: Smaller than the cooperative margin on purpose: the cooperative stop must
+#: get its chance first, because stopping at a run boundary keeps more work
+#: than being cancelled mid-flight.
+HARD_DEADLINE_RESERVE_SECONDS = 25.0
 
 #: What the evaluation settles as when the invocation runs out of time.
 DEADLINE_ERROR_CODE = "deadline_exceeded"
@@ -80,6 +114,26 @@ class Deadline:
         self._remaining = remaining
         self._margin = margin
         self.tripped = False
+
+    def seconds_left(self) -> float | None:
+        """Seconds until the invocation is killed, or ``None`` if unreadable."""
+        try:
+            return self._remaining()
+        except Exception:  # noqa: BLE001 - a broken clock must not stop an evaluation
+            logger.exception("could not read the invocation's remaining time")
+            return None
+
+    def budget(self, reserve: float = HARD_DEADLINE_RESERVE_SECONDS) -> float | None:
+        """How long work may run before the terminal write must start.
+
+        ``None`` when the remaining time cannot be read, which means "do not
+        impose a hard bound" -- a broken clock must not cut an evaluation
+        short.
+        """
+        left = self.seconds_left()
+        if left is None:
+            return None
+        return max(0.0, left - reserve)
 
     def expired(self) -> bool:
         if self.tripped:
@@ -130,6 +184,17 @@ def _rejected(code: str, message: str) -> dict[str, Any]:
     return {"status": "rejected", "error": {"code": code, "message": message}}
 
 
+def _duplicate(evaluation_id: str) -> dict[str, Any]:
+    """The result body for a delivery that did not win the ownership claim.
+
+    Not an error: the evaluation is running (or already finished) under another
+    delivery, and its state in DynamoDB is correct. Nothing is written here,
+    because writing anything would step on the owner.
+    """
+    logger.warning("eval %s already claimed; skipping duplicate delivery", evaluation_id)
+    return {"status": "duplicate", "evaluation_id": evaluation_id, "execution": "cloud"}
+
+
 # --------------------------------------------------------------------------- #
 # The job
 # --------------------------------------------------------------------------- #
@@ -155,7 +220,33 @@ async def execute(
             return "cancelled"
 
         cancelled = _stop_condition(store, deadline)
-        outcome = await interfaces.run_evaluation(request, store.emit, store, cancelled)
+        try:
+            outcome = await asyncio.wait_for(
+                interfaces.run_evaluation(request, store.emit, store, cancelled),
+                timeout=None if deadline is None else deadline.budget(),
+            )
+        except TimeoutError:
+            # The cooperative stop was asked for and did not get taken: the
+            # engine was inside a single run, or inside grading, where nothing
+            # polls `cancelled`. Cancelling mid-flight loses the run in
+            # progress, but the finished ones are already in DynamoDB and the
+            # row settles honestly -- which beats being killed by Lambda and
+            # reading `running` forever.
+            logger.warning("eval %s hit the hard deadline mid-flight", evaluation_id)
+            store.complete(
+                "error",
+                error={
+                    "code": DEADLINE_ERROR_CODE,
+                    "message": (
+                        "The evaluation did not finish inside the worker's "
+                        "15-minute limit and was stopped while a run was still "
+                        "in flight. Completed runs are preserved; re-run with a "
+                        "smaller n."
+                    ),
+                },
+                run_ids=store.saved_run_ids,
+            )
+            return "error"
 
         if deadline is not None and deadline.tripped:
             # The engine stopped because we asked it to, and it settles that as
@@ -267,10 +358,19 @@ def handler(
     try:
         store = store_factory(evaluation_id)
         store.begin(request)
-        store.mark_running()
+        claimed = store.mark_running()
     except Exception as exc:  # noqa: BLE001
         logger.exception("eval %s: could not write initial state", evaluation_id)
         return _rejected("store_unavailable", str(exc) or exc.__class__.__name__)
+
+    if not claimed:
+        # Lambda's asynchronous delivery is at-least-once, so a second copy of
+        # this event can arrive even with MaximumRetryAttempts: 0. Running it
+        # would buy every model run twice and overwrite the first delivery's
+        # EVENT# items, since each store numbers its events from zero. The
+        # conditional pending -> running update is the claim; losing it means
+        # someone else owns this evaluation.
+        return _duplicate(evaluation_id)
 
     status = asyncio.run(execute(evaluation_id, request, store, deadline_from(context)))
     return {"status": status, "evaluation_id": evaluation_id, "execution": "cloud"}
