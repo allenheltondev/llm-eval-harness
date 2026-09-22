@@ -33,11 +33,17 @@ would otherwise record, because nobody cancelled it.
 Asking is not enough on its own, because ``cancelled`` is polled *between*
 runs and nowhere inside one. A single streaming model call, or the whole
 grading phase, can begin just inside the margin and run for minutes unpolled.
-So the evaluation is additionally bounded by ``asyncio.wait_for`` at
-:data:`HARD_DEADLINE_RESERVE_SECONDS`, which cancels in-flight work instead of
-requesting it. The smaller reserve is what makes the cooperative stop the one
+So the engine additionally runs as its own task with a hard bound at
+:data:`HARD_DEADLINE_RESERVE_SECONDS`, and is cancelled rather than asked when
+it overruns. The smaller reserve is what makes the cooperative stop the one
 that normally fires: it keeps the run in progress, where the hard stop loses
 it.
+
+Either way the engine settles ``cancelled`` itself and publishes
+``eval_complete``, which makes the store terminal before the worker gets
+control back -- so a deadline cannot be corrected afterwards. The worker
+records the reason on the store *first* (:meth:`DynamoEvalStore.stop_with`),
+and the store writes the engine's ``cancelled`` as ``deadline_exceeded``.
 
 Duplicate deliveries
 --------------------
@@ -62,7 +68,9 @@ from evalharness.worker.ddb import DynamoEvalStore
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "BOUNDARY_STOP",
     "DEADLINE_MARGIN_SECONDS",
+    "IN_FLIGHT_STOP",
     "HARD_DEADLINE_RESERVE_SECONDS",
     "Deadline",
     "build_store",
@@ -84,9 +92,9 @@ DEADLINE_MARGIN_SECONDS = 60.0
 #: ``DEADLINE_MARGIN_SECONDS`` left and run for minutes -- and nothing polls
 #: ``cancelled`` while it does. Lambda would then kill the environment
 #: mid-write and the evaluation would read ``running`` until its 90-day TTL,
-#: which is the precise outcome the deadline exists to prevent. So the whole
-#: evaluation is additionally bounded by ``asyncio.wait_for``, leaving this
-#: much of the invocation to write the terminal row.
+#: which is the precise outcome the deadline exists to prevent. So the engine
+#: task is additionally cancelled once only this much of the invocation is
+#: left, which is what the terminal write then has to fit in.
 #:
 #: Smaller than the cooperative margin on purpose: the cooperative stop must
 #: get its chance first, because stopping at a run boundary keeps more work
@@ -95,6 +103,28 @@ HARD_DEADLINE_RESERVE_SECONDS = 25.0
 
 #: What the evaluation settles as when the invocation runs out of time.
 DEADLINE_ERROR_CODE = "deadline_exceeded"
+
+#: The error recorded when the cooperative stop is taken: the engine noticed the
+#: deadline between runs and stopped cleanly.
+BOUNDARY_STOP = {
+    "code": DEADLINE_ERROR_CODE,
+    "message": (
+        "The evaluation did not finish inside the worker's 15-minute limit and "
+        "was stopped at a run boundary. Completed runs are preserved; re-run "
+        "with a smaller n."
+    ),
+}
+
+#: The error recorded when the hard bound fires: a run or grading was still in
+#: flight and had to be cancelled.
+IN_FLIGHT_STOP = {
+    "code": DEADLINE_ERROR_CODE,
+    "message": (
+        "The evaluation did not finish inside the worker's 15-minute limit and "
+        "was stopped while a run was still in flight. Completed runs are "
+        "preserved; re-run with a smaller n."
+    ),
+}
 
 
 class Deadline:
@@ -220,51 +250,47 @@ async def execute(
             return "cancelled"
 
         cancelled = _stop_condition(store, deadline)
+        task = asyncio.ensure_future(
+            interfaces.run_evaluation(request, store.emit, store, cancelled)
+        )
         try:
-            outcome = await asyncio.wait_for(
-                interfaces.run_evaluation(request, store.emit, store, cancelled),
-                timeout=None if deadline is None else deadline.budget(),
+            done, _ = await asyncio.wait(
+                {task}, timeout=None if deadline is None else deadline.budget()
             )
-        except TimeoutError:
-            # The cooperative stop was asked for and did not get taken: the
-            # engine was inside a single run, or inside grading, where nothing
-            # polls `cancelled`. Cancelling mid-flight loses the run in
-            # progress, but the finished ones are already in DynamoDB and the
-            # row settles honestly -- which beats being killed by Lambda and
-            # reading `running` forever.
-            logger.warning("eval %s hit the hard deadline mid-flight", evaluation_id)
-            store.complete(
-                "error",
-                error={
-                    "code": DEADLINE_ERROR_CODE,
-                    "message": (
-                        "The evaluation did not finish inside the worker's "
-                        "15-minute limit and was stopped while a run was still "
-                        "in flight. Completed runs are preserved; re-run with a "
-                        "smaller n."
-                    ),
-                },
-                run_ids=store.saved_run_ids,
-            )
-            return "error"
+        except asyncio.CancelledError:
+            # This coroutine is being cancelled while the engine runs, and
+            # `asyncio.wait` -- unlike `await task` -- does not pass that on:
+            # the engine would keep running behind us. Cancel it and let it
+            # settle through the store on its own cancel path *before* this
+            # cancellation continues outward, so the row and the stream's last
+            # line are the engine's rather than a guess written ahead of it.
+            await _cancel_and_settle(task)
+            # Unreachable today: we are being cancelled, so _cancel_and_settle
+            # re-raises. Kept so this path can never fall through into the
+            # result handling below if that ever changes.
+            raise  # pragma: no cover - _cancel_and_settle re-raises here
 
-        if deadline is not None and deadline.tripped:
-            # The engine stopped because we asked it to, and it settles that as
-            # `cancelled`. Nobody cancelled this. Overwrite the buffered
-            # terminal state before flushing it, so the row says what actually
-            # happened and keeps the runs that did finish.
-            store.complete(
-                "error",
-                error={
-                    "code": DEADLINE_ERROR_CODE,
-                    "message": (
-                        "The evaluation did not finish inside the worker's "
-                        "15-minute limit and was stopped at a run boundary. "
-                        "Completed runs are preserved; re-run with a smaller n."
-                    ),
-                },
-                run_ids=outcome["run_ids"],
-            )
+        if task not in done:
+            # The cooperative stop was asked for and not taken: the engine is
+            # inside a single run, or inside grading, where nothing polls
+            # `cancelled`. Arm the reason *before* cancelling. The engine's
+            # cancel handler settles `cancelled` and publishes `eval_complete`,
+            # which flushes the row -- so this is the last moment the reason
+            # can still be recorded. (`asyncio.wait_for` cancels and only then
+            # raises, which is too late.)
+            logger.warning("eval %s hit the hard deadline mid-flight", evaluation_id)
+            store.stop_with(IN_FLIGHT_STOP)
+            await _cancel_and_settle(task)
+            _settle_deadline(store, IN_FLIGHT_STOP)
+            return "error"
+        outcome = task.result()
+
+        if outcome["status"] == "cancelled" and deadline is not None and deadline.tripped:
+            # The stop condition armed the reason when the deadline tripped, so
+            # the engine's `cancelled` has already been recorded as the
+            # deadline -- in the row and in the stream's last line. Nobody
+            # cancelled this.
+            _settle_deadline(store, BOUNDARY_STOP)
             logger.warning("eval %s stopped at the deadline", evaluation_id)
             return "error"
 
@@ -309,10 +335,55 @@ async def execute(
 
 
 def _stop_condition(store: DynamoEvalStore, deadline: Deadline | None) -> Callable[[], bool]:
-    """What the engine polls between runs: a user cancel, or the deadline."""
+    """What the engine polls between runs: a user cancel, or the deadline.
+
+    The user's cancel is checked first and wins, and it arms nothing, so it
+    still settles as ``cancelled``. A deadline arms its reason on the store at
+    the moment it trips -- before the engine settles -- because afterwards is
+    too late to correct (see :meth:`DynamoEvalStore.stop_with`).
+    """
     if deadline is None:
         return store.cancel_requested
-    return lambda: store.cancel_requested() or deadline.expired()
+
+    def stop() -> bool:
+        if store.cancel_requested():
+            return True
+        if deadline.expired():
+            store.stop_with(BOUNDARY_STOP)
+            return True
+        return False
+
+    return stop
+
+
+async def _cancel_and_settle(task: asyncio.Task[Any]) -> None:
+    """Cancel the engine and wait for it to finish settling through the store.
+
+    The ``CancelledError`` that comes back is normally the engine's own, from
+    the cancel sent here, and is absorbed. If *this* coroutine is being
+    cancelled as well, that is not ours to absorb, so it propagates.
+    """
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+
+
+def _settle_deadline(store: DynamoEvalStore, reason: dict[str, Any]) -> None:
+    """Make sure a deadline stop is durably written as one.
+
+    With the real engine this is normally already done: it settled through the
+    store, which translated its ``cancelled`` using the armed reason, and the
+    ``eval_complete`` it published flushed the row. This covers the rest -- a
+    buffered state that was never flushed, or an engine that never settled at
+    all -- without ever overwriting a row that is already terminal.
+    """
+    if store.is_terminal or store.finalize():
+        return
+    store.complete("error", error=reason, run_ids=store.saved_run_ids)
 
 
 def _finalize_quietly(store: DynamoEvalStore, status: str, error: dict[str, Any] | None) -> None:
@@ -322,6 +393,10 @@ def _finalize_quietly(store: DynamoEvalStore, status: str, error: dict[str, Any]
     read as ``running`` until its TTL expires -- so it is logged and dropped
     rather than allowed to mask the original failure.
     """
+    if store.is_terminal:
+        # Already settled -- by the engine's own cancel path, typically. Writing
+        # again would only raise, and the row is right as it stands.
+        return
     try:
         if not store.finalize():
             store.complete(status, error=error)

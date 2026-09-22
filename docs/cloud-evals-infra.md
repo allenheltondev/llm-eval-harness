@@ -75,15 +75,48 @@ for minutes with nothing polling anything. Lambda then kills the environment
 mid-write and the evaluation reads `running` until its TTL — the exact outcome
 the deadline exists to prevent.
 
-So there is a second, enforcing bound. The whole evaluation runs under
-`asyncio.wait_for` with a timeout of `remaining − HARD_DEADLINE_RESERVE_SECONDS`
-(25s), which cancels in-flight work rather than asking it to stop, and the
-worker then writes the same `error` / `deadline_exceeded` terminal state.
+So there is a second, enforcing bound. The engine runs as its own task, waited
+on for `remaining − HARD_DEADLINE_RESERVE_SECONDS` (25s); if it has not
+finished by then it is cancelled rather than asked, and settles as `error` /
+`deadline_exceeded` with the runs that finished before the stall.
 
 The two reserves are deliberately different sizes. The cooperative stop trips
 first (60s > 25s) and gets its chance, because stopping at a run boundary keeps
 the run in progress; the hard stop only fires when that was ignored, and loses
 the run in flight. Losing one run beats losing the evaluation's terminal state.
+
+### Why the reason is recorded before the engine stops
+
+The engine only knows one way to stop: it settles `cancelled` and publishes
+`eval_complete`. Both happen inside the engine — on the cooperative path and
+on the asyncio-cancel path alike — and `eval_complete` is what makes
+`DynamoEvalStore` flush its buffered terminal state. So by the time the worker
+regains control after either deadline, the row already reads `cancelled`, is
+terminal, and cannot be corrected: any further write raises. A deadline is not
+a cancellation, and the user never asked for one.
+
+So the worker tells the store *why* before the engine settles.
+`DynamoEvalStore.stop_with(error)` arms a reason, and while it is armed a
+terminal `cancelled` is written as `error` with that `error` — in the `META`
+row and in the stream's closing `eval_complete` line, which must agree. The
+cooperative stop arms it at the moment the deadline trips; the hard stop arms
+it before cancelling the engine task. A user's cancel is checked first and
+arms nothing, so it still settles as `cancelled`. Only `cancelled` is ever
+reinterpreted: an evaluation that finished, or failed on its own, keeps its own
+outcome.
+
+This is also why the hard stop does not use `asyncio.wait_for`. `wait_for`
+cancels the task and only then raises, leaving no moment in which to arm the
+reason before the engine settles.
+
+An earlier version corrected the row *afterwards*, and its tests passed
+against hand-written engine doubles — doubles that called `save_evaluation`
+and returned without ever publishing `eval_complete`, so nothing was flushed
+and the correction appeared to work. Against the real engine both paths
+reported `cancelled`. The tests that guard this now drive the real
+`execute_evaluation_with_seam` over a real `DynamoEvalStore`, with the fake
+model standing in for Bedrock and a stalling variant of it for the in-flight
+case.
 
 A clock that cannot be read imposes no hard bound at all: `Deadline.budget()`
 returns `None` and the evaluation runs unbounded, because a broken clock must
@@ -263,12 +296,13 @@ ignore it.
   `AWS::Serverless::Function` is fully checked. Every property on this resource
   is now validated, which the previous host's never were.
 - The handler, both deadline guards and the terminal-state writes are covered
-  by tests against an in-memory DynamoDB: that a cooperative deadline settles
-  as `deadline_exceeded` rather than `cancelled` and keeps its finished runs;
-  that a run which ignores the cooperative stop is cancelled by the hard bound
-  and still settles, keeping whatever was mirrored before the stall; that a
-  clock which cannot be read imposes no bound at all; and that a second
-  delivery loses the ownership claim and executes nothing.
+  by tests against an in-memory DynamoDB, **driving the real engine** rather
+  than a double of it: that a cooperative deadline and a stalled in-flight run
+  both settle as `deadline_exceeded` in the row *and* the stream's last line;
+  that a real user cancel still reads `cancelled`; that a clock which cannot be
+  read imposes no bound at all; that an outer cancellation neither leaks the
+  engine task nor writes the row ahead of it; and that a second delivery loses
+  the ownership claim and executes nothing.
 - That the server writes the `pending` row *before* the invoke, that the row
   never lands in the local history repository, and that a failed invoke settles
   the row rather than leaving it `pending`.

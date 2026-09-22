@@ -215,13 +215,17 @@ async def test_execute_settles_a_deadline_as_an_error_not_a_cancellation(
 ):
     """Nobody cancelled this, so it must not read as cancelled.
 
-    The engine's cooperative-stop path settles `cancelled`; the worker
-    overwrites that buffered state with `deadline_exceeded` before it is
-    flushed, keeping the runs that did finish.
+    The engine's cooperative-stop path settles `cancelled` and publishes
+    `eval_complete`, which flushes the row -- so the worker cannot correct it
+    afterwards. The stop condition arms the reason on the store as the deadline
+    trips, and the store records the engine's `cancelled` as the deadline.
     """
     async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
         assert cancelled() is True  # the deadline is already past
-        store.save_evaluation(status="cancelled", result=None, error=None)
+        # What the real engine's `_settle_cancelled` does: settle with the
+        # finished runs, then publish eval_complete (which flushes the row).
+        store.save_evaluation(status="cancelled", run_ids=["run-1"])
+        emit({"type": "eval_complete", "status": "cancelled", "result": None})
         return {"status": "cancelled", "result": None, "error": None, "run_ids": ["run-1"]}
 
     monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
@@ -563,3 +567,222 @@ def test_the_handler_skips_a_delivery_it_did_not_claim(monkeypatch, client, stor
     assert result["evaluation_id"] == EVAL_ID
     # Untouched: still running under the delivery that won.
     assert meta(client)["status"] == {"S": "running"}
+
+
+# --------------------------------------------------------------------------- #
+# The deadline against the REAL engine
+#
+# The tests above drive `execute` with hand-written seams, and that is exactly
+# how a real bug hid: a fake seam that calls `save_evaluation(status=...)` and
+# returns never publishes `eval_complete`, so the store's buffered terminal
+# state is never flushed and the worker is free to overwrite it. The real
+# engine's cancel paths (`_settle_cancelled`) DO publish `eval_complete`, which
+# flushes the row as `cancelled` before the worker gets control back. These
+# drive the real `execute_evaluation_with_seam` over a real DynamoEvalStore.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def real_engine(tmp_path, monkeypatch):
+    """The real evaluation engine, with the fake model standing in for Bedrock.
+
+    `FakeModel` and `FakeJudgeModel` are test infrastructure: they let the whole
+    engine -- runs, persistence, grading, cancellation -- execute hermetically.
+    `stall=True` makes every model call block inside `stream`, which is a real
+    in-flight call the engine cannot poll `cancelled` during.
+    """
+    from evalharness.config import Settings
+    from evalharness.engine.fake_model import FakeModel, Text
+    from evalharness.evals import engine as evals_engine
+    from evalharness.evals.judge import FakeJudgeModel
+    from evalharness.store import db
+    from evalharness.store import repo as store_repo
+
+    db.init_db(str(tmp_path / "worker.db"))
+    store_repo.reset_cache()
+    monkeypatch.setattr(evals_engine, "RETRY_BACKOFF_SECONDS", (0.0, 0.0))
+
+    class StallingModel(FakeModel):
+        """A FakeModel whose stream blocks before yielding anything.
+
+        (`FakeModel.latency_ms` only *reports* a latency in the metrics; it
+        does not wait, so it cannot stand in for a slow provider.)
+        """
+
+        def stream(self, *args, **kwargs):
+            inner = super().stream(*args, **kwargs)
+
+            async def stalled():
+                await asyncio.sleep(3600)
+                async for event in inner:
+                    yield event
+
+            return stalled()
+
+    def configure(stall: bool = False) -> None:
+        model_class = StallingModel if stall else FakeModel
+
+        def deps(settings=None):
+            return evals_engine.EvalDeps(
+                settings=Settings(),
+                model_factory=lambda _request: model_class(script=[Text("done")]),
+                judge_factory=lambda _model_id: FakeJudgeModel(),
+            )
+
+        monkeypatch.setattr(evals_engine, "default_deps", deps)
+
+    yield configure
+    store_repo.reset_cache()
+
+
+def _final_event(client: FakeDynamoDBClient) -> dict:
+    events = collected(client)
+    assert events, "no events were written"
+    assert events[-1]["type"] == "eval_complete"
+    return events[-1]
+
+
+async def test_a_real_cooperative_deadline_settles_as_deadline_exceeded(
+    real_engine, client, store_factory
+):
+    """Nobody cancelled this; the row AND the stream's last line must say so."""
+    real_engine()
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    # Tripped from the first poll, with ample hard budget left.
+    deadline = lambda_app.Deadline(lambda: lambda_app.DEADLINE_MARGIN_SECONDS)
+
+    status = await lambda_app.execute(EVAL_ID, REQUEST, store, deadline)
+
+    assert status == "error"
+    item = meta(client)
+    assert item["status"] == {"S": "error"}
+    assert json.loads(item["error"]["S"])["code"] == lambda_app.DEADLINE_ERROR_CODE
+    # The reader's stream ends on this line; it must agree with the row.
+    assert _final_event(client)["status"] == "error"
+
+
+async def test_a_real_run_stalled_past_the_hard_deadline_settles_as_deadline_exceeded(
+    real_engine, client, store_factory
+):
+    """The case Codex found: an in-flight model call that nothing polls."""
+    real_engine(stall=True)  # an hour per call: only the hard bound can end it
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    # Not yet at the cooperative margin, so the engine starts a run -- which
+    # then stalls. A sliver of hard budget, so the test is fast.
+    budget = lambda_app.HARD_DEADLINE_RESERVE_SECONDS + 0.25
+    deadline = lambda_app.Deadline(lambda: budget, margin=0.0)
+
+    status = await lambda_app.execute(EVAL_ID, REQUEST, store, deadline)
+
+    assert status == "error"
+    item = meta(client)
+    assert item["status"] == {"S": "error"}
+    assert json.loads(item["error"]["S"])["code"] == lambda_app.DEADLINE_ERROR_CODE
+    assert _final_event(client)["status"] == "error"
+
+
+async def test_a_real_user_cancel_still_settles_as_cancelled(
+    real_engine, client, store_factory
+):
+    """The fix must not turn a genuine cancellation into a deadline."""
+    real_engine()
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    client.put_item(
+        TableName=TABLE,
+        Item={"pk": {"S": f"EVAL#{EVAL_ID}"}, "sk": {"S": "CANCEL"}},
+    )
+    # A deadline that is also past -- the user's cancel must still win.
+    deadline = lambda_app.Deadline(lambda: lambda_app.DEADLINE_MARGIN_SECONDS)
+
+    status = await lambda_app.execute(EVAL_ID, REQUEST, store, deadline)
+
+    assert status == "cancelled"
+    assert meta(client)["status"] == {"S": "cancelled"}
+    assert _final_event(client)["status"] == "cancelled"
+
+
+async def test_an_outer_cancel_during_the_hard_stop_still_propagates(
+    monkeypatch, client, store_factory
+):
+    """Swallowing the engine's CancelledError must not swallow OURS.
+
+    The hard path cancels the engine and awaits it, expecting a CancelledError
+    back. If this coroutine is itself cancelled while it waits -- Lambda
+    shutting down, say -- that cancellation has to propagate rather than be
+    mistaken for the one we sent.
+    """
+    dying = asyncio.Event()
+
+    async def slow_to_die(request, emit, store, cancelled=None, **_kwargs):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            dying.set()
+            await asyncio.sleep(3600)  # takes its time unwinding
+            raise
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: slow_to_die)
+
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    budget = lambda_app.HARD_DEADLINE_RESERVE_SECONDS + 0.05
+    deadline = lambda_app.Deadline(lambda: budget, margin=0.0)
+
+    outer = asyncio.ensure_future(lambda_app.execute(EVAL_ID, REQUEST, store, deadline))
+    await asyncio.wait_for(dying.wait(), timeout=5)  # hard stop fired; engine unwinding
+    outer.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+
+
+async def test_an_outer_cancel_while_waiting_does_not_leak_the_engine(
+    monkeypatch, caplog, real_engine, client, store_factory
+):
+    """`asyncio.wait` does not cancel what it waits on when the waiter is cancelled.
+
+    Unlike `await task` -- where cancelling the awaiting task cancels the awaited
+    one -- `asyncio.wait` suspends on an internal future, so an outer cancel
+    stops there and the engine keeps running, stalled model call and all. The
+    row cannot show this: the outer `except CancelledError` writes `cancelled`
+    whether or not the engine leaked. So this watches the engine task itself.
+    """
+    engine_tasks: list[asyncio.Task] = []
+    real_run = interfaces.run_evaluation
+
+    async def recording(*args, **kwargs):
+        # Runs inside the task `execute` creates for the engine.
+        engine_tasks.append(asyncio.current_task())
+        return await real_run(*args, **kwargs)
+
+    monkeypatch.setattr(interfaces, "run_evaluation", recording)
+    real_engine(stall=True)
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+
+    outer = asyncio.ensure_future(lambda_app.execute(EVAL_ID, REQUEST, store, None))
+    for _ in range(50):  # let the engine get into its stalled model call
+        await asyncio.sleep(0)
+    outer.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+    (engine,) = engine_tasks
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert engine.done(), "the engine task is still running behind a cancelled worker"
+    # Cancelled -- not dead of "already terminal" because the worker wrote the
+    # row before the engine had settled it.
+    assert engine.cancelled()
+    assert meta(client)["status"] == {"S": "cancelled"}
+    # And settling twice is not an ERROR: the second writer sees a terminal row.
+    assert "failed to write terminal state" not in caplog.text
+    assert collected(client)[-1] == {"type": "eval_complete", "status": "cancelled", "result": None}

@@ -367,9 +367,8 @@ async def test_an_evaluation_that_was_never_queued_does_not_sit_pending(table, i
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
         response = await ac.post("/api/v1/evaluations", json=determinism_body())
 
-    assert response.status_code >= 500 or response.json()["error"]["code"] == (
-        "eval_worker_unavailable"
-    )
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "eval_worker_unavailable"
     (writer,) = writers.values()
     assert [name for name, _ in writer.calls] == ["begin", "complete"]
     item = table.get_item(Key={"pk": f"EVAL#{writer.evaluation_id}", "sk": "META"})["Item"]
@@ -786,3 +785,51 @@ def test_get_invoker_builds_a_distinct_instance_per_function():
 
 def test_get_invoker_is_none_when_unconfigured():
     assert cloud.get_invoker(Settings()) is None
+
+
+def test_the_writer_factory_is_off_without_a_table():
+    assert cloud.get_eval_writer_factory(Settings()) is None
+
+
+def test_the_writer_factory_builds_stores_for_this_servers_table():
+    """The real factory, which every other test here substitutes."""
+    from evalharness.worker.ddb import DynamoEvalStore
+
+    settings = Settings(eval_table=TABLE_NAME, aws_region="eu-west-2")
+    factory = cloud.get_eval_writer_factory(settings)
+
+    store = factory("abc123")
+
+    assert isinstance(store, DynamoEvalStore)
+    assert store.table_name == TABLE_NAME
+    assert store.evaluation_id == "abc123"
+
+
+async def test_a_row_that_cannot_be_settled_does_not_mask_the_invoke_error(
+    table, initialized_db
+):
+    """If settling the orphaned row fails too, the caller still sees WHY it failed."""
+    invoker = RecordingInvoker(fail=UpstreamError("worker gone", code="eval_worker_unavailable"))
+
+    class UnsettleableWriter(RecordingWriter):
+        def complete(self, status, **kwargs):
+            raise RuntimeError("table is gone as well")
+
+    application = FastAPI()
+    register_exception_handlers(application)
+    application.include_router(runs.router, prefix="/api/v1")
+    settings = Settings(eval_function_name=FUNCTION_NAME, eval_table=TABLE_NAME)
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[cloud.get_eval_table] = lambda: EvalTable(table)
+    application.dependency_overrides[cloud.get_invoker] = lambda: invoker
+    application.dependency_overrides[cloud.get_eval_writer_factory] = lambda: (
+        lambda evaluation_id: UnsettleableWriter(table, evaluation_id, invoker)
+    )
+
+    transport = httpx.ASGITransport(app=application)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+        response = await ac.post("/api/v1/evaluations", json=determinism_body())
+
+    # The invoke's own error -- not the RuntimeError from the failed cleanup.
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "eval_worker_unavailable"

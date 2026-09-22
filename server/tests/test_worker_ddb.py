@@ -842,3 +842,119 @@ def test_save_run_with_no_local_db_configured_is_a_no_op(store, client, monkeypa
 
     assert client.item("RUN#run-never-local", "META") is None
     assert store.saved_run_ids == []
+
+
+# --------------------------------------------------------------------------- #
+# stop_with: a stop that is not a user's cancel
+# --------------------------------------------------------------------------- #
+
+DEADLINE = {"code": "deadline_exceeded", "message": "out of time"}
+
+
+def _events(client: FakeDynamoDBClient) -> list[dict]:
+    return [
+        json.loads(item["event"]["S"])
+        for item in client.items_with_prefix(f"EVAL#{EVAL_ID}", "EVENT#")
+    ]
+
+
+def test_an_armed_stop_records_the_engines_cancel_as_the_reason(client, store):
+    """The engine only knows how to settle `cancelled`; the store knows why."""
+    store.begin({"kind": "determinism"})
+    store.stop_with(DEADLINE)
+
+    # Exactly what the engine's _settle_cancelled does.
+    store.save_evaluation(status="cancelled", run_ids=["run-1"])
+    store.emit({"type": "eval_complete", "status": "cancelled", "result": None})
+
+    item = meta(client)
+    assert item["status"] == {"S": "error"}
+    assert json.loads(item["error"]["S"]) == DEADLINE
+    assert json.loads(item["run_ids"]["S"]) == ["run-1"]
+    # The stream's last line agrees with the row it closes.
+    assert _events(client)[-1] == {"type": "eval_complete", "status": "error", "result": None}
+    assert store.is_terminal
+
+
+def test_without_a_reason_a_cancel_is_still_a_cancel(client, store):
+    """A user's cancel arms nothing, and must read exactly as it did before."""
+    store.begin({"kind": "determinism"})
+
+    store.save_evaluation(status="cancelled", run_ids=[])
+    store.emit({"type": "eval_complete", "status": "cancelled", "result": None})
+
+    assert meta(client)["status"] == {"S": "cancelled"}
+    assert meta(client)["error"] == {"NULL": True}
+    assert _events(client)[-1]["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("status", ["completed", "error"])
+def test_an_armed_stop_leaves_other_outcomes_alone(client, store, status):
+    """Only a `cancelled` is reinterpreted. An evaluation that finished anyway,
+    or failed on its own, keeps its own outcome."""
+    store.begin({"kind": "determinism"})
+    store.stop_with(DEADLINE)
+
+    own_error = None if status == "completed" else {"code": "no_successful_runs"}
+    store.save_evaluation(status=status, error=own_error)
+    store.emit({"type": "eval_complete", "status": status, "result": None})
+
+    item = meta(client)
+    assert item["status"] == {"S": status}
+    assert (json.loads(item["error"]["S"]) if "S" in item["error"] else None) == own_error
+    assert _events(client)[-1]["status"] == status
+
+
+def test_arming_again_replaces_the_reason(client, store):
+    """The hard stop after the cooperative one is what actually happened."""
+    store.begin({"kind": "determinism"})
+    store.stop_with({"code": "deadline_exceeded", "message": "run boundary"})
+    store.stop_with({"code": "deadline_exceeded", "message": "in flight"})
+
+    store.save_evaluation(status="cancelled")
+    store.finalize()
+
+    assert json.loads(meta(client)["error"]["S"])["message"] == "in flight"
+
+
+def test_the_reason_is_copied_not_aliased(client, store):
+    reason = {"code": "deadline_exceeded", "message": "original"}
+    store.begin({"kind": "determinism"})
+    store.stop_with(reason)
+    reason["message"] = "mutated after arming"
+
+    store.save_evaluation(status="cancelled")
+    store.finalize()
+
+    assert json.loads(meta(client)["error"]["S"])["message"] == "original"
+
+
+def test_non_complete_events_are_never_rewritten(client, store):
+    """Only the closing line is translated -- a `status` field elsewhere is not."""
+    store.begin({"kind": "determinism"})
+    store.stop_with(DEADLINE)
+
+    store.emit({"type": "run_completed", "index": 0, "status": "cancelled"})
+
+    assert _events(client)[-1] == {"type": "run_completed", "index": 0, "status": "cancelled"}
+    assert not store.is_terminal
+
+
+def test_the_client_is_built_lazily_for_the_stores_region(monkeypatch):
+    """Nothing talks to AWS until something is written -- and then in the right region."""
+    import boto3
+
+    built: list[tuple[str, str | None]] = []
+    sentinel = object()
+
+    def fake_client(service, region_name=None):
+        built.append((service, region_name))
+        return sentinel
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    store = DynamoEvalStore(TABLE, EVAL_ID, region_name="eu-west-2")
+
+    assert built == []
+    assert store.client is sentinel
+    assert store.client is sentinel  # built once, then reused
+    assert built == [("dynamodb", "eu-west-2")]

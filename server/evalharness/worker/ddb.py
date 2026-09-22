@@ -237,6 +237,9 @@ class DynamoEvalStore:
         self._pending_terminal: dict[str, Any] | None = None
         self._finalizing = False
         self._cancelled = False
+        #: Why the evaluation is being stopped, when the stop is not a user's
+        #: cancel. See :meth:`stop_with`.
+        self._stop_reason: dict[str, Any] | None = None
         self._ts = _now_iso()
 
     # -- plumbing ---------------------------------------------------------- #
@@ -259,6 +262,38 @@ class DynamoEvalStore:
     def saved_run_ids(self) -> list[str]:
         """Run ids persisted through :meth:`save_run`, in write order."""
         return list(self._saved_runs)
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether the terminal state has been written; nothing may follow it."""
+        return self._terminal
+
+    def stop_with(self, error: dict[str, Any]) -> None:
+        """Record that the evaluation is being stopped *for this reason*.
+
+        The engine only knows one way to stop: it settles ``cancelled`` and
+        publishes ``eval_complete`` with that status. Both happen inside the
+        engine, and ``eval_complete`` is what flushes the buffered terminal
+        state -- so by the time the worker regains control after a deadline,
+        the row already reads ``cancelled`` and is terminal, and it can no
+        longer be corrected. A deadline is not a cancellation, and the user
+        never asked for one.
+
+        So the reason has to be known *before* the engine settles. Once this is
+        armed, a terminal ``cancelled`` is written as ``error`` with this
+        ``error`` instead, in both places the reader looks: the ``META`` row
+        (:meth:`save_evaluation`) and the stream's last line (:meth:`emit`).
+        Callers arm it only for stops a user did not request; a real cancel
+        leaves it unset and still settles as ``cancelled``.
+
+        Calling it again replaces the reason, so a later, more specific stop
+        (the hard deadline after the cooperative one) is what gets recorded.
+        """
+        self._stop_reason = dict(error)
+
+    def _translate_stop(self, status: Any) -> bool:
+        """Whether a ``cancelled`` settle is really the armed stop reason."""
+        return status == "cancelled" and self._stop_reason is not None
 
     def _expires_at(self) -> int:
         return int(self._clock()) + self._ttl_seconds
@@ -372,6 +407,9 @@ class DynamoEvalStore:
             raise RuntimeError(f"eval {self.evaluation_id} is already terminal")
 
         status = fields.get("status")
+        if self._translate_stop(status):
+            fields = {**fields, "status": "error", "error": self._stop_reason}
+            status = "error"
         if status in _TERMINAL_STATUSES:
             self._pending_terminal = dict(fields)
             return
@@ -496,6 +534,9 @@ class DynamoEvalStore:
             )
         if not isinstance(event, dict):
             raise TypeError(f"event must be a dict, got {type(event).__name__}")
+        if event.get("type") == "eval_complete" and self._translate_stop(event.get("status")):
+            # The stream's last line has to agree with the row it closes.
+            event = {**event, "status": "error"}
 
         seq = self._seq
         self.client.put_item(
