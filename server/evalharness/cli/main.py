@@ -37,6 +37,7 @@ from evalharness.cli import commands
 from evalharness.cli.commands import EXIT_CANCELLED, EXIT_FAILED
 from evalharness.config import Settings
 from evalharness.errors import AppError
+from evalharness.evals.judge import DEFAULT_JUDGE_MODEL_ID
 from evalharness.providers import PROVIDERS
 from evalharness.store.db import init_db
 
@@ -261,6 +262,15 @@ def _check_required(args: argparse.Namespace) -> None:
         raise UsageError(
             "eval needs either --model (to execute new runs) or --run (to grade stored ones)"
         )
+    if args.command == "eval" and args.grader_provider != "bedrock" and not args.grader_model:
+        # The judge's default model id is a Bedrock one, so inheriting it on
+        # another provider builds a judge that can only fail at the provider.
+        # No default is invented here: the right judge model for OpenAI or a
+        # local Ollama is the caller's to name, and guessing would rot.
+        raise UsageError(
+            f"--grader-provider {args.grader_provider} needs an explicit --grader-model: "
+            f"the default judge model ({DEFAULT_JUDGE_MODEL_ID}) is a Bedrock model id"
+        )
 
 
 def prepare(args: argparse.Namespace, stdin: TextIO) -> None:
@@ -320,6 +330,12 @@ def main(
             # those can see, so anything less would have the CLI and the server
             # it just started reading different history stores.
             os.environ["EVALHARNESS_DB_PATH"] = str(args.db)
+            # --db names a SQLite file, so it pins the backend too. Without
+            # this, an environment carrying EVALHARNESS_HISTORY_BACKEND=dynamodb
+            # would create the file and then write every run to DynamoDB
+            # anyway -- the opposite of the isolated scratch store --db exists
+            # to give you.
+            os.environ["EVALHARNESS_HISTORY_BACKEND"] = "sqlite"
             init_db(str(args.db))
         settings = Settings()
 

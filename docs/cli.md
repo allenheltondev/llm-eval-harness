@@ -126,7 +126,7 @@ evalharness eval --run 3f2a… --run 9c81… --rubric 'Penalise any tool call.'
 | `-n` | Repeats for a determinism experiment, clamped to 2–25 (default 10). |
 | `--run RUN_ID` | Grade this stored run instead of executing new ones; repeatable. |
 | `--rubric` | Extra rubric text for the judge. |
-| `--grader-model`, `--grader-provider`, `--grader-system` | The judge. Independent of the graded runs — an OpenAI judge grading Bedrock runs is a reasonable setup. |
+| `--grader-model`, `--grader-provider`, `--grader-system` | The judge. Independent of the graded runs — an OpenAI judge grading Bedrock runs is a reasonable setup. A non-Bedrock `--grader-provider` **requires** `--grader-model`: the built-in default is a Bedrock model id, and no default is invented for the other providers. |
 
 Plus every `run` option above, which describes the repeats.
 
@@ -185,6 +185,11 @@ It is exported into the environment rather than held privately, so
 `evalharness --db … serve` starts a server reading that same store — uvicorn
 imports the app by string, and with `--reload` in a child process, and the
 app builds its own settings from the environment at startup.
+
+`--db` also **pins the history backend to SQLite** for that invocation. Naming
+a SQLite file while the environment says `EVALHARNESS_HISTORY_BACKEND=dynamodb`
+would otherwise create the file and then write every run to DynamoDB anyway,
+which is the opposite of the isolated scratch store `--db` exists to give you.
 
 ## Why argparse
 

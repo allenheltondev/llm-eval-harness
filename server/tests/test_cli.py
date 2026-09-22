@@ -73,7 +73,14 @@ def fake_model(monkeypatch):
     # test asserting on *which* database was opened has to start from unset.
     monkeypatch.setattr(store_db, "_engine", None)
     store_repo.reset_cache()
+    # `main()` exports settings into the real os.environ on purpose -- that is
+    # the only channel `serve`'s uvicorn child can read -- so a CLI invocation
+    # leaves the process environment changed. Snapshot and restore it, or those
+    # exports leak into every test that builds Settings() afterwards.
+    saved_environ = dict(os.environ)
     yield
+    os.environ.clear()
+    os.environ.update(saved_environ)
     store_repo.reset_cache()
 
 
@@ -338,6 +345,37 @@ class TestEval:
         # Still two runs: grading executed nothing.
         assert len(cli("runs", "--json").json()["items"]) == 2
 
+    def test_a_non_bedrock_judge_must_name_its_own_model(self, cli):
+        """The default judge model is a Bedrock id, so inheriting it elsewhere
+
+        builds a judge that can only fail at the provider. No default is
+        invented for the other providers -- the right one is the caller's to
+        name.
+        """
+        result = cli("eval", "-m", "m1", "-p", "hi", "--grader-provider", "openai")
+        assert result.code == 2
+        assert "--grader-provider openai needs an explicit --grader-model" in result.err
+        assert "amazon.nova-pro-v1:0" in result.err
+
+    def test_a_non_bedrock_judge_with_an_explicit_model_is_accepted(self, cli):
+        result = cli(
+            "eval",
+            "-m",
+            "m1",
+            "-p",
+            "hi",
+            "-n",
+            "2",
+            "--grader-provider",
+            "openai",
+            "--grader-model",
+            "gpt-4o",
+        )
+        assert result.code == 0
+
+    def test_a_bedrock_judge_still_needs_no_model(self, cli):
+        assert cli("eval", "-m", "m1", "-p", "hi", "-n", "2").code == 0
+
     def test_an_unknown_run_id_fails_before_the_job_starts(self, cli):
         result = cli("eval", "--run", "nope")
         assert result.code == 1
@@ -517,16 +555,38 @@ def test_serve_exports_the_db_override_so_the_served_app_sees_it(cli, monkeypatc
     assert os.environ["EVALHARNESS_DB_PATH"] == db_path
 
 
+def test_db_pins_the_backend_to_sqlite_not_just_the_path(cli, monkeypatch, db_path):
+    """--db is an isolated scratch store, so it has to beat the environment.
+
+    Exporting only the path left `get_history_repo` choosing its backend from
+    `history_backend`, so an environment carrying dynamodb created the file and
+    then wrote every run to DynamoDB anyway.
+    """
+    from evalharness.config import Settings
+    from evalharness.store.repo import SqliteHistoryRepo, get_history_repo
+
+    monkeypatch.setenv("EVALHARNESS_HISTORY_BACKEND", "dynamodb")
+    monkeypatch.setenv("EVALHARNESS_EVAL_TABLE", "some-table")
+
+    assert cli("runs").code == 0
+    assert isinstance(get_history_repo(Settings()), SqliteHistoryRepo)
+    assert os.environ["EVALHARNESS_HISTORY_BACKEND"] == "sqlite"
+
+
 def test_a_malformed_setting_is_a_diagnostic_not_a_traceback(cli, monkeypatch):
     """Settings() parses the whole EVALHARNESS_ environment and raises on a bad value.
 
     Built outside the guarded block it took down even `tools`, which never
     touches the setting, with a raw pydantic traceback.
+
+    `local_evals` rather than `history_backend` because --db (which the fixture
+    always passes) deliberately overrides the latter, so a bad value there
+    never reaches validation.
     """
-    monkeypatch.setenv("EVALHARNESS_HISTORY_BACKEND", "postgres")
+    monkeypatch.setenv("EVALHARNESS_LOCAL_EVALS", "maybe")
     result = cli("tools")
     assert result.code == 2
-    assert result.err.startswith("evalharness: history_backend: ")
+    assert result.err.startswith("evalharness: local_evals: ")
     assert "Traceback" not in result.err
 
 
