@@ -21,7 +21,24 @@ import pathlib
 import pytest
 import yaml
 
-TEMPLATE = pathlib.Path(__file__).resolve().parents[2] / "infra" / "template.yaml"
+
+def _find_template() -> pathlib.Path:
+    """Locate ``infra/template.yaml`` by walking up, not by counting parents.
+
+    A fixed ``parents[2]`` is wrong under mutmut, which copies ``tests/`` into
+    ``server/mutants/`` and so adds a level. That shifts the path to
+    ``server/infra/template.yaml``, the fixture raises, and because mutmut aborts
+    when its baseline run fails, the whole mutation job dies at collection
+    rather than reporting a single broken test.
+    """
+    for parent in pathlib.Path(__file__).resolve().parents:
+        candidate = parent / "infra" / "template.yaml"
+        if candidate.is_file():
+            return candidate
+    raise AssertionError("could not find infra/template.yaml above this test")
+
+
+TEMPLATE = _find_template()
 
 
 class _CfnLoader(yaml.SafeLoader):
