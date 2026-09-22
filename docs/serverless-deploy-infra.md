@@ -603,9 +603,55 @@ under "Packaging and boot", "Streaming through CloudFront" or "Auth" is
 settled by a successful deploy. The first `GET /api/v1/health` through
 `AppUrl` is what proves the adapter boots at all.
 
+## What the first green smoke settled
+
+`scripts/deploy_smoke.py` first passed all five checks against a real stage
+deploy on 2026-09-22 (run
+[35763664350](https://github.com/allenheltondev/llm-eval-harness/actions/runs/35763664350))
+**[measured]**:
+
+```
+PASS  health responds  (attempt 1)
+PASS  auth is required and published  (pool us-east-1_ZDuoyZSbo)
+PASS  protected route refuses anonymous callers
+PASS  SPA is served at /
+PASS  SPA deep link resolves
+5 passed, 0 failed
+```
+
+That is anonymous HTTP through `AppUrl`, so it moves several items out of the
+list below:
+
+- **The adapter boots on arm64 and FastAPI answers.** `Handler: run.sh` +
+  `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap` works for a *package* entrypoint on
+  an arm64 managed runtime, and the artifact's manylinux wheels load. The
+  first `/health` answered on attempt 1, cold start included, in about seven
+  seconds.
+- **`/api/*` reaches the application.** The protected route came back with the
+  API's *own* 401 envelope rather than a CloudFront error or a 5xx — so the
+  `/api/*` behaviour, the `AllViewerExceptHostHeader` origin request policy
+  and the Function URL origin all work together.
+- **`!Select [2, !Split ['/', !GetAtt ServerFunctionUrl.FunctionUrl]]`
+  produces a working origin domain.** The string surgery is right against a
+  real `FunctionUrl`.
+- **OAC + `S3OriginConfig: {OriginAccessIdentity: ''}` and the SPA fallback.**
+  `/` and a deep link both return HTML, so the empty-string-alongside-OAC form
+  is correct and the custom error responses route to `index.html`.
+- **Auth is switched on in a deployed stack** and the pool the SPA signs in
+  against is published on `/health`.
+
+What it still does not touch, because it carries no token: `Authorization`
+surviving CloudFront, NDJSON staying incremental, the SPA's call to
+`cognito-idp`, and everything about the eval worker.
+
+This run is also where the missing Function URL resource policy was caught —
+see "`AuthType: NONE` is not the same as reachable" above.
+
 ## Open risks — still unverified
 
-Everything below is reasoned or read, not observed.
+Everything below is reasoned or read, not observed. Some of it was settled by
+the smoke run described above; where the two disagree, the section above is
+the measurement.
 
 **Packaging and boot**
 
