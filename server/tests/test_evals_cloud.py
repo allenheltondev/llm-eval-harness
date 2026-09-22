@@ -871,7 +871,7 @@ def test_the_probe_really_builds_a_payload_of_the_asked_size():
 
 
 async def test_a_payload_exactly_at_the_limit_is_accepted(client, invoker, writers):
-    body = _body_of_payload_size(cloud.ASYNC_PAYLOAD_LIMIT_BYTES)
+    body = _body_of_payload_size(cloud.CLOUD_REQUEST_LIMIT_BYTES)
 
     response = await client.post("/api/v1/evaluations", json=body)
 
@@ -883,7 +883,7 @@ async def test_one_byte_over_the_limit_is_a_413_before_anything_is_written(
     client, invoker, writers
 ):
     """Refused up front: no pending row to abandon, no invoke for AWS to reject."""
-    body = _body_of_payload_size(cloud.ASYNC_PAYLOAD_LIMIT_BYTES + 1)
+    body = _body_of_payload_size(cloud.CLOUD_REQUEST_LIMIT_BYTES + 1)
 
     response = await client.post("/api/v1/evaluations", json=body)
 
@@ -891,8 +891,8 @@ async def test_one_byte_over_the_limit_is_a_413_before_anything_is_written(
     error = response.json()["error"]
     assert error["code"] == "evaluation_too_large"
     assert error["detail"] == {
-        "bytes": cloud.ASYNC_PAYLOAD_LIMIT_BYTES + 1,
-        "limit_bytes": cloud.ASYNC_PAYLOAD_LIMIT_BYTES,
+        "bytes": cloud.CLOUD_REQUEST_LIMIT_BYTES + 1,
+        "limit_bytes": cloud.CLOUD_REQUEST_LIMIT_BYTES,
     }
     assert invoker.calls == []
     assert writers == {}  # the pending row was never created
@@ -902,6 +902,31 @@ def test_the_limit_is_inside_what_aws_enforces():
     """Whether AWS counts 1 MB as 10^6 or 2^20 bytes, the check never lets
     through a payload it would refuse."""
     assert cloud.ASYNC_PAYLOAD_LIMIT_BYTES <= 1_000_000
+    assert cloud.CLOUD_REQUEST_LIMIT_BYTES <= cloud.ASYNC_PAYLOAD_LIMIT_BYTES
+
+
+def test_the_limit_leaves_the_meta_item_room_for_its_result():
+    """The request is stored on the evaluation's META item, and so is the result
+    once it lands -- one DynamoDB item, capped at 400 KB. A request allowed to
+    fill that item leaves no room for the answer, and the evaluation would fail
+    at its very last write."""
+    assert cloud.CLOUD_REQUEST_LIMIT_BYTES <= cloud.DYNAMODB_ITEM_LIMIT_BYTES // 2
+
+
+async def test_a_request_under_the_invoke_limit_but_too_big_to_store_is_refused(
+    client, invoker, writers
+):
+    """The bug in the first version of this check: it enforced the 1 MB invoke
+    limit, so a 300 KB request passed -- and then broke at DynamoDB's 400 KB
+    item limit with a raw 500, after creating nothing it could clean up."""
+    body = _body_of_payload_size(300_000)
+
+    response = await client.post("/api/v1/evaluations", json=body)
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "evaluation_too_large"
+    assert invoker.calls == []
+    assert writers == {}
 
 
 def test_aws_refusing_the_size_anyway_is_a_413_not_a_500():

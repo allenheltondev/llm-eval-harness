@@ -110,16 +110,30 @@ def worker_payload(evaluation_id: str, request: EvaluationRequest) -> dict[str, 
     }
 
 
-#: The most this server will hand the worker in one asynchronous invocation.
-#:
-#: ``lambda:Invoke`` with ``InvocationType="Event"`` caps the payload at 1 MB
-#: (raised from 256 KB in October 2025) [aws]. Set at 10^6 rather than 2^20 so
-#: the check can never admit something AWS counts as over, whichever way it
-#: counts a megabyte. ``EvaluationRequest`` bounds none of the prompts, the
-#: rubric or ``run_ids``, and the Function URL accepts bodies up to 6 MB, so a
-#: request can be valid at the API and still be one AWS would refuse -- this is
-#: the cloud lane's own transport limit, and it is enforced here, up front.
+#: What ``lambda:Invoke`` with ``InvocationType="Event"`` accepts: 1 MB, raised
+#: from 256 KB in October 2025 [aws]. Taken as 10^6 so it can never admit
+#: something AWS counts as over, whichever way it counts a megabyte.
 ASYNC_PAYLOAD_LIMIT_BYTES = 1_000_000
+
+#: DynamoDB's cap on a single item: 400 KB [aws].
+DYNAMODB_ITEM_LIMIT_BYTES = 400 * 1024
+
+#: The most the cloud lane accepts -- and the one that actually binds.
+#:
+#: The invoke limit above is the obvious constraint and the looser one. The
+#: request is also stored, whole, as ``config`` on the evaluation's ``META``
+#: item, and that same item gets the ``result`` when the evaluation finishes:
+#: two large attributes sharing one 400 KB item. So the request may use at most
+#: half of it, leaving the rest for a result that is itself bounded (a suite's
+#: per-case reasoning is clipped). The first version of this check enforced the
+#: 1 MB invoke limit, which let a 300 KB request through to fail at DynamoDB
+#: with a raw 500.
+#:
+#: ``EvaluationRequest`` bounds none of the prompts, the rubric, ``run_ids`` or a
+#: suite's cases, and the Function URL accepts bodies up to 6 MB, so without
+#: this a request could be valid at the API and still impossible to store. The
+#: local lane has neither constraint.
+CLOUD_REQUEST_LIMIT_BYTES = 200_000
 
 
 def encode_payload(payload: dict[str, Any]) -> bytes:
@@ -130,9 +144,9 @@ def encode_payload(payload: dict[str, Any]) -> bytes:
 def _too_large(size: int) -> PayloadTooLargeError:
     return PayloadTooLargeError(
         f"This evaluation is {size:,} bytes once serialized, and the cloud lane can "
-        f"hand the worker at most {ASYNC_PAYLOAD_LIMIT_BYTES:,}. Shorten the "
-        "prompts or the rubric, or run it on the local lane.",
-        detail={"bytes": size, "limit_bytes": ASYNC_PAYLOAD_LIMIT_BYTES},
+        f"take at most {CLOUD_REQUEST_LIMIT_BYTES:,}. Shorten the prompts, the rubric "
+        "or the suite, or run it on the local lane, which has no such limit.",
+        detail={"bytes": size, "limit_bytes": CLOUD_REQUEST_LIMIT_BYTES},
         code="evaluation_too_large",
     )
 
@@ -288,10 +302,10 @@ async def submit(
 
     evaluation_id = uuid4().hex
     payload = worker_payload(evaluation_id, request)
-    # Measured before anything is written: a request AWS would refuse must not
-    # leave a `pending` row behind to be abandoned.
+    # Measured before anything is written: a request that cannot be invoked, or
+    # cannot be stored, must not leave a `pending` row behind to be abandoned.
     size = len(encode_payload(payload))
-    if size > ASYNC_PAYLOAD_LIMIT_BYTES:
+    if size > CLOUD_REQUEST_LIMIT_BYTES:
         raise _too_large(size)
     factory = store_factory or build_eval_writer_factory(settings)
     store = factory(evaluation_id)
