@@ -191,6 +191,27 @@ a SQLite file while the environment says `EVALHARNESS_HISTORY_BACKEND=dynamodb`
 would otherwise create the file and then write every run to DynamoDB anyway,
 which is the opposite of the isolated scratch store `--db` exists to give you.
 
+## Smoke-testing a deployment
+
+`scripts/deploy_smoke.py` checks that a deployed stack actually serves requests —
+`/health` answering with its real payload (so the Lambda Web Adapter booted and
+FastAPI is up), auth switched on with the Cognito pool published, a protected
+route returning the API's own 401 envelope, and CloudFront routing deep SPA
+links to `index.html`.
+
+```bash
+python3 scripts/deploy_smoke.py --url https://your-distribution.cloudfront.net
+```
+
+Standard library only, no credentials, no model calls, no spend — every deploy
+runs it. It does **not** cover anything needing a real token: whether
+`Authorization` survives CloudFront, NDJSON streaming, or Cognito sign-in. The
+header question is unanswerable this way on purpose, since a missing and an
+invalid token deliberately return the same message.
+
+Not to be confused with `make smoke` (`scripts/live_smoke.py`), which is gated
+behind `RUN_LIVE_BEDROCK=1`, needs AWS credentials and makes real Bedrock calls.
+
 ## Why argparse
 
 The CLI uses nothing but the standard library. A `click` or `typer` dependency

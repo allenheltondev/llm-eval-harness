@@ -453,7 +453,22 @@ cd app && npm test          # app only (vitest)
 cd server && uv run pytest  # server only (pytest, fake model — no network)
 make e2e                    # Playwright against the fake-model full stack
 make validate-template      # cfn-lint on infra/template.yaml
+make smoke                  # gated real-AWS smoke (RUN_LIVE_BEDROCK=1; costs money)
 ```
+
+Every deploy also runs **`scripts/deploy_smoke.py`** against the URL it just published — anonymous
+HTTP checks that the adapter boots and `/health` answers, that auth is switched on and the Cognito
+pool is published, that a protected route returns the API's own 401 envelope, and that CloudFront
+routes deep SPA links to `index.html`. It needs no credentials and spends nothing, which is why it
+runs on every deploy rather than on request. Point it at anything yourself:
+
+```bash
+python3 scripts/deploy_smoke.py --url https://your-distribution.cloudfront.net
+```
+
+It exists because `evalharness serve` once shipped completely broken and passed every check in the
+pipeline twice: unit tests, coverage and mutation testing all measure code as *imported*, and
+nothing executed the thing and watched it answer.
 
 Coverage gates are ratchets set at achieved numbers (`fail_under` in `server/pyproject.toml`,
 `thresholds` in `app/vitest.config.ts`): raise them when coverage climbs, never lower them to make
