@@ -312,8 +312,8 @@ functions, and `cloudfront:CreateInvalidation`, which cannot be resource-scoped)
 pools. `make create-user` additionally needs
 `cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
 
-Two grants are easy to miss because nothing else in a typical SAM stack needs them, and **both
-have already broken a real deploy**:
+Three grants are easy to miss because nothing else in a typical SAM stack needs them, and **all
+three have already broken a real deploy**:
 
 ```json
 {
@@ -324,6 +324,17 @@ have already broken a real deploy**:
       "Effect": "Allow",
       "Action": "lambda:GetLayerVersion",
       "Resource": "arn:aws:lambda:*:753240598075:layer:LambdaAdapterLayerArm64:*"
+    },
+    {
+      "Sid": "ConfigureTheEvalWorkersAsyncRetries",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:PutFunctionEventInvokeConfig",
+        "lambda:GetFunctionEventInvokeConfig",
+        "lambda:UpdateFunctionEventInvokeConfig",
+        "lambda:DeleteFunctionEventInvokeConfig"
+      ],
+      "Resource": "arn:aws:lambda:*:*:function:llm-eval-harness-EvalWorkerFunction-*"
     },
     {
       "Sid": "DeployDiagnostics",
@@ -340,9 +351,21 @@ Adapter** layer, which lives in AWS's own account (`753240598075`), not yours. W
 `ServerFunction` fails to create with `AccessDenied` on `lambda:GetLayerVersion` and the whole
 stack rolls back — and because a Node-only SAM stack never attaches a cross-account layer, a
 deploy role shared with other services will not already have it. (`LambdaAdapterLayerArn` is the
-escape hatch if you would rather mirror the layer into your own account.) The second is only used
-by the workflows' "Diagnose failed deploy" step; without it that step still runs but prints an
-`AccessDenied` instead of the change-set detail.
+escape hatch if you would rather mirror the layer into your own account.)
+
+The second covers the eval worker's `EventInvokeConfig` — the `MaximumRetryAttempts` setting
+that lets Lambda redeliver an evaluation that failed before it was claimed
+(`docs/cloud-evals-infra.md`). It is a separate CloudFormation resource with its own Lambda API
+actions, which broad `lambda:*Function` grants do not cover. Without them the resource fails to
+create, the whole update rolls back, and the rollback cannot clean the resource up either —
+the stack ends `UPDATE_ROLLBACK_COMPLETE` with "one or more resources could not be deleted".
+That is harmless (the stack is still updatable) but it is how the first production deploy of
+the Lambda worker failed.
+
+The third is only used by the workflows' "Diagnose failed deploy" step; without it that step
+still runs but prints an `AccessDenied` instead of the change-set detail.
+
+The resource patterns assume the default `STACK_NAME`; widen them if you deploy under another.
 
 One sharp edge: `ServerArtifactKey` and `EvalWorkerArtifactKey` are CloudFormation parameters with
 empty defaults, and an empty value deletes the corresponding resource. `make deploy-backend`
