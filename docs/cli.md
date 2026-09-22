@@ -176,6 +176,11 @@ way to keep an experiment's history out of your main store:
 evalharness --db /tmp/scratch.db run -m <model-id> -p 'throwaway'
 ```
 
+It is exported into the environment rather than held privately, so
+`evalharness --db … serve` starts a server reading that same store — uvicorn
+imports the app by string, and with `--reload` in a child process, and the
+app builds its own settings from the environment at startup.
+
 ## Why argparse
 
 The CLI uses nothing but the standard library. A `click` or `typer` dependency

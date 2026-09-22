@@ -10,8 +10,13 @@ product, stderr is the commentary" is the CLI's central promise, and it is only
 worth anything if something checks it.
 """
 
+import asyncio
+import inspect
 import io
 import json
+import os
+import sys
+import types
 
 import pytest
 
@@ -179,6 +184,39 @@ class TestRun:
         out = cli("run", "-m", "m1", "-p", "hi").out
         assert out.endswith("\n")
         assert not out.endswith("\n\n")
+
+    @pytest.mark.parametrize(
+        "script_text, expected",
+        [
+            ("no trailing newline", "no trailing newline\n"),
+            ("already ends in one\n", "already ends in one\n"),
+            ("ends in two\n\n", "ends in two\n\n"),
+        ],
+        ids=["adds one", "adds none", "adds none to a deliberate blank line"],
+    )
+    def test_the_contract_holds_whatever_the_model_ended_with(
+        self, cli, monkeypatch, script_text, expected
+    ):
+        """Markdown and code answers routinely end in a newline of their own.
+
+        Appending a second one unconditionally would put a blank line in every
+        redirected file, which is exactly what the documented
+        answer-plus-one-newline contract promises not to do.
+        """
+        from evalharness.engine import runner
+        from evalharness.engine.fake_model import FakeModel, Text
+
+        monkeypatch.setattr(
+            runner, "build_model", lambda request, settings: FakeModel([Text(script_text)])
+        )
+        assert cli("run", "-m", "m1", "-p", "hi").out == expected
+
+    def test_a_run_that_produces_no_text_writes_nothing_to_stdout(self, cli, monkeypatch):
+        from evalharness.engine import runner
+        from evalharness.engine.fake_model import FakeModel
+
+        monkeypatch.setattr(runner, "build_model", lambda request, settings: FakeModel([]))
+        assert cli("run", "-m", "m1", "-p", "hi").out == ""
 
     def test_json_puts_the_event_stream_on_stdout_and_nothing_on_stderr(self, cli):
         result = cli("run", "--json", "-m", "m1", "-p", "hi")
@@ -404,15 +442,35 @@ class TestRunsAndShow:
 # --------------------------------------------------------------------------- #
 
 
-def test_serve_starts_uvicorn_on_the_requested_address(cli, monkeypatch):
+def test_serve_is_not_a_coroutine():
+    """`serve` must stay synchronous.
+
+    uvicorn.run() calls asyncio.run() itself and, with --reload, forks a
+    supervisor. If this were a coroutine the dispatcher would drive it inside
+    a running loop and `evalharness serve` would die with "asyncio.run()
+    cannot be called from a running event loop" instead of serving.
+    """
+    assert not inspect.iscoroutinefunction(commands.serve)
+
+
+def test_serve_starts_uvicorn_outside_any_running_event_loop(cli, monkeypatch):
+    """The regression guard for the above, asserted where it actually breaks.
+
+    An earlier version of this test stubbed uvicorn with a no-op and checked
+    only the arguments, which is exactly why it passed while the command was
+    unusable. The stub now asserts what uvicorn itself requires: that no loop
+    is already running when it is called.
+    """
     calls = {}
 
     def fake_run(target, **kwargs):
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
         calls["target"] = target
         calls.update(kwargs)
 
     monkeypatch.setitem(
-        __import__("sys").modules, "uvicorn", type("M", (), {"run": staticmethod(fake_run)})
+        sys.modules, "uvicorn", types.SimpleNamespace(run=fake_run)
     )
     result = cli("serve", "--host", "0.0.0.0", "--port", "9999")
 
@@ -422,6 +480,19 @@ def test_serve_starts_uvicorn_on_the_requested_address(cli, monkeypatch):
     assert calls["port"] == 9999
     assert calls["reload"] is False
     assert "http://0.0.0.0:9999" in result.err
+
+
+def test_serve_exports_the_db_override_so_the_served_app_sees_it(cli, monkeypatch, db_path):
+    """uvicorn imports the app by string -- and with --reload, in a child.
+
+    The app's lifespan builds its own Settings from the environment, so an
+    override held only in our Settings object would leave the CLI and the
+    server it just started reading different history stores.
+    """
+    monkeypatch.delenv("EVALHARNESS_DB_PATH", raising=False)
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: None))
+    assert cli("serve").code == 0
+    assert os.environ["EVALHARNESS_DB_PATH"] == db_path
 
 
 def test_ctrl_c_reports_cancellation_with_the_shell_s_own_code(cli, monkeypatch):

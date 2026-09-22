@@ -156,19 +156,26 @@ async def run(args: argparse.Namespace, settings: Settings, out: TextIO, err: Te
     request = build_run_request(args)
     events = execute_run(request, settings=settings, repo=get_history_repo(settings))
     status = "error"
-    wrote_text = False
+    # True when text has been written whose last character is not a newline.
+    # Tracked rather than "has any text been written" because a model that ends
+    # its answer with a newline -- markdown and code answers routinely do --
+    # needs no second one, and adding it would break the answer-plus-exactly-
+    # one-newline contract that makes `run ... > answer.txt` produce a clean
+    # file.
+    needs_newline = False
 
     async with aclosing(events):
         async for event in events:
             if args.json:
                 _write(out, event.to_json_line())
             elif isinstance(event, TextDeltaEvent):
-                _write(out, event.text)
-                wrote_text = wrote_text or event.text != ""
+                if event.text:
+                    _write(out, event.text)
+                    needs_newline = not event.text.endswith("\n")
             else:
-                if wrote_text and isinstance(event, _ENDS_TEXT):
+                if needs_newline and isinstance(event, _ENDS_TEXT):
                     _write(out, "\n")
-                    wrote_text = False
+                    needs_newline = False
                 _note(err, render.run_progress_line(event))
 
             if isinstance(event, RunCompleteEvent):
@@ -365,11 +372,19 @@ async def show(args: argparse.Namespace, settings: Settings, out: TextIO, err: T
 # --------------------------------------------------------------------------- #
 
 
-async def serve(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+def serve(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
     """Boot the HTTP API, which is what the web UI talks to.
 
     The UI is one way to use the harness, not the way, so starting it is a
     subcommand rather than a separate entry point people have to learn.
+
+    **Deliberately not a coroutine.** ``uvicorn.run`` is the synchronous
+    runner: it calls ``asyncio.run`` itself, and with ``--reload`` it forks a
+    supervisor. Called from inside an already-running loop it raises
+    ``RuntimeError: asyncio.run() cannot be called from a running event loop``,
+    so this is the one command the dispatcher must invoke directly rather than
+    through ``asyncio.run`` -- which is why it is declared ``def``, not
+    ``async def``, and why the dispatcher branches on that.
     """
     import uvicorn
 

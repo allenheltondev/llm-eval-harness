@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
+import os
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -42,7 +44,10 @@ from evalharness.store.db import init_db
 #: argparse cannot express (a prompt that is required only sometimes).
 EXIT_USAGE = 2
 
-Command = Callable[[argparse.Namespace, Settings, TextIO, TextIO], Awaitable[int]]
+#: A command returns an exit code, or a coroutine yielding one. Both shapes are
+#: allowed because `serve` has to run *outside* the asyncio wrapper -- see the
+#: note on it in `commands.py`.
+Command = Callable[[argparse.Namespace, Settings, TextIO, TextIO], int | Awaitable[int]]
 
 COMMANDS: dict[str, Command] = {
     "run": commands.run,
@@ -295,16 +300,22 @@ def main(
         err.write(f"evalharness: {exc}\n")
         return EXIT_USAGE
 
-    settings = Settings()
     if args.db is not None:
-        # An explicit --db must win over the lazily-resolved engine, so it is
-        # applied by pointing the store at that file rather than by handing a
-        # different Settings to a module that reads the environment anyway.
+        # Exported, not just held in our own Settings: `serve` hands the app to
+        # uvicorn by import string, and with --reload to a whole child process,
+        # and the app's lifespan builds its own Settings from the environment.
+        # The environment is the only override all three of those can see, so
+        # anything less would have the CLI and the server it just started
+        # reading different history stores.
+        os.environ["EVALHARNESS_DB_PATH"] = str(args.db)
         init_db(str(args.db))
-        settings = Settings(db_path=str(args.db))
+    settings = Settings()
 
     try:
-        return asyncio.run(COMMANDS[args.command](args, settings, out, err))
+        outcome = COMMANDS[args.command](args, settings, out, err)
+        # `serve` is synchronous on purpose (uvicorn.run starts its own loop and
+        # forks a reloader); everything else is a coroutine to be driven here.
+        return asyncio.run(outcome) if inspect.isawaitable(outcome) else outcome
     except KeyboardInterrupt:
         err.write("\nevalharness: cancelled\n")
         return EXIT_CANCELLED
