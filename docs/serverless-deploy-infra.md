@@ -400,6 +400,41 @@ in principle, run up invocation and egress charges. Neither door can be
 closed for a browser that POSTs, which is the whole reason the gate lives in
 the application:
 
+**`AuthType: NONE` is not the same as reachable.** A Function URL with
+`AuthType: NONE` is still closed until a resource policy opens it: every
+request 403s with `Forbidden. For troubleshooting Function URL authorization
+issues, see ...` until something grants `lambda:InvokeFunctionUrl` to
+Principal `*`. SAM normally emits that permission for you — but only when
+`AuthType` is the **literal** string `NONE`. Its test is
+`auth_type not in ["NONE"]` (`samtranslator/model/sam_resources.py`,
+`_construct_url_permission`), and once `AuthType` is `!Ref
+ServerFunctionUrlAuthType` the value at transform time is an unresolved
+intrinsic dict, which never equals `"NONE"`. Both permissions SAM would have
+added are silently skipped. The stack still deploys clean — with a server
+nothing can call.
+
+Parameterising `AuthType` is what dropped them, and `sam validate --lint`
+cannot catch it, because what is missing is a resource the transform declined
+to add rather than a malformed one. Running the transform locally is what
+shows it **[measured]**: the template as deployed produces *zero*
+`AWS::Lambda::Permission` resources, while the same template with a literal
+`NONE` produces `ServerFunctionUrlPublicPermissions`
+(`lambda:InvokeFunctionUrl`) and `ServerFunctionURLInvokeAllowPublicAccess`
+(`lambda:InvokeFunction` + `InvokedViaFunctionUrl`).
+
+So the template declares both itself —
+`ServerFunctionUrlPublicPermission` and `ServerFunctionUrlInvokePermission`,
+under a `ServerFunctionUrlIsPublic` condition (`DeployServer` **and**
+`AuthType == NONE`). That follows the parameter instead of the literal:
+present while the URL is public, absent under `AWS_IAM`, where the caller's
+SigV4 identity is the grant and a public policy would undo the point of
+switching.
+
+This is the bug `scripts/deploy_smoke.py` was written for, and it found it on
+its first real run **[measured]**: `SPA is served at /` and `SPA deep link
+resolves` both passed — CloudFront and S3 were fine — while `health responds`
+retried ten times into that 403. Every other check in the pipeline was green.
+
 **Why not `AWS_IAM` + CloudFront OAC.** CloudFront supports origin access
 control for Lambda function URLs, and it would make the function reachable
 only through the distribution. But with OAC, requests carrying a body require

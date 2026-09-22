@@ -128,6 +128,11 @@ Conditions:
     - !Condition DeployServer
     - !Condition DeployEvalWorker
   UseDefaultAdapterLayer: !Equals [!Ref LambdaAdapterLayerArn, '']
+  # The Function URL's resource policy. See ServerFunctionUrlPublicPermission
+  # for why this is ours to declare rather than SAM's to emit.
+  ServerFunctionUrlIsPublic: !And
+    - !Condition DeployServer
+    - !Equals [!Ref ServerFunctionUrlAuthType, 'NONE']
 
 Resources:
   # One single-table store: RUN#/EVAL# items written by the server (deployed
@@ -376,10 +381,56 @@ Resources:
                 Resource: !GetAtt EvalWorkerFunction.Arn
               - !Ref AWS::NoValue
       FunctionUrlConfig:
-        # v1: public-but-unguessable, fronted by CloudFront. SAM emits the
-        # matching AWS::Lambda::Permission (FunctionUrlAuthType: NONE) itself.
+        # v1: public-but-unguessable, fronted by CloudFront. The matching
+        # resource policy is ServerFunctionUrlPublicPermission below -- SAM
+        # does NOT emit it for us here.
         AuthType: !Ref ServerFunctionUrlAuthType
         InvokeMode: RESPONSE_STREAM
+
+  # A Function URL with AuthType NONE is still closed until a resource policy
+  # opens it: without `lambda:InvokeFunctionUrl` for Principal "*" every
+  # request gets 403 "Forbidden. For troubleshooting Function URL
+  # authorization issues ...", which is what CloudFront then serves for the
+  # whole API.
+  #
+  # SAM normally emits this permission itself, and that is why the comment
+  # above used to say so -- but it only does it when AuthType is the *literal*
+  # string NONE. Its check is `auth_type not in ["NONE"]`
+  # (samtranslator/model/sam_resources.py, _construct_url_permission), and
+  # AuthType here is `!Ref ServerFunctionUrlAuthType`, an unresolved intrinsic
+  # at transform time. So the dict never equals "NONE", the permission is
+  # silently skipped, and the stack deploys clean with an unreachable server.
+  # Parameterising AuthType is what dropped it. `sam validate --lint` cannot
+  # see this, because the resource that is missing is one the transform
+  # declined to add.
+  #
+  # Declared explicitly, so it follows the parameter instead of the literal:
+  # present when the URL is public, absent when it is AWS_IAM (where the
+  # caller's own SigV4 identity is the grant and a public policy would undo
+  # the point of switching).
+  ServerFunctionUrlPublicPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ServerFunctionUrlIsPublic
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !GetAtt ServerFunction.Arn
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  # The second half of what a literal AuthType: NONE gets you. Not strictly
+  # broader than the grant above -- InvokedViaFunctionUrl restricts it to calls
+  # arriving through the Function URL, which is the same reachability
+  # lambda:InvokeFunctionUrl already allows. Included so this pair is exactly
+  # what SAM emits for a public URL rather than one permission short of it,
+  # which is the whole class of bug being fixed here.
+  ServerFunctionUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: ServerFunctionUrlIsPublic
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt ServerFunction.Arn
+      Principal: '*'
+      InvokedViaFunctionUrl: true
 
   # ---------------------------------------------------------------------------
   # Authentication: a Cognito user pool + app client, verified by the server.
