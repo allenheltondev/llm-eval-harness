@@ -63,14 +63,15 @@ import time
 from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from evalharness.config import Settings, get_settings
 from evalharness.engine.events import ErrorEvent, RunCompleteEvent, RunStartEvent
 from evalharness.engine.model_factory import ModelFactory, build_model, classify_error
 from evalharness.engine.runner import execute_run
+from evalharness.engine.schemas import RunRequest
 from evalharness.errors import AppError
-from evalharness.evals import grader, jobs
+from evalharness.evals import grader, jobs, rubrics
 from evalharness.evals.events import (
     EvalCompleteEvent,
     EvalEvent,
@@ -86,7 +87,7 @@ from evalharness.evals.jobs import EvalJob
 from evalharness.evals.judge import JudgeFactory, build_judge_model
 from evalharness.evals.metrics import local_metrics
 from evalharness.evals.outcomes import RunOutcome
-from evalharness.evals.schemas import EvaluationRequest
+from evalharness.evals.schemas import EvaluationRequest, Suite
 from evalharness.providers import DEFAULT_PROVIDER
 from evalharness.store import history
 from evalharness.store.repo import HistoryRepo, get_history_repo
@@ -246,25 +247,49 @@ class _Seam:
 # --------------------------------------------------------------------------- #
 
 
+class _Job(NamedTuple):
+    """One run an evaluation has to make: where it sits, and what it runs."""
+
+    index: int
+    run_config: RunRequest
+    case_id: str | None = None
+
+
+def _determinism_jobs(request: EvaluationRequest) -> list[_Job]:
+    """The same run, ``n`` times."""
+    assert request.run_config is not None
+    return [_Job(index, request.run_config) for index in range(request.n)]
+
+
+def _suite_jobs(suite: Suite) -> list[_Job]:
+    """Every case, ``repeats`` times, in suite order -- a case's repeats adjacent."""
+    jobs: list[_Job] = []
+    for case in suite.cases:
+        run_config = suite.run_config.for_case(case)
+        for _repeat in range(suite.repeats):
+            jobs.append(_Job(len(jobs), run_config, case.id))
+    return jobs
+
+
 async def _execute_once(
-    index: int,
-    request: EvaluationRequest,
+    job: _Job,
     deps: EvalDeps,
     store: EvalStore | None = None,
 ) -> RunOutcome:
-    """Run ``run_config`` once, consuming the engine's event stream internally.
+    """Run ``job.run_config`` once, consuming the engine's event stream internally.
 
     ``store`` defaults to the local repository -- which is where ``execute_run``
     has just written the row in *either* lane, the cloud store's ``load_run``
     simply preferring that same local row.
     """
     store = store or LocalEvalStore()
-    assert request.run_config is not None
-    outcome = RunOutcome(index=index, user_prompt=request.run_config.user_prompt)
+    outcome = RunOutcome(
+        index=job.index, user_prompt=job.run_config.user_prompt, case_id=job.case_id
+    )
     started = time.perf_counter()
 
     events = execute_run(
-        request.run_config,
+        job.run_config,
         settings=deps.settings,
         model_factory=deps.model_factory,
         repo=deps.repo,
@@ -310,26 +335,23 @@ def _is_throttle(outcome: RunOutcome) -> bool:
 
 
 async def _execute_with_retries(
-    index: int,
-    request: EvaluationRequest,
+    job: _Job,
     deps: EvalDeps,
     store: EvalStore | None = None,
 ) -> RunOutcome:
-    """Execute one repeat, retrying throttled attempts with backoff."""
-    outcome = await _execute_once(index, request, deps, store)
+    """Execute one run, retrying throttled attempts with backoff."""
+    outcome = await _execute_once(job, deps, store)
     for attempt, backoff in enumerate(RETRY_BACKOFF_SECONDS, start=1):
         if outcome.succeeded or not _is_throttle(outcome):
             break
-        logger.info("eval run %d throttled, retrying in %.1fs", index, backoff)
+        logger.info("eval run %d throttled, retrying in %.1fs", job.index, backoff)
         await asyncio.sleep(backoff)
-        outcome = await _execute_once(index, request, deps, store)
+        outcome = await _execute_once(job, deps, store)
         outcome.attempts = attempt + 1
     return outcome
 
 
-async def _execute_batch(
-    seam: _Seam, request: EvaluationRequest, collected: list[RunOutcome]
-) -> None:
+async def _execute_batch(seam: _Seam, jobs: list[_Job], collected: list[RunOutcome]) -> None:
     """Execute the batch, at most :data:`MAX_CONCURRENT_RUNS` at a time.
 
     Finished repeats are appended to ``collected`` as they land rather than
@@ -342,16 +364,16 @@ async def _execute_batch(
     """
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
 
-    async def one(index: int) -> None:
+    async def one(job: _Job) -> None:
         async with semaphore:
             if seam.cancelled():
                 return
-            seam.publish(RunStartedEvent(index=index))
-            outcome = await _execute_with_retries(index, request, seam.deps, seam.store)
+            seam.publish(RunStartedEvent(index=job.index, case_id=job.case_id))
+            outcome = await _execute_with_retries(job, seam.deps, seam.store)
         collected.append(outcome)
         _publish_run(seam, outcome)
 
-    await asyncio.gather(*(one(index) for index in range(request.n)))
+    await asyncio.gather(*(one(job) for job in jobs))
     collected.sort(key=lambda outcome: outcome.index)
 
 
@@ -375,10 +397,13 @@ def _emit_run_result(seam: _Seam, outcome: RunOutcome) -> None:
                 run_id=outcome.run_id,
                 status=outcome.status,
                 summary=RunSummary(**outcome.summary()),
+                case_id=outcome.case_id,
             )
         )
     else:
-        seam.publish(RunFailedEvent(index=outcome.index, error=outcome.error))
+        seam.publish(
+            RunFailedEvent(index=outcome.index, error=outcome.error, case_id=outcome.case_id)
+        )
 
 
 def _load_stored_runs(seam: _Seam, run_ids: list[str]) -> list[RunOutcome]:
@@ -448,6 +473,149 @@ def _build_result(
             for outcome in outcomes
             if not outcome.succeeded
         ],
+    }
+    if judged.error is not None:
+        result["judge_error"] = judged.error
+    return result
+
+
+#: Longest judge reasoning kept per suite case. In the cloud lane the whole
+#: result is written to DynamoDB twice -- the META row and the
+#: ``grading_completed`` event -- and an item is capped at 400 KB. A hundred
+#: cases of unbounded judge prose must not be what breaks an evaluation that
+#: otherwise finished.
+MAX_CASE_REASONING_CHARS = 1_000
+
+
+def _clip(text: str, limit: int = MAX_CASE_REASONING_CHARS) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _suite_case_result(
+    case_id: str,
+    runs: list[RunOutcome],
+    verdict: grader.CaseVerdict,
+    judge_error: str | None,
+    pass_threshold: float,
+) -> dict[str, Any]:
+    """One case's line in a suite result.
+
+    ``status`` is ``passed`` / ``failed`` when the judge scored it, ``error``
+    when no run of it succeeded, and ``judge_error`` when it ran but the judge
+    returned no verdict. Only a scored case can pass: a case that never got an
+    answer, or whose answer was never judged, has not shown it works.
+    """
+    succeeded = [outcome for outcome in runs if outcome.succeeded]
+    entry: dict[str, Any] = {
+        "id": case_id,
+        "run_ids": [outcome.run_id for outcome in succeeded],
+        "runs": {"total": len(runs), "succeeded": len(succeeded)},
+        "passed": False,
+        "score": None,
+        "scores": [],
+        "reasoning": None,
+        "error": None,
+    }
+    if not succeeded:
+        entry["status"] = "error"
+        entry["error"] = next(
+            (outcome.error for outcome in runs if outcome.error),
+            {"code": "not_run", "message": "No run of this case completed"},
+        )
+        return entry
+    if not verdict.scores:
+        entry["status"] = "judge_error"
+        message = (verdict.judge_errors or [judge_error or "The judge returned no verdict"])[0]
+        entry["error"] = {"code": "judge_error", "message": message}
+        return entry
+
+    score = sum(verdict.scores) / len(verdict.scores)
+    entry["passed"] = score >= pass_threshold
+    entry["status"] = "passed" if entry["passed"] else "failed"
+    entry["score"] = round(score, 4)
+    entry["scores"] = [round(value, 4) for value in verdict.scores]
+    if verdict.reasons:
+        entry["reasoning"] = _clip(" | ".join(verdict.reasons))
+    return entry
+
+
+def _suite_summary(cases: list[dict[str, Any]], pass_threshold: float) -> str:
+    """The one-paragraph ``reasoning`` of a suite: counts, then the names that matter.
+
+    Per-case reasoning lives on each case; repeating a hundred of them here
+    would only make the headline unreadable (and the result larger).
+    """
+    passed = sum(1 for case in cases if case["passed"])
+    parts = [f"{passed}/{len(cases)} cases passed (threshold {pass_threshold:.2f})"]
+    labels = (("failed", "failed"), ("error", "did not run"), ("judge_error", "not judged"))
+    for status, label in labels:
+        ids = [case["id"] for case in cases if case["status"] == status]
+        if ids:
+            parts.append(f"{label}: {', '.join(ids)}")
+    return "; ".join(parts)
+
+
+def _build_suite_result(
+    outcomes: list[RunOutcome],
+    judged: grader.SuiteJudgement,
+    request: EvaluationRequest,
+) -> dict[str, Any]:
+    """The result of ``kind="suite"``: per-case verdicts plus the suite's totals.
+
+    The headline ``score`` is the mean over the cases the judge scored; the
+    stricter number is ``metrics.pass_rate``, which counts a case that did not
+    run or was not judged as not passed.
+    """
+    suite = request.suite
+    assert suite is not None
+    runs_by_case: dict[str, list[RunOutcome]] = {case.id: [] for case in suite.cases}
+    for outcome in outcomes:
+        runs_by_case.setdefault(str(outcome.case_id), []).append(outcome)
+
+    cases = [
+        _suite_case_result(
+            case.id,
+            runs_by_case[case.id],
+            judged.verdicts.get(case.id, grader.CaseVerdict()),
+            judged.error,
+            suite.pass_threshold,
+        )
+        for case in suite.cases
+    ]
+    scored = [case["score"] for case in cases if case["score"] is not None]
+    mean = sum(scored) / len(scored) if scored else None
+    score_100 = None if mean is None else max(0, min(100, round(mean * 100)))
+    passed = sum(1 for case in cases if case["passed"])
+
+    result: dict[str, Any] = {
+        "grade": None if score_100 is None else rubrics.score_to_grade(score_100),
+        "score": score_100,
+        "reasoning": _suite_summary(cases, suite.pass_threshold),
+        "judge": {
+            "model_id": request.grader.model_id,
+            "system_prompt_used": request.grader.system_prompt is not None,
+            "rubric_used": request.rubric is not None,
+        },
+        "metrics": {
+            "pass_rate": passed / len(cases),
+            "cases_total": len(cases),
+            "cases_passed": passed,
+            "cases_failed": sum(1 for case in cases if case["status"] == "failed"),
+            "cases_errored": sum(1 for case in cases if case["status"] in ("error", "judge_error")),
+            "judge_overall_score": mean,
+        },
+        "run_ids": [outcome.run_id for outcome in outcomes if outcome.succeeded],
+        "failed_runs": [
+            {"index": outcome.index, "case_id": outcome.case_id, "error": outcome.error}
+            for outcome in outcomes
+            if not outcome.succeeded
+        ],
+        "suite": {
+            "name": suite.name,
+            "repeats": suite.repeats,
+            "pass_threshold": suite.pass_threshold,
+        },
+        "cases": cases,
     }
     if judged.error is not None:
         result["judge_error"] = judged.error
@@ -540,7 +708,10 @@ async def execute_evaluation_with_seam(
         )
 
         if request.kind == "determinism":
-            await _execute_batch(seam, request, outcomes)
+            await _execute_batch(seam, _determinism_jobs(request), outcomes)
+        elif request.kind == "suite":
+            assert request.suite is not None
+            await _execute_batch(seam, _suite_jobs(request.suite), outcomes)
         else:
             outcomes.extend(_load_stored_runs(seam, request.run_ids))
 
@@ -558,14 +729,25 @@ async def execute_evaluation_with_seam(
             raise _CooperativeCancel
 
         seam.publish(GradingStartedEvent())
-        judged = await grader.judge(
-            successes,
-            kind=request.kind,
-            rubric=request.rubric,
-            grader=request.grader,
-            judge_factory=seam.deps.judge_factory,
-        )
-        result = _build_result(outcomes, judged, request)
+        if request.kind == "suite":
+            assert request.suite is not None
+            suite_judgement = await grader.judge_suite(
+                successes,
+                suite=request.suite,
+                rubric=request.rubric,
+                grader=request.grader,
+                judge_factory=seam.deps.judge_factory,
+            )
+            result = _build_suite_result(outcomes, suite_judgement, request)
+        else:
+            judged = await grader.judge(
+                successes,
+                kind=request.kind,
+                rubric=request.rubric,
+                grader=request.grader,
+                judge_factory=seam.deps.judge_factory,
+            )
+            result = _build_result(outcomes, judged, request)
         seam.publish(GradingCompletedEvent(result=result))
 
         status = "completed" if successes else "error"
