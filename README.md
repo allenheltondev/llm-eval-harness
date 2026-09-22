@@ -353,6 +353,24 @@ exact IAM, and the list of things only a real deploy can prove — are in
 [`docs/serverless-deploy.md`](docs/serverless-deploy.md) (the contract) and
 [`docs/serverless-deploy-infra.md`](docs/serverless-deploy-infra.md) (the build).
 
+### Tearing the stack down
+
+```
+make destroy CONFIRM=llm-eval-harness
+```
+
+The `CONFIRM=` value has to match `STACK_NAME` exactly, because this deletes the history table,
+the Cognito user pool and both buckets along with the stack — everything the deployment holds.
+
+It exists because `aws cloudformation delete-stack` on its own does not work here. CloudFormation
+refuses to delete a bucket that still has objects in it, and `ArtifactBucket` has versioning
+enabled, so `aws s3 rm --recursive` does not empty it either: it writes delete markers, and every
+version and marker has to be removed explicitly. A stack deleted the naive way lands in
+`DELETE_FAILED` with the buckets orphaned — which then blocks the next deploy as well. `make
+destroy` empties both buckets version by version first, then deletes the stack and waits for it.
+
+Use a different `STACK_NAME=` to target a non-default stack, exactly as with `make deploy`.
+
 ## Make targets
 
 | Target | What it does |
@@ -369,6 +387,7 @@ exact IAM, and the list of things only a real deploy can prove — are in
 | `make deploy-backend` | Package both zips, upload them, `sam deploy` the whole stack |
 | `make deploy-frontend` | Build the SPA against the deployed stack, sync it to S3, invalidate CloudFront |
 | `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): `deploy-backend` then `deploy-frontend` |
+| `make destroy CONFIRM=<stack>` | [Tear the stack down](#tearing-the-stack-down): empty both buckets (every object version), then `delete-stack` and wait |
 | `make create-user EMAIL=...` | Invites a user to the deployed stack's Cognito pool ([Sign-in](#sign-in-cognito)); Cognito emails them a temporary password |
 
 `make dev` runs both processes as background jobs of one recipe with a `trap ... EXIT INT TERM`

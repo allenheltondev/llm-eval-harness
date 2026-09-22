@@ -509,6 +509,36 @@ Makefile comment, and this paragraph.
 
 ---
 
+## Tearing it down
+
+```
+make destroy CONFIRM=llm-eval-harness
+```
+
+`delete-stack` alone does not do it, and the failure mode is expensive.
+CloudFormation will not delete a bucket that still holds objects, and
+`ArtifactBucket` sets `VersioningConfiguration: Status: Enabled`, so
+`aws s3 rm --recursive` only writes delete markers — the bucket is still
+non-empty as far as CloudFormation is concerned. The stack then sits in
+`DELETE_FAILED` with `AppBucket` and `ArtifactBucket` orphaned, and the next
+`make deploy-backend` fails too, because a stack in `DELETE_FAILED` accepts no
+updates. **[measured]** on 2026-09-22, when exactly this blocked the staging
+deploy on `claude/nice-ramanujan-x2wvoi`.
+
+So `destroy` does it in the order that works:
+
+1. Resolve `AppBucket` and `ArtifactBucket` from the stack's outputs (missing
+   or already-gone outputs are skipped, not an error).
+2. For each, `list-object-versions` and `delete-objects` in batches over both
+   `Versions` and `DeleteMarkers`, looping until both come back empty.
+3. `delete-stack`, then `wait stack-delete-complete`.
+
+The `CONFIRM=` guard has to match `STACK_NAME` exactly; without it the target
+prints what it would destroy and exits non-zero. Nothing else in the repo
+deletes a stack, and CI never calls this target.
+
+---
+
 ## What the first deploy proved
 
 The stack deployed for the first time on 2026-09-17 from the `Staging`

@@ -1,6 +1,7 @@
 .PHONY: dev dev-server dev-app lint lint-app lint-server test test-app test-server \
 	install install-app install-server validate-template e2e smoke \
-	package-eval-worker package-server deploy-backend deploy-frontend deploy create-user
+	package-eval-worker package-server deploy-backend deploy-frontend deploy create-user \
+	destroy
 
 # CloudFormation stack the infra/ SAM template deploys into. Overriding this is
 # what makes multiple environments possible (Staging and Production are two
@@ -242,3 +243,60 @@ create-user:
 		--user-attributes Name=email,Value="$(EMAIL)" Name=email_verified,Value=true \
 		--desired-delivery-mediums EMAIL >/dev/null; \
 	echo "create-user: invited $(EMAIL) to pool $$POOL_ID -- a temporary password is on its way by email"
+
+# Tear the stack down. Guarded behind CONFIRM= because it deletes the history
+# table, the user pool and both buckets -- everything the deployment has.
+#
+# This exists because `aws cloudformation delete-stack` on its own does NOT
+# work here, and finding that out costs an hour: CloudFormation refuses to
+# delete a non-empty bucket, and ArtifactBucket has versioning enabled, so
+# `aws s3 rm --recursive` does not empty it either -- every object version and
+# delete marker has to go. A stack that fails this way lands in DELETE_FAILED
+# with the buckets orphaned, which then blocks the next deploy too.
+destroy:
+	@set -e; \
+	if [ "$(CONFIRM)" != "$(STACK_NAME)" ]; then \
+		echo "destroy: this DELETES the stack '$(STACK_NAME)' and everything in it"; \
+		echo "         (history table, user pool, SPA bucket, artifact bucket)."; \
+		echo; \
+		echo "  make destroy CONFIRM=$(STACK_NAME)"; \
+		exit 1; \
+	fi; \
+	REGION_ARG="$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),)"; \
+	resolve_output() { \
+		aws cloudformation describe-stacks --stack-name $(STACK_NAME) $$REGION_ARG \
+			--query "Stacks[0].Outputs[?OutputKey=='$$1'].OutputValue" \
+			--output text 2>/dev/null || true; \
+	}; \
+	empty_bucket() { \
+		bucket="$$1"; \
+		if [ -z "$$bucket" ] || [ "$$bucket" = "None" ]; then return 0; fi; \
+		echo "==> emptying s3://$$bucket (including every version)"; \
+		aws s3 rm "s3://$$bucket" --recursive $$REGION_ARG >/dev/null 2>&1 || true; \
+		while :; do \
+			versions=$$(aws s3api list-object-versions --bucket "$$bucket" $$REGION_ARG \
+				--max-items 500 \
+				--query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+				--output json 2>/dev/null || echo '{"Objects":null}'); \
+			markers=$$(aws s3api list-object-versions --bucket "$$bucket" $$REGION_ARG \
+				--max-items 500 \
+				--query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' \
+				--output json 2>/dev/null || echo '{"Objects":null}'); \
+			done_versions=1; \
+			case "$$versions" in *'"Objects": null'*|*'"Objects":null'*) ;; *) \
+				aws s3api delete-objects --bucket "$$bucket" $$REGION_ARG \
+					--delete "$$versions" >/dev/null; done_versions=0 ;; \
+			esac; \
+			case "$$markers" in *'"Objects": null'*|*'"Objects":null'*) ;; *) \
+				aws s3api delete-objects --bucket "$$bucket" $$REGION_ARG \
+					--delete "$$markers" >/dev/null; done_versions=0 ;; \
+			esac; \
+			if [ "$$done_versions" = "1" ]; then break; fi; \
+		done; \
+	}; \
+	empty_bucket "$$(resolve_output AppBucket)"; \
+	empty_bucket "$$(resolve_output ArtifactBucket)"; \
+	echo "==> deleting stack $(STACK_NAME)"; \
+	aws cloudformation delete-stack --stack-name $(STACK_NAME) $$REGION_ARG; \
+	aws cloudformation wait stack-delete-complete --stack-name $(STACK_NAME) $$REGION_ARG; \
+	echo "==> $(STACK_NAME) deleted"
