@@ -9,6 +9,10 @@ Evaluations are the product. A run is one execution of a prompt; an evaluation r
 (or grades runs you already have) and scores the batch with `strands-agents-evals`. Everything
 runs local-first; a serverless deployment (Lambda + CloudFront + Cognito) is optional.
 
+The `evalharness` command line is the primary interface — see **[docs/cli.md](docs/cli.md)**. The
+HTTP API and the web UI are the same engine behind a different door, and `evalharness serve`
+starts them.
+
 ## Architecture
 
 ```
@@ -82,6 +86,32 @@ OLLAMA_HOST=localhost:11434 make dev       # or a local model, no cloud account 
 
 The app opens at `http://localhost:3000` and talks to the server at `http://localhost:8000`.
 History lives in `server/data/evalharness.db`.
+
+## Command line
+
+`make install` installs the console script into `server/.venv`, so it is `uv run evalharness`
+from `server/` — or plain `evalharness` once that venv is active, which is how the examples below
+are written. The full reference is **[docs/cli.md](docs/cli.md)**; the shape of it:
+
+```bash
+evalharness models                               # what can I run against?
+evalharness run -m <model-id> -p 'your prompt'   # one run, streamed
+evalharness eval -m <model-id> -p '...' -n 10    # determinism experiment, graded
+evalharness eval --run <id> --run <id>           # grade runs you already have
+evalharness runs                                 # history, newest first
+evalharness show <id>                            # one run or evaluation, as JSON
+evalharness serve                                # the HTTP API the web UI talks to
+```
+
+Two conventions worth knowing up front:
+
+- **stdout is the product, stderr is the commentary.** `evalharness run ... > answer.txt` gets
+  you the model's answer and nothing else, while token counts and tool calls still scroll past
+  on the terminal. `--json` puts the NDJSON event stream on stdout instead — the same bytes the
+  API serves, so scripts and wrappers read one format.
+- **Exit codes mean something**: `0` finished, `1` the harness failed, `2` bad invocation, `130`
+  cancelled. A grade of F is still `0` — the evaluation worked; it is telling you the answer is
+  bad.
 
 ## Runs and toolsets
 
@@ -272,13 +302,44 @@ Production is scoped to `main`:
 ```
 
 Attach a deploy policy that grants CloudFormation, S3 (the SAM-managed bucket, the stack's artifact
-bucket **and** the SPA bucket, including `s3:DeleteObject` for the `--delete` sync), Lambda (and
-the Lambda Web Adapter layer's `lambda:GetLayerVersion`), IAM (role creation and `iam:PassRole`),
-DynamoDB, CloudFront (distributions, origin access controls, functions, and
-`cloudfront:CreateInvalidation`, which cannot be resource-scoped), Cognito user pools, and Bedrock
-AgentCore runtimes (`bedrock-agentcore:*` on runtimes plus `iam:CreateServiceLinkedRole` for its
-first use). `make create-user` additionally needs `cognito-idp:AdminCreateUser` on the pool, for
-whoever runs it.
+bucket **and** the SPA bucket, including `s3:DeleteObject` for the `--delete` sync), Lambda, IAM
+(role creation and `iam:PassRole`), DynamoDB, CloudFront (distributions, origin access controls,
+functions, and `cloudfront:CreateInvalidation`, which cannot be resource-scoped), Cognito user
+pools, and Bedrock AgentCore runtimes (`bedrock-agentcore:*` on runtimes plus
+`iam:CreateServiceLinkedRole` for its first use). `make create-user` additionally needs
+`cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
+
+Two grants are easy to miss because nothing else in a typical SAM stack needs them, and **both
+have already broken a real deploy**:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadTheLambdaWebAdapterLayer",
+      "Effect": "Allow",
+      "Action": "lambda:GetLayerVersion",
+      "Resource": "arn:aws:lambda:*:753240598075:layer:LambdaAdapterLayerArm64:*"
+    },
+    {
+      "Sid": "DeployDiagnostics",
+      "Effect": "Allow",
+      "Action": ["cloudformation:ListChangeSets", "cloudformation:DescribeChangeSet"],
+      "Resource": "arn:aws:cloudformation:*:*:stack/llm-eval-harness/*"
+    }
+  ]
+}
+```
+
+The first is the one that matters: the server Lambda attaches the AWS-published **Lambda Web
+Adapter** layer, which lives in AWS's own account (`753240598075`), not yours. Without this grant
+`ServerFunction` fails to create with `AccessDenied` on `lambda:GetLayerVersion` and the whole
+stack rolls back — and because a Node-only SAM stack never attaches a cross-account layer, a
+deploy role shared with other services will not already have it. (`LambdaAdapterLayerArn` is the
+escape hatch if you would rather mirror the layer into your own account.) The second is only used
+by the workflows' "Diagnose failed deploy" step; without it that step still runs but prints an
+`AccessDenied` instead of the change-set detail.
 
 One sharp edge: `ServerArtifactKey` and `EvalWorkerArtifactKey` are CloudFormation parameters with
 empty defaults, and an empty value deletes the corresponding resource. `make deploy-backend`
@@ -358,6 +419,7 @@ then go to relative `/api/v1/...` paths. Note that `/`, not `""`, is the value: 
 llm-eval-harness/
 ├── server/                   # FastAPI + Strands Agents SDK (uvicorn, :8000)
 │   ├── evalharness/
+│   │   ├── cli/              # the `evalharness` command line (main, commands, render)
 │   │   ├── routers/          # health, models, tools, runs (+ evaluations), guardrails
 │   │   ├── engine/           # run execution, streaming, fake model
 │   │   ├── evals/            # determinism + grading engine, LLM-as-judge, cloud lane client
@@ -374,7 +436,7 @@ llm-eval-harness/
 ├── infra/                    # AWS SAM: table, eval worker, Lambda server, CloudFront, Cognito
 │   ├── template.yaml
 │   └── samconfig.toml
-├── docs/                     # contracts (cloud-evals, serverless-deploy) and infra notes
+├── docs/                     # cli reference, contracts (cloud-evals, serverless-deploy), infra notes
 ├── scripts/                  # packaging scripts + the live smoke test
 └── Makefile
 ```

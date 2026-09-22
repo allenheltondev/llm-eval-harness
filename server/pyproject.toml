@@ -17,6 +17,13 @@ dependencies = [
     "pyjwt[crypto]>=2.8",
 ]
 
+# The CLI is the primary entry point (docs/cli.md); the HTTP API is one of the
+# things it can start. argparse-only on purpose: a click/typer dependency would
+# ride into the Lambda artifact, which has a 250 MB ceiling it is already
+# pruning to stay under, in exchange for nothing this parser cannot do.
+[project.scripts]
+evalharness = "evalharness.cli.main:main"
+
 # The cloud evaluation lane's AgentCore worker (server/evalharness/worker/).
 # Deliberately an extra rather than a base dependency: the SDK drags in
 # OpenTelemetry + MCP + its own uvicorn pin, and only the deployment artifact
@@ -103,10 +110,16 @@ exclude_also = [
 # patterns -- the modern equivalent of listing individual files.
 #
 # Every file below is business logic with no boto3/AWS/network call in it
-# (translation, parsing, cursor math, cache-key arithmetic) so a surviving
-# mutant is informative rather than "the mock didn't notice". `run` with these
-# nine files generates ~2862 mutants and takes 6.5-8.5 minutes end to end
-# (measured twice; see the mutation-testing report for kill-rate history).
+# (translation, parsing, cursor math, event rendering) so a surviving mutant is
+# informative rather than "the mock didn't notice". `configstore/client.py` went
+# with the config store; `cli/render.py` took its place, keeping the list at
+# nine files.
+#
+# Measured on that list: 2507 mutants, 2092 killed, 415 survived (83%), ~4
+# minutes end to end at ~12 mutations/second. Survivor counts move by one or
+# two between runs, so treat them as approximate. Where they sit is the useful
+# part: worker/ddb.py (118), guardrails/translator.py (100) and engine/mapper.py
+# (84) carry most of them and are where the next round of test work pays off.
 [tool.mutmut]
 source_paths = ["evalharness"]
 only_mutate = [
@@ -118,6 +131,6 @@ only_mutate = [
     "evalharness/worker/ddb.py",
     "evalharness/guardrails/translator.py",
     "evalharness/models_catalog.py",
-    "evalharness/configstore/client.py",
+    "evalharness/cli/render.py",
 ]
 pytest_add_cli_args_test_selection = ["tests/"]
