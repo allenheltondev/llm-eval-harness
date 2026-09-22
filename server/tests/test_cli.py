@@ -126,6 +126,28 @@ class TestUsage:
         assert result.code == 0
         assert FAKE_PREFIX in result.out
 
+    def test_a_piped_prompt_reaches_the_model_verbatim(self, cli, monkeypatch):
+        """Indentation and trailing newlines are meaningful in piped content.
+
+        Code, markdown and delimiter-based templates all carry whitespace that
+        changes their meaning, and `--prompt` does not tidy its argument, so
+        trimming here would make one prompt mean two things depending on how it
+        arrived.
+        """
+        from evalharness.engine import runner
+        from evalharness.engine.fake_model import FakeModel, Text
+
+        seen = {}
+
+        def capture(request, settings):
+            seen["prompt"] = request.user_prompt
+            return FakeModel([Text("ok")])
+
+        monkeypatch.setattr(runner, "build_model", capture)
+        piped = "  def f():\n      return 1\n"
+        assert cli("run", "-m", "m1", stdin=piped).code == 0
+        assert seen["prompt"] == piped
+
     def test_an_empty_pipe_is_a_usage_error_not_an_empty_run(self, cli):
         result = cli("run", "-m", "m1", stdin="   \n  ")
         assert result.code == 2
@@ -493,6 +515,19 @@ def test_serve_exports_the_db_override_so_the_served_app_sees_it(cli, monkeypatc
     monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: None))
     assert cli("serve").code == 0
     assert os.environ["EVALHARNESS_DB_PATH"] == db_path
+
+
+def test_a_malformed_setting_is_a_diagnostic_not_a_traceback(cli, monkeypatch):
+    """Settings() parses the whole EVALHARNESS_ environment and raises on a bad value.
+
+    Built outside the guarded block it took down even `tools`, which never
+    touches the setting, with a raw pydantic traceback.
+    """
+    monkeypatch.setenv("EVALHARNESS_HISTORY_BACKEND", "postgres")
+    result = cli("tools")
+    assert result.code == 2
+    assert result.err.startswith("evalharness: history_backend: ")
+    assert "Traceback" not in result.err
 
 
 def test_ctrl_c_reports_cancellation_with_the_shell_s_own_code(cli, monkeypatch):

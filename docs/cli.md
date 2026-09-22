@@ -84,6 +84,11 @@ Stdin is only read when it is *not* a terminal. Running `evalharness run -m x`
 at an interactive prompt with no `-p` reports a usage error rather than
 silently blocking on a read you cannot see.
 
+What arrives on stdin reaches the model **verbatim** — indentation and trailing
+newlines included, since they are meaningful in code, markdown and
+delimiter-based templates. Input that is entirely whitespace is rejected as a
+usage error rather than sent.
+
 | Option | Meaning |
 |---|---|
 | `-m`, `--model` | Model id, as listed by `evalharness models`. Required. |

@@ -242,9 +242,15 @@ def resolve_prompts(args: argparse.Namespace, stdin: TextIO) -> None:
     if args.prompt is None and stdin.isatty():
         raise UsageError("a prompt is required: pass --prompt, or pipe one in on stdin")
 
-    args.prompt = stdin.read().strip()
-    if not args.prompt:
+    piped = stdin.read()
+    if not piped.strip():
         raise UsageError("the prompt read from stdin was empty")
+    # Kept verbatim, stripped only for the emptiness test above. Indentation and
+    # trailing newlines are meaningful in the things people pipe in -- code,
+    # markdown, delimiter-based templates -- and `--prompt` does not tidy its
+    # argument either, so trimming here would make the same prompt mean two
+    # different things depending on how it arrived.
+    args.prompt = piped
 
 
 def _check_required(args: argparse.Namespace) -> None:
@@ -300,18 +306,23 @@ def main(
         err.write(f"evalharness: {exc}\n")
         return EXIT_USAGE
 
-    if args.db is not None:
-        # Exported, not just held in our own Settings: `serve` hands the app to
-        # uvicorn by import string, and with --reload to a whole child process,
-        # and the app's lifespan builds its own Settings from the environment.
-        # The environment is the only override all three of those can see, so
-        # anything less would have the CLI and the server it just started
-        # reading different history stores.
-        os.environ["EVALHARNESS_DB_PATH"] = str(args.db)
-        init_db(str(args.db))
-    settings = Settings()
-
+    # Settings() parses the whole EVALHARNESS_ environment and raises on a
+    # malformed value, so it is built inside the guarded block: a typo in a
+    # shell profile should reach the user as one diagnostic line and exit 2,
+    # the same as any other bad input, rather than as a traceback out of a
+    # command that had not started yet.
     try:
+        if args.db is not None:
+            # Exported, not just held in our own Settings: `serve` hands the app
+            # to uvicorn by import string, and with --reload to a whole child
+            # process, and the app's lifespan builds its own Settings from the
+            # environment. The environment is the only override all three of
+            # those can see, so anything less would have the CLI and the server
+            # it just started reading different history stores.
+            os.environ["EVALHARNESS_DB_PATH"] = str(args.db)
+            init_db(str(args.db))
+        settings = Settings()
+
         outcome = COMMANDS[args.command](args, settings, out, err)
         # `serve` is synchronous on purpose (uvicorn.run starts its own loop and
         # forks a reloader); everything else is a coroutine to be driven here.
