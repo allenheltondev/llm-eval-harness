@@ -14,7 +14,7 @@ Two lanes
 ---------
 ``POST /evaluations`` branches on ``execution``: ``"local"`` (the default) is the
 in-process background task described above, ``"cloud"`` hands the work to an
-AgentCore Runtime worker with state in DynamoDB (:mod:`evalharness.evals.cloud`,
+worker Lambda with state in DynamoDB (:mod:`evalharness.evals.cloud`,
 contract in ``docs/cloud-evals.md``).
 
 **Lane detection on reads is "history store first, then the cloud lane".** A
@@ -278,7 +278,7 @@ async def create_evaluation(
     is immediately usable against ``/evaluations/{id}`` and its event stream.
 
     ``execution="cloud"`` short-circuits all of that: the work goes to the
-    AgentCore worker and the ``202`` is synthesized from the request, with no
+    worker Lambda and the ``202`` is synthesized from the request, with no
     local row written at all (400 ``cloud_lane_unavailable`` when the lane is
     not configured).
 

@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  LLM Eval Harness -- DynamoDB history/eval-state table, the AgentCore eval worker,
+  LLM Eval Harness -- DynamoDB history/eval-state table, the Lambda eval worker,
   the FastAPI server on Lambda (Web Adapter + Function URL), SPA hosting on S3 + CloudFront,
   and a Cognito user pool that gates the deployed app.
 
@@ -17,7 +17,7 @@ Parameters:
       artifact. Empty (the default) means the worker is not deployed and the
       cloud lane stays unavailable -- the rest of the stack is unaffected.
 
-      The key MUST change whenever the artifact changes: AgentCore reads the zip
+      The key MUST change whenever the artifact changes: Lambda reads the zip
       at create/update time, and CloudFormation only rolls the runtime when a
       property it can see has changed. A static key means a stale bundle keeps
       serving forever. `scripts/package-eval-worker.sh` therefore emits a
@@ -61,6 +61,17 @@ Parameters:
       Memory (MB) for the server Lambda. Lambda scales CPU with memory, and the
       cold start pays for importing strands + boto3 + FastAPI, so this is a
       latency knob as much as a memory one.
+
+  EvalWorkerMemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 512
+    MaxValue: 10240
+    Description: >
+      Memory (MB) for the evaluation worker Lambda. The work is mostly waiting
+      on Bedrock rather than computing, so this is about headroom for three
+      concurrent runs plus the judge -- and, since Lambda scales CPU with
+      memory, about how fast the cold start imports strands + boto3.
 
   ServerFunctionUrlAuthType:
     Type: String
@@ -171,137 +182,79 @@ Resources:
           - Id: ExpireOldArtifacts
             Status: Enabled
             NoncurrentVersionExpirationInDays: 30
-
-  EvalWorkerRuntime:
-    Type: AWS::BedrockAgentCore::Runtime
+  EvalWorkerFunction:
+    Type: AWS::Serverless::Function
     Condition: DeployEvalWorker
+    Metadata:
+      # Same story as ServerFunction: the zip is prebuilt with cross-compiled
+      # arm64 wheels by scripts/package-eval-worker.sh and uploaded under a
+      # content-hashed key, so there is nothing for `sam build` to do.
+      SkipBuild: true
     Properties:
-      # AgentRuntimeName is matched against [a-zA-Z][a-zA-Z0-9_]{0,47} -- no
-      # hyphens, so this cannot be derived from ${AWS::StackName}.
-      AgentRuntimeName: evalharness_eval_worker
-      Description: Executes LLM Eval Harness evaluations and persists them to DynamoDB
-      AgentRuntimeArtifact:
-        CodeConfiguration:
-          Code:
-            S3:
-              Bucket: !Ref ArtifactBucket
-              Prefix: !Ref EvalWorkerArtifactKey
-          # The zip's root-level entry module. AgentCore executes it; it starts
-          # the bedrock-agentcore SDK's server on :8080 (/invocations + /ping).
-          # See scripts/package-eval-worker.sh, which writes this shim.
-          EntryPoint:
-            - agentcore_app.py
-          # The server package targets 3.12 (server/pyproject.toml
-          # requires-python) and the artifact's wheels are built for it.
-          Runtime: PYTHON_3_12
-      NetworkConfiguration:
-        NetworkMode: PUBLIC
-      # No AuthorizerConfiguration => IAM (SigV4) inbound auth. The FastAPI
-      # server calls InvokeAgentRuntime with its own AWS credentials.
-      RoleArn: !GetAtt EvalWorkerRole.Arn
-      EnvironmentVariables:
-        # Worker-owned (docs/cloud-evals.md "Configuration").
-        TABLE_NAME: !Ref EvalTable
-        # Consumed by evalharness.config.Settings (EVALHARNESS_ prefix), which
-        # evals.engine.default_deps() builds from the environment because the
-        # worker has no FastAPI request to hang dependencies off.
-        EVALHARNESS_AWS_REGION: !Ref AWS::Region
-        # The container filesystem is not a durable or necessarily writable
-        # place; /tmp is. This SQLite file is scratch space for the run engine,
-        # which writes each run there before save_run mirrors it to DynamoDB.
-        EVALHARNESS_DB_PATH: /tmp/evalharness-worker.db
-
-  EvalWorkerRole:
-    Type: AWS::IAM::Role
-    Condition: DeployEvalWorker
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: bedrock-agentcore.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-              ArnLike:
-                aws:SourceArn: !Sub arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*
+      CodeUri:
+        Bucket: !Ref ArtifactBucket
+        Key: !Ref EvalWorkerArtifactKey
+      Handler: evalharness.worker.lambda_app.handler
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Tracing: Active
+      # An evaluation executes up to 25 runs at a concurrency of 3 and then
+      # grades them, all in one invocation. Memory is also CPU on Lambda, and
+      # this workload is mostly waiting on Bedrock, so the size is about having
+      # enough headroom for the concurrent HTTP work rather than compute.
+      MemorySize: !Ref EvalWorkerMemorySize
+      # Lambda's hard ceiling. evalharness.worker.lambda_app stops the
+      # evaluation cooperatively before this, at a run boundary, so a job that
+      # runs long settles as `deadline_exceeded` with its finished runs intact
+      # instead of being killed mid-write and left reading `running` forever.
+      Timeout: 900
+      EventInvokeConfig:
+        # The server invokes asynchronously, and AWS retries a failed async
+        # invocation twice by default. Never retry this one: the handler
+        # already routes every evaluation failure into DynamoDB rather than
+        # raising, so a retry here only ever means the *invocation* died --
+        # most likely by exhausting the 15 minutes -- and re-running it would
+        # burn another 15 minutes and overwrite the first attempt's state.
+        MaximumRetryAttempts: 0
+      Environment:
+        Variables:
+          # Worker-owned (docs/cloud-evals.md "Configuration").
+          TABLE_NAME: !Ref EvalTable
+          # Consumed by evalharness.config.Settings (EVALHARNESS_ prefix), which
+          # evals.engine.default_deps() builds from the environment because the
+          # worker has no FastAPI request to hang dependencies off.
+          EVALHARNESS_AWS_REGION: !Ref AWS::Region
+          # /var/task is read-only; /tmp is not. This SQLite file is scratch
+          # space for the run engine, which writes each run there before
+          # save_run mirrors it to DynamoDB.
+          EVALHARNESS_DB_PATH: /tmp/evalharness-worker.db
       Policies:
-        - PolicyName: EvalWorkerPolicy
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              # Read the CodeZip artifact at create/update time.
-              - Effect: Allow
-                Action: s3:GetObject
-                Resource: !Sub ${ArtifactBucket.Arn}/*
-              - Effect: Allow
-                Action: s3:ListBucket
-                Resource: !GetAtt ArtifactBucket.Arn
-              # The evaluation itself: the model under test, plus the judge.
-              - Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                  - bedrock:Converse
-                  - bedrock:ConverseStream
-                Resource:
-                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
-                  - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
-              # Guardrail-backed runs evaluate the configured guardrail inline.
-              - Effect: Allow
-                Action: bedrock:ApplyGuardrail
-                Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:guardrail/*
-              # Job state: EVAL# meta/events, the CANCEL flag, RUN# records.
-              # No Scan and no Query -- the worker only ever touches items whose
-              # keys it already knows.
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                Resource: !GetAtt EvalTable.Arn
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogStreams
-                  - logs:DescribeLogGroups
-                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/*
-              - Effect: Allow
-                Action:
-                  - xray:PutTraceSegments
-                  - xray:PutTelemetryRecords
-                  - xray:GetSamplingRules
-                  - xray:GetSamplingTargets
-                Resource: '*'
-              - Effect: Allow
-                Action: cloudwatch:PutMetricData
-                Resource: '*'
-                Condition:
-                  StringEquals:
-                    cloudwatch:namespace: bedrock-agentcore
-
-  # ---------------------------------------------------------------------------
-  # Deployed FastAPI server
-  #
-  # The application is UNCHANGED: no handler, no Mangum, no ASGI shim. The AWS
-  # Lambda Web Adapter layer sits in front of it -- AWS_LAMBDA_EXEC_WRAPPER
-  # points Lambda at the layer's /opt/bootstrap, which execs this function's
-  # Handler (`run.sh`, written by scripts/package-server.sh), which starts
-  # uvicorn on $PORT. The adapter then translates Lambda invocations into plain
-  # HTTP against that port.
-  #
-  # AWS_LWA_INVOKE_MODE=response_stream + FunctionUrlConfig.InvokeMode
-  # RESPONSE_STREAM is what keeps `POST /runs` and the evaluation event streams
-  # incremental rather than buffered into one JSON blob at the end.
-  #
-  # See docs/serverless-deploy-infra.md for citations and the list of things
-  # only a real deploy can prove.
-  # ---------------------------------------------------------------------------
-
+        - Version: 2012-10-17
+          Statement:
+            # The evaluation itself: the model under test, plus the judge.
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+                - bedrock:Converse
+                - bedrock:ConverseStream
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+            # Guardrail-backed runs evaluate the configured guardrail inline.
+            - Effect: Allow
+              Action: bedrock:ApplyGuardrail
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:guardrail/*
+            # Job state: EVAL# meta/events, the CANCEL flag, RUN# records.
+            # No Scan and no Query -- the worker only ever touches items whose
+            # keys it already knows.
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt EvalTable.Arn
   ServerFunction:
     Type: AWS::Serverless::Function
     Condition: DeployServer
@@ -354,9 +307,9 @@ Resources:
           EVALHARNESS_HISTORY_BACKEND: dynamodb
           EVALHARNESS_LOCAL_EVALS: 'off'
           EVALHARNESS_EVAL_TABLE: !Ref EvalTable
-          EVALHARNESS_EVAL_RUNTIME_ARN: !If
+          EVALHARNESS_EVAL_FUNCTION_NAME: !If
             - ServerHasEvalWorker
-            - !GetAtt EvalWorkerRuntime.AgentRuntimeArn
+            - !Ref EvalWorkerFunction
             - !Ref AWS::NoValue
           # Empty by default: SPA and API share one CloudFront origin, so
           # nothing the browser does is cross-origin. See the parameter.
@@ -419,10 +372,8 @@ Resources:
             - !If
               - ServerHasEvalWorker
               - Effect: Allow
-                Action: bedrock-agentcore:InvokeAgentRuntime
-                Resource:
-                  - !GetAtt EvalWorkerRuntime.AgentRuntimeArn
-                  - !Sub ${EvalWorkerRuntime.AgentRuntimeArn}/*
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt EvalWorkerFunction.Arn
               - !Ref AWS::NoValue
       FunctionUrlConfig:
         # v1: public-but-unguessable, fronted by CloudFront. SAM emits the
@@ -651,17 +602,17 @@ Outputs:
       S3 bucket this stack's deployable zips are uploaded to (eval-worker/<sha>.zip
       and server/<sha>.zip); `make deploy-backend` looks it up by this name.
     Value: !Ref ArtifactBucket
-  EvalWorkerRuntimeArn:
+  EvalWorkerFunctionName:
     Condition: DeployEvalWorker
     Description: >
-      AgentCore Runtime ARN for the cloud evaluation lane. Set this as
-      EVALHARNESS_EVAL_RUNTIME_ARN on the FastAPI server (with
+      Worker Lambda for the cloud evaluation lane. Set this as
+      EVALHARNESS_EVAL_FUNCTION_NAME on the FastAPI server (with
       EVALHARNESS_EVAL_TABLE=TableName) to enable the cloud lane.
-    Value: !GetAtt EvalWorkerRuntime.AgentRuntimeArn
-  EvalWorkerRuntimeId:
+    Value: !Ref EvalWorkerFunction
+  EvalWorkerFunctionArn:
     Condition: DeployEvalWorker
-    Description: AgentCore Runtime id (useful for CLI calls that take an id, not an ARN)
-    Value: !GetAtt EvalWorkerRuntime.AgentRuntimeId
+    Description: Worker Lambda ARN (for IAM policies that take an ARN, not a name)
+    Value: !GetAtt EvalWorkerFunction.Arn
   UserPoolId:
     Condition: DeployServer
     Description: Cognito user pool the deployed server verifies bearer tokens against (`make create-user` reads this)

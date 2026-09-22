@@ -21,17 +21,16 @@ from botocore.stub import Stubber
 from fastapi import FastAPI
 
 from evalharness.config import Settings, get_settings
-from evalharness.errors import register_exception_handlers
+from evalharness.errors import UpstreamError, register_exception_handlers
 from evalharness.evals import cloud
 from evalharness.evals import jobs as evals_jobs
 from evalharness.evals.ddb_reader import GSI1_PK, GSI1_SK, EvalTable
 from evalharness.routers import health as health_router
 from evalharness.routers import runs
 from evalharness.store import db
-from evalharness.worker.interfaces import session_id_for
 from tests.fake_table import FakeTable
 
-RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/llm-eval-harness-evals-abc"
+FUNCTION_NAME = "llm-eval-harness-EvalWorkerFunction-ABC123"
 TABLE_NAME = "llm-eval-harness-store"
 
 
@@ -156,7 +155,7 @@ def invoker() -> RecordingInvoker:
 
 @pytest.fixture
 def cloud_settings() -> Settings:
-    return Settings(eval_runtime_arn=RUNTIME_ARN, eval_table=TABLE_NAME)
+    return Settings(eval_function_name=FUNCTION_NAME, eval_table=TABLE_NAME)
 
 
 @pytest.fixture
@@ -279,36 +278,48 @@ async def test_a_local_submission_is_unaffected_by_the_cloud_settings(client, in
     assert invoker.calls == []
 
 
-def test_the_runtime_session_id_clears_the_api_minimum():
-    """32-char uuid hex ids are always one short of ``SessionType``'s min of 33."""
-    session_id = session_id_for("0123456789abcdef0123456789abcdef")
+def test_the_real_invoker_invokes_the_function_asynchronously():
+    """Validated against botocore's shipped ``lambda`` service model.
 
-    assert len(session_id) >= 33
-    assert session_id.startswith("0123456789abcdef0123456789abcdef")
-    # Deterministic: a retried invoke lands on the same runtime session.
-    assert session_id == session_id_for("0123456789abcdef0123456789abcdef")
-
-
-def test_the_real_invoker_calls_invoke_agent_runtime_with_contract_params():
-    """Validated against botocore's shipped ``bedrock-agentcore`` service model."""
-    client = boto3.client("bedrock-agentcore", region_name="us-east-1")
+    ``InvocationType="Event"`` is the contract: AWS queues the event and answers
+    202 immediately, which is what lets an evaluation run for minutes while the
+    server's POST returns at once.
+    """
+    client = boto3.client("lambda", region_name="us-east-1")
     payload = {"evaluation_id": "e" * 32, "request": {"kind": "determinism"}}
 
     with Stubber(client) as stubber:
         stubber.add_response(
-            "invoke_agent_runtime",
-            {"contentType": "application/json"},
+            "invoke",
+            {"StatusCode": 202},
             expected_params={
-                "agentRuntimeArn": RUNTIME_ARN,
-                "runtimeSessionId": session_id_for("e" * 32),
-                "contentType": "application/json",
-                "accept": "application/json",
-                "payload": json.dumps(payload).encode("utf-8"),
+                "FunctionName": FUNCTION_NAME,
+                "InvocationType": "Event",
+                "Payload": json.dumps(payload).encode("utf-8"),
             },
         )
-        invoker = cloud.AgentCoreInvoker(RUNTIME_ARN, "us-east-1", client=client)
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
         invoker.invoke("e" * 32, payload)
         stubber.assert_no_pending_responses()
+
+
+def test_the_real_invoker_refuses_to_report_success_when_aws_did_not_accept():
+    """Anything but 202 means the event was not queued.
+
+    Swallowing that would tell the caller an evaluation had started when
+    nothing is ever going to run it, and the row would read `pending` forever.
+    """
+    client = boto3.client("lambda", region_name="us-east-1")
+    payload = {"evaluation_id": "e" * 32, "request": {"kind": "determinism"}}
+
+    with Stubber(client) as stubber:
+        stubber.add_response("invoke", {"StatusCode": 200}, expected_params=None)
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
+        with pytest.raises(UpstreamError) as caught:
+            invoker.invoke("e" * 32, payload)
+
+    assert caught.value.code == "eval_worker_unavailable"
+    assert caught.value.detail["status_code"] == 200
 
 
 # --------------------------------------------------------------------------- #
@@ -594,9 +605,9 @@ async def test_health_reports_the_cloud_lane_as_unconfigured(unconfigured_client
 
 
 async def test_a_half_configured_lane_is_not_configured():
-    assert cloud.is_configured(Settings(eval_runtime_arn=RUNTIME_ARN)) is False
+    assert cloud.is_configured(Settings(eval_function_name=FUNCTION_NAME)) is False
     assert cloud.is_configured(Settings(eval_table=TABLE_NAME)) is False
-    assert cloud.is_configured(Settings(eval_runtime_arn=RUNTIME_ARN, eval_table=TABLE_NAME))
+    assert cloud.is_configured(Settings(eval_function_name=FUNCTION_NAME, eval_table=TABLE_NAME))
 
 
 # --------------------------------------------------------------------------- #
@@ -626,7 +637,7 @@ async def test_a_native_json_value_in_config_is_passed_through_unparsed(client, 
 
 
 def test_get_invoker_reuses_the_same_instance_for_the_same_settings():
-    settings = Settings(eval_runtime_arn=RUNTIME_ARN, aws_region="us-east-1")
+    settings = Settings(eval_function_name=FUNCTION_NAME, aws_region="us-east-1")
 
     first = cloud.get_invoker(settings)
     second = cloud.get_invoker(settings)
@@ -635,10 +646,9 @@ def test_get_invoker_reuses_the_same_instance_for_the_same_settings():
     assert first is second
 
 
-def test_get_invoker_builds_a_distinct_instance_per_runtime_arn():
-    settings_a = Settings(eval_runtime_arn=RUNTIME_ARN, aws_region="us-east-1")
-    other_arn = RUNTIME_ARN.replace("llm-eval-harness-evals-abc", "llm-eval-harness-evals-xyz")
-    settings_b = Settings(eval_runtime_arn=other_arn, aws_region="us-east-1")
+def test_get_invoker_builds_a_distinct_instance_per_function():
+    settings_a = Settings(eval_function_name=FUNCTION_NAME, aws_region="us-east-1")
+    settings_b = Settings(eval_function_name=FUNCTION_NAME + "-other", aws_region="us-east-1")
 
     first = cloud.get_invoker(settings_a)
     second = cloud.get_invoker(settings_b)

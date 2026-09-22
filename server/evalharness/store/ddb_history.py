@@ -5,7 +5,7 @@ Same methods, same arguments, same return types, same errors as
 for the surface both backends implement and why the ``session`` argument is not
 part of it. The items written here are the cloud lane's items *verbatim*
 (:mod:`evalharness.store.ddb_items`), which is the point: a run executed by a
-deployed server and a run executed by the AgentCore worker land in the same
+deployed server and a run executed by the worker Lambda land in the same
 ``RUN#{id}/META`` shape, in the same GSI1 partition, and read back through one
 code path.
 

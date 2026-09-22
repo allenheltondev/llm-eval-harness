@@ -4,8 +4,8 @@ Evaluations run in one of two lanes, chosen per launch in the UI:
 
 - **local** (default): executed in-process by the FastAPI server, history in SQLite.
   Nothing leaves the machine except the Bedrock calls themselves.
-- **cloud**: executed by a worker hosted on Amazon Bedrock AgentCore Runtime,
-  with job state, progress events, and run records persisted to the stack's
+- **cloud**: executed by a worker Lambda, with job state, progress events,
+  and run records persisted to the stack's
   DynamoDB table (`EvalTable`). Durable across laptop/server restarts and
   reviewable from any machine pointed at the same stack.
 
@@ -60,14 +60,20 @@ Reader rules (FastAPI):
 
 ## Invocation
 
-FastAPI → AgentCore Runtime via `bedrock-agentcore` `InvokeAgentRuntime` with a
-JSON payload `{ "evaluation_id": ..., "request": <EvaluationRequest minus execution> }`,
-`runtimeSessionId = evaluation_id` (padded to minimum length if required).
-The worker acknowledges fast (writes META pending→running) and processes as an
-async task within the runtime; FastAPI does not hold the connection open beyond
-acknowledgment. Exact async mechanics are the infra work item's to pin down and
-report (this is the one unproven-by-reference area — bedrock-agentcore Python SDK
-`@app.async_task` pattern or equivalent).
+FastAPI → the worker Lambda via `lambda:Invoke` with
+`InvocationType="Event"` and a JSON payload
+`{ "evaluation_id": ..., "request": <EvaluationRequest minus execution> }`.
+
+The invoke is asynchronous, so AWS queues the event and answers immediately
+while the worker runs the whole evaluation inside one invocation: FastAPI never
+holds a connection open for it. The worker writes META pending→running before
+any model call, so the id in the `202` is usable against
+`/evaluations/{id}` straight away.
+
+An evaluation that would exceed Lambda's 15-minute limit is stopped
+cooperatively at a run boundary and settled as `error` with code
+`deadline_exceeded`, keeping whatever runs finished. See
+`docs/cloud-evals-infra.md`.
 
 The worker reuses `evalharness`'s existing engine/evals/tools code; the ONLY
 behavioral difference is the emitter (DDB writes instead of asyncio queue) and
@@ -77,7 +83,7 @@ seam to make that swap injectable.
 ## Configuration
 
 Server (pydantic-settings, `EVALHARNESS_` prefix):
-- `eval_runtime_arn: str | None` — AgentCore runtime ARN; None = cloud lane unavailable.
+- `eval_function_name: str | None` — worker Lambda name; None = cloud lane unavailable.
 - `eval_table: str | None` — DynamoDB table name (the stack's `TableName` output; also
   the deployed server's history store).
 

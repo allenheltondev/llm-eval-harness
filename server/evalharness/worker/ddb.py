@@ -530,7 +530,7 @@ class DynamoEvalStore:
         """Publish a just-finished run (the :class:`EvalStore` hook).
 
         The engine executes runs through the ordinary run engine, which writes
-        each row to the process-local SQLite database — inside AgentCore that is
+        each row to the process-local SQLite database — inside Lambda that is
         the microVM's own ephemeral disk, invisible to anyone else. This copies
         the row to DynamoDB, which is what makes it durable and readable from
         another machine.

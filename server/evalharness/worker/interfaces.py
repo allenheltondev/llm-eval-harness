@@ -57,27 +57,15 @@ __all__ = [
     "InvalidPayload",
     "RunStore",
     "SEAM_FUNCTION_NAME",
-    "SESSION_ID_MIN_LENGTH",
     "load_seam",
     "normalize_outcome",
     "parse_request",
     "run_evaluation",
-    "session_id_for",
     "validate_payload",
 ]
 
 #: The function ``evalharness.evals.engine`` exposes for the cloud lane.
 SEAM_FUNCTION_NAME = "execute_evaluation_with_seam"
-
-#: ``InvokeAgentRuntime``'s ``runtimeSessionId`` (``SessionType``) has
-#: ``min: 33``. Evaluation ids are 32-char uuid4 hex, so they are *always* one
-#: character short and must be padded. See :func:`session_id_for`.
-SESSION_ID_MIN_LENGTH = 33
-
-#: Suffix that pads a 32-char evaluation id past ``SESSION_ID_MIN_LENGTH`` while
-#: staying inside the response-side ``SessionId`` charset
-#: (``[a-zA-Z0-9][a-zA-Z0-9-_]*``).
-_SESSION_ID_SUFFIX = "-evalharness-eval"
 
 #: Evaluation ids are uuid4 hex in every code path we control. Constrain the
 #: worker to that shape anyway: the id is concatenated into DynamoDB partition
@@ -166,20 +154,6 @@ def validate_payload(payload: Any) -> tuple[str, dict[str, Any]]:
     return evaluation_id, request
 
 
-def session_id_for(evaluation_id: str) -> str:
-    """The ``runtimeSessionId`` to invoke this evaluation with.
-
-    Deterministic on purpose: ``runtimeSessionId`` is modelled as an idempotency
-    token, and a stable value means a retried invoke lands on the same runtime
-    session rather than starting a second one. Exported here (rather than
-    hard-coded in the FastAPI client) so both sides derive it identically.
-    """
-    session_id = f"{evaluation_id}{_SESSION_ID_SUFFIX}"
-    if len(session_id) < SESSION_ID_MIN_LENGTH:  # pragma: no cover - suffix is long enough
-        session_id = session_id.ljust(SESSION_ID_MIN_LENGTH, "0")
-    return session_id
-
-
 # --------------------------------------------------------------------------- #
 # Reaching the engine
 # --------------------------------------------------------------------------- #
@@ -190,7 +164,7 @@ def load_seam() -> Callable[..., Any]:
 
     Lazy for two reasons: importing ``evalharness.evals.engine`` drags in the
     whole run engine (boto3 clients, strands, the SQLite store), which the
-    module-import path of an AgentCore cold start should not pay for until an
+    module-import path of a Lambda cold start should not pay for until an
     invocation actually arrives; and the seam is being built concurrently, so a
     module-scope import would make this package un-importable until it lands.
 

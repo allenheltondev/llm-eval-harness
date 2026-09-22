@@ -184,7 +184,7 @@ deploy-backend:
 	echo; \
 	echo "Backend deployed to stack $(STACK_NAME):"; \
 	echo "  AppUrl:                        $$(resolve_output AppUrl)"; \
-	echo "  EVALHARNESS_EVAL_RUNTIME_ARN=$$(resolve_output EvalWorkerRuntimeArn)"; \
+	echo "  EVALHARNESS_EVAL_FUNCTION_NAME=$$(resolve_output EvalWorkerFunctionName)"; \
 	echo "  EVALHARNESS_EVAL_TABLE=$$(resolve_output TableName)"
 
 deploy-frontend:

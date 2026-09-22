@@ -1,10 +1,15 @@
-"""The AgentCore entry point: envelope validation and ack-before-completion.
+"""The Lambda entry point: envelope validation, the job body, and the deadline.
 
-The cloud lane's whole shape depends on one behaviour -- the runtime
-acknowledges an invocation long before the evaluation finishes, so FastAPI never
-holds a connection open and reads progress from DynamoDB instead. That is what
-:func:`test_dispatch_acks_before_a_slow_job_completes` pins down, with a job that
-cannot possibly have finished by the time the ack is returned.
+The cloud lane's shape rests on the *invocation* being asynchronous rather than
+the handler returning early: the server invokes with ``InvocationType="Event"``,
+so the whole evaluation runs inside one invocation and FastAPI reads progress
+from DynamoDB instead of holding anything open.
+
+Which makes the 15-minute ceiling the thing worth pinning down. Being killed at
+it would leave the evaluation reading ``running`` until its TTL, so the worker
+stops itself first, at a run boundary, and records *why* --
+:func:`test_execute_settles_a_deadline_as_an_error_not_a_cancellation` is that
+guarantee.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ import json
 
 import pytest
 
-from evalharness.worker import agentcore_app, interfaces
+from evalharness.worker import interfaces, lambda_app
 from evalharness.worker.ddb import DynamoEvalStore
 from tests.fake_dynamodb import FakeDynamoDBClient
 
@@ -89,112 +94,177 @@ def test_validate_payload_strips_the_execution_switch():
     assert request == REQUEST
 
 
-async def test_dispatch_rejects_a_bad_payload_without_touching_dynamodb(client, store_factory):
-    response = await agentcore_app.dispatch({"nope": True}, store_factory=store_factory)
+def test_handler_rejects_a_bad_payload_without_touching_dynamodb(client, store_factory):
+    response = lambda_app.handler({"nope": True}, store_factory=store_factory)
 
     assert response["status"] == "rejected"
     assert response["error"]["code"] == "invalid_payload"
     assert client.calls == []
 
 
-async def test_dispatch_reports_an_unwritable_store(store_factory):
+def test_handler_reports_an_unwritable_store():
     def exploding(_evaluation_id: str):
         raise RuntimeError("table is gone")
 
-    response = await agentcore_app.dispatch(PAYLOAD, store_factory=exploding)
+    response = lambda_app.handler(PAYLOAD, store_factory=exploding)
 
     assert response["status"] == "rejected"
     assert response["error"]["code"] == "store_unavailable"
 
 
-# --------------------------------------------------------------------------- #
-# Session ids
-# --------------------------------------------------------------------------- #
+def test_handler_runs_the_whole_evaluation_inside_the_invocation(
+    monkeypatch, client, store_factory
+):
+    """Synchronous on purpose: a Lambda is frozen the moment its handler returns.
 
-
-def test_session_id_clears_the_runtime_minimum():
-    """A 32-char uuid4 hex is always one short of ``SessionType``'s ``min: 33``."""
-    assert len(EVAL_ID) == 32
-    session_id = interfaces.session_id_for(EVAL_ID)
-    assert len(session_id) >= interfaces.SESSION_ID_MIN_LENGTH
-    assert session_id.startswith(EVAL_ID)
-
-
-def test_session_id_is_deterministic_and_url_safe():
-    import re
-
-    session_id = interfaces.session_id_for(EVAL_ID)
-    assert session_id == interfaces.session_id_for(EVAL_ID)
-    assert re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", session_id)
-    assert len(session_id) <= 256
-
-
-# --------------------------------------------------------------------------- #
-# Ack-fast
-# --------------------------------------------------------------------------- #
-
-
-async def test_dispatch_acks_before_a_slow_job_completes(monkeypatch, client, store_factory):
-    """The behaviour the whole cloud lane rests on.
-
-    The job blocks on a gate that is not opened until *after* the ack has been
-    returned and asserted on, so a dispatch that waited for the job would
-    deadlock rather than merely be slow.
+    The previous host acknowledged fast and kept working in the background. Here
+    the async *invoke* does that job, so anything the handler does not finish
+    does not happen.
     """
-    gate = asyncio.Event()
-    finished = asyncio.Event()
+    async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
+        emit({"type": "eval_complete", "status": "completed", "result": None})
+        store.save_evaluation(status="completed", result=None, error=None)
+        return {"status": "completed", "result": None, "error": None, "run_ids": []}
 
-    async def slow_job(evaluation_id, request, store):
-        await gate.wait()
-        store.emit({"type": "eval_complete", "status": "completed", "result": {"grade": "A"}})
-        store.complete("completed", result={"grade": "A"})
-        finished.set()
+    monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
 
-    monkeypatch.setattr(agentcore_app, "_tracked_execute", slow_job)
+    response = lambda_app.handler(PAYLOAD, store_factory=store_factory)
 
-    response = await asyncio.wait_for(
-        agentcore_app.dispatch(PAYLOAD, store_factory=store_factory), timeout=1.0
-    )
-
-    # Acknowledged, and the evaluation is visibly running while still unfinished.
-    assert response == {"status": "accepted", "evaluation_id": EVAL_ID, "execution": "cloud"}
-    assert meta(client)["status"] == {"S": "running"}
-    assert not finished.is_set()
-
-    gate.set()
-    await asyncio.wait_for(finished.wait(), timeout=1.0)
+    assert response == {"status": "completed", "evaluation_id": EVAL_ID, "execution": "cloud"}
+    # Terminal before the handler returned -- not merely started.
     assert meta(client)["status"] == {"S": "completed"}
 
 
-async def test_dispatch_writes_pending_then_running_before_acking(client, store_factory):
-    """The ack means "state is durable", not just "message received"."""
-    def discard(coro):
-        coro.close()  # the job itself is not under test here
+def test_handler_writes_pending_then_running_before_executing(
+    monkeypatch, client, store_factory
+):
+    """The opening state is durable before any model call is made."""
+    seen: list[str] = []
 
-    await agentcore_app.dispatch(PAYLOAD, store_factory=store_factory, spawn=discard)
+    async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
+        seen.append(meta(client)["status"]["S"])
+        store.save_evaluation(status="completed", result=None, error=None)
+        return {"status": "completed", "result": None, "error": None, "run_ids": []}
 
-    statuses = [
+    monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
+    lambda_app.handler(PAYLOAD, store_factory=store_factory)
+
+    put_statuses = [
         kwargs["Item"]["status"]["S"]
         for name, kwargs in client.calls
         if name == "put_item" and kwargs["Item"]["sk"]["S"] == "META"
     ]
-    assert statuses == ["pending"]
-    assert meta(client)["status"] == {"S": "running"}
+    assert put_statuses == ["pending"]
+    assert seen == ["running"]
 
 
-async def test_background_task_is_strongly_referenced(client, store_factory):
-    """``asyncio`` only weakly references running tasks; a lost one dies silently."""
+# --------------------------------------------------------------------------- #
+# The deadline
+# --------------------------------------------------------------------------- #
+
+
+def test_deadline_trips_only_inside_the_margin():
+    left = [lambda_app.DEADLINE_MARGIN_SECONDS + 1]
+    deadline = lambda_app.Deadline(lambda: left[0])
+
+    assert deadline.expired() is False
+    left[0] = lambda_app.DEADLINE_MARGIN_SECONDS
+    assert deadline.expired() is True
+
+
+def test_deadline_is_latched():
+    """The engine polls repeatedly; a verdict that flickered would be useless."""
+    left = [0.0]
+    deadline = lambda_app.Deadline(lambda: left[0])
+    assert deadline.expired() is True
+
+    left[0] = 10_000.0
+    assert deadline.expired() is True
+    assert deadline.tripped is True
+
+
+def test_a_broken_clock_does_not_stop_an_evaluation():
+    def exploding() -> float:
+        raise RuntimeError("no context")
+
+    assert lambda_app.Deadline(exploding).expired() is False
+
+
+def test_deadline_from_reads_the_lambda_context():
+    class Context:
+        @staticmethod
+        def get_remaining_time_in_millis() -> int:
+            return 5_000
+
+    deadline = lambda_app.deadline_from(Context())
+    # 5s left is well inside the margin.
+    assert deadline.expired() is True
+
+
+def test_deadline_from_falls_back_when_there_is_no_context(monkeypatch):
+    """Never silently absent: a direct invocation still gets a guard."""
+    monkeypatch.setenv("EVAL_WORKER_TIMEOUT_SECONDS", "0")
+    assert lambda_app.deadline_from(None).expired() is True
+
+    monkeypatch.setenv("EVAL_WORKER_TIMEOUT_SECONDS", "900")
+    assert lambda_app.deadline_from(None).expired() is False
+
+
+async def test_execute_settles_a_deadline_as_an_error_not_a_cancellation(
+    monkeypatch, client, store_factory
+):
+    """Nobody cancelled this, so it must not read as cancelled.
+
+    The engine's cooperative-stop path settles `cancelled`; the worker
+    overwrites that buffered state with `deadline_exceeded` before it is
+    flushed, keeping the runs that did finish.
+    """
+    async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
+        assert cancelled() is True  # the deadline is already past
+        store.save_evaluation(status="cancelled", result=None, error=None)
+        return {"status": "cancelled", "result": None, "error": None, "run_ids": ["run-1"]}
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
+
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
+    store.mark_running()
+    deadline = lambda_app.Deadline(lambda: 0.0)
 
-    async def job(evaluation_id, request, store):
-        await asyncio.sleep(0)
-        store.complete("completed", result={})
+    status = await lambda_app.execute(EVAL_ID, REQUEST, store, deadline)
 
-    task = agentcore_app._spawn(job(EVAL_ID, REQUEST, store))
-    assert task in agentcore_app._BACKGROUND_TASKS
-    await task
-    assert task not in agentcore_app._BACKGROUND_TASKS
+    assert status == "error"
+    item = meta(client)
+    assert item["status"] == {"S": "error"}
+    assert json.loads(item["error"]["S"])["code"] == lambda_app.DEADLINE_ERROR_CODE
+    # The finished runs survive -- that is the point of stopping cleanly.
+    assert json.loads(item["run_ids"]["S"]) == ["run-1"]
+
+
+async def test_a_user_cancel_still_settles_as_cancelled(monkeypatch, client, store_factory):
+    """The deadline must not swallow a real cancellation."""
+    async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
+        # Nothing to stop for yet -- plenty of time left and no cancel.
+        assert cancelled() is False
+        store.request_cancel()
+        assert cancelled() is True
+        store.save_evaluation(status="cancelled", result=None, error=None)
+        return {"status": "cancelled", "result": None, "error": None, "run_ids": []}
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
+
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    # Plenty of time left: the only reason to stop is the user's cancel. The
+    # cancel arrives mid-run so this exercises the composite stop condition
+    # rather than execute()'s short-circuit for an already-cancelled job.
+    deadline = lambda_app.Deadline(lambda: 10_000.0)
+
+    status = await lambda_app.execute(EVAL_ID, REQUEST, store, deadline)
+
+    assert status == "cancelled"
+    assert meta(client)["status"] == {"S": "cancelled"}
 
 
 # --------------------------------------------------------------------------- #
@@ -225,7 +295,7 @@ async def test_execute_drives_the_engine_and_writes_the_terminal_state(
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
     store.mark_running()
-    await agentcore_app.execute(EVAL_ID, REQUEST, store)
+    await lambda_app.execute(EVAL_ID, REQUEST, store)
 
     item = meta(client)
     assert item["status"] == {"S": "completed"}
@@ -261,7 +331,7 @@ async def test_execute_settles_from_the_outcome_when_the_engine_never_called_sav
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
     store.mark_running()
-    await agentcore_app.execute(EVAL_ID, REQUEST, store)
+    await lambda_app.execute(EVAL_ID, REQUEST, store)
 
     item = meta(client)
     assert item["status"] == {"S": "completed"}
@@ -283,7 +353,7 @@ async def test_execute_short_circuits_when_cancelled_before_it_starts(
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
     store.request_cancel()
-    await agentcore_app.execute(EVAL_ID, REQUEST, store)
+    await lambda_app.execute(EVAL_ID, REQUEST, store)
 
     assert meta(client)["status"] == {"S": "cancelled"}
     assert [event["type"] for event in collected(client)] == ["eval_complete"]
@@ -301,7 +371,7 @@ async def test_execute_records_an_engine_crash_as_a_terminal_error(
 
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
-    await agentcore_app.execute(EVAL_ID, REQUEST, store)  # must not raise
+    await lambda_app.execute(EVAL_ID, REQUEST, store)  # must not raise
 
     item = meta(client)
     assert item["status"] == {"S": "error"}
@@ -326,7 +396,7 @@ async def test_execute_records_cancellation_and_reraises(monkeypatch, client, st
     store.begin(REQUEST)
 
     with pytest.raises(asyncio.CancelledError):
-        await agentcore_app.execute(EVAL_ID, REQUEST, store)
+        await lambda_app.execute(EVAL_ID, REQUEST, store)
 
     assert meta(client)["status"] == {"S": "cancelled"}
     assert collected(client)[-1]["type"] == "eval_complete"
@@ -340,7 +410,7 @@ async def test_execute_reports_an_invalid_payload_from_the_seam(monkeypatch, cli
 
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
-    await agentcore_app.execute(EVAL_ID, REQUEST, store)  # must not raise
+    await lambda_app.execute(EVAL_ID, REQUEST, store)  # must not raise
 
     item = meta(client)
     assert item["status"] == {"S": "error"}
@@ -358,7 +428,7 @@ async def test_execute_reports_a_missing_engine_seam(monkeypatch, client, store_
 
     store = store_factory(EVAL_ID)
     store.begin(REQUEST)
-    await agentcore_app.execute(EVAL_ID, REQUEST, store)
+    await lambda_app.execute(EVAL_ID, REQUEST, store)
 
     assert json.loads(meta(client)["error"]["S"])["code"] == "eval_engine_unavailable"
 
@@ -375,14 +445,14 @@ async def test_execute_survives_a_dynamodb_failure_on_the_terminal_write(
     store.begin(REQUEST)
     client.fail_on["put_item"] = RuntimeError("table gone")
 
-    await agentcore_app.execute(EVAL_ID, REQUEST, store)  # logged, not raised
+    await lambda_app.execute(EVAL_ID, REQUEST, store)  # logged, not raised
 
 
 async def test_build_store_reads_the_runtime_environment(monkeypatch):
     monkeypatch.setenv("TABLE_NAME", "some-table")
     monkeypatch.setenv("AWS_REGION", "us-west-2")
 
-    store = agentcore_app.build_store(EVAL_ID)
+    store = lambda_app.build_store(EVAL_ID)
 
     assert store.table_name == "some-table"
     assert store.evaluation_id == EVAL_ID
@@ -391,4 +461,4 @@ async def test_build_store_reads_the_runtime_environment(monkeypatch):
 async def test_build_store_refuses_an_unconfigured_runtime(monkeypatch):
     monkeypatch.delenv("TABLE_NAME", raising=False)
     with pytest.raises(ValueError, match="TABLE_NAME"):
-        agentcore_app.build_store(EVAL_ID)
+        lambda_app.build_store(EVAL_ID)

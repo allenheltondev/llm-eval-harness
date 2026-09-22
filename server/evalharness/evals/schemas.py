@@ -78,7 +78,7 @@ class EvaluationRequest(BaseModel):
     rubric: str | None = None
     grader: GraderConfig = Field(default_factory=GraderConfig)
     #: Which lane executes this evaluation -- in-process ("local", the default)
-    #: or the AgentCore Runtime worker ("cloud"). See ``docs/cloud-evals.md``.
+    #: or the worker Lambda ("cloud"). See ``docs/cloud-evals.md``.
     execution: Literal["local", "cloud"] = "local"
 
     @model_validator(mode="after")

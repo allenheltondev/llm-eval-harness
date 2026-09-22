@@ -1,7 +1,7 @@
 """One place where a run or an evaluation *is* a DynamoDB item.
 
 Three components speak the item shapes in ``docs/cloud-evals.md``: the
-AgentCore worker writes them (:mod:`evalharness.worker.ddb`), the server reads
+worker Lambda writes them (:mod:`evalharness.worker.ddb`), the server reads
 them for the cloud lane (:mod:`evalharness.evals.ddb_reader` /
 :mod:`evalharness.evals.cloud`), and -- once the history backend is DynamoDB --
 the server writes them too (:mod:`evalharness.store.ddb_history`). This module

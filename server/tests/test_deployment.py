@@ -232,7 +232,7 @@ def build_app(settings: Settings, invoker: RecordingInvoker) -> FastAPI:
 async def gated_client(initialized_db, invoker) -> AsyncIterator[httpx.AsyncClient]:
     """A server with the local lane off but the cloud lane configured."""
     app = build_app(
-        Settings(local_evals="off", eval_runtime_arn=RUNTIME_ARN, eval_table=TABLE_NAME),
+        Settings(local_evals="off", eval_function_name=RUNTIME_ARN, eval_table=TABLE_NAME),
         invoker,
     )
     transport = httpx.ASGITransport(app=app)

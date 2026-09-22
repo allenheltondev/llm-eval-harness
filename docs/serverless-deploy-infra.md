@@ -200,9 +200,10 @@ changed.
 Differences from the worker's packaging:
 
 - The root entry is `run.sh`, executable, not a Python module.
-- **No `--extra worker`.** `bedrock-agentcore` (with its OpenTelemetry and MCP
-  tails) belongs to the AgentCore artifact; this server only ever *invokes* the
-  runtime, through boto3.
+- **The same dependency set.** Both artifacts now export the server's locked
+  runtime dependencies with no extras — the eval worker stopped needing
+  anything of its own when it moved to Lambda, and this server only ever
+  *invokes* it, through boto3.
 - Dev dependencies are excluded (`--no-dev`), same as the worker.
 - uv's `.lock` marker file is removed from the staging tree — build-machine
   state, not code, and it would otherwise perturb the content hash.
@@ -210,7 +211,7 @@ Differences from the worker's packaging:
 ### Artifact size
 
 Lambda's ceiling is **250 MB unzipped**, counted across the function *and*
-every layer it attaches — much tighter than AgentCore's 750 MB, with no slack
+every layer it attaches — the same ceiling the worker artifact now lives under, with no slack
 to be relaxed about. Measured on this branch **[measured]**:
 
 | | zipped | unzipped |
@@ -257,7 +258,7 @@ CloudFormation or API Gateway.
 | Env var | Value | Why |
 |---|---|---|
 | `EVALHARNESS_EVAL_TABLE` | `!Ref EvalTable` | History backend and cloud-eval state |
-| `EVALHARNESS_EVAL_RUNTIME_ARN` | `!GetAtt EvalWorkerRuntime.AgentRuntimeArn`, or absent when the worker is not deployed | The cloud evaluation lane |
+| `EVALHARNESS_EVAL_FUNCTION_NAME` | `!Ref EvalWorkerFunction`, or absent when the worker is not deployed | The cloud evaluation lane |
 | `EVALHARNESS_AUTH_USER_POOL_ID` / `EVALHARNESS_AUTH_CLIENT_ID` | `!Ref UserPool` / `!Ref UserPoolClient` | The bearer-token gate ("Auth" below) |
 | `EVALHARNESS_DB_PATH` | `/tmp/evalharness.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
 | `EVALHARNESS_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
@@ -456,7 +457,7 @@ for `Tracing: Active`:
 | `bedrock:ListGuardrails` | `*` |
 | `dynamodb:Query`, `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` | `EvalTable` |
 | `dynamodb:Query` | that table's `GSI1` |
-| `bedrock-agentcore:InvokeAgentRuntime` | the eval worker runtime (only when it is deployed) |
+| `lambda:InvokeFunction` | the eval worker function (only when it is deployed) |
 
 Two differences from the worker's role are worth noting. The server **does**
 get `Query` (listing runs and evaluations walks the `GSI1` `RUN`/`EVAL`

@@ -1,13 +1,13 @@
-"""The cloud evaluation lane: submit to AgentCore, read back from DynamoDB.
+"""The cloud evaluation lane: submit to the worker Lambda, read back from DynamoDB.
 
 ``docs/cloud-evals.md`` is the contract; this module is the server's whole half
-of it. Nothing here executes an evaluation -- that happens in an AgentCore
-Runtime worker which imports
+of it. Nothing here executes an evaluation -- that happens in a worker Lambda
+which imports
 :func:`evalharness.evals.engine.execute_evaluation_with_seam` and backs the seam
 with DynamoDB writes. The server:
 
 submit
-    Generates the evaluation id, invokes the runtime with
+    Generates the evaluation id, invokes the function asynchronously with
     ``{"evaluation_id", "request"}``, and answers ``202`` with an
     :class:`~evalharness.schemas.runs.EvaluationDetail` synthesized from the
     request. **Nothing is written locally** -- a cloud evaluation has no SQLite
@@ -21,7 +21,7 @@ cancel
     between runs.
 
 All DynamoDB access is delegated to :mod:`evalharness.evals.ddb_reader`, and the
-AgentCore call sits behind :class:`Invoker`, so the whole lane is exercised in
+Lambda call sits behind :class:`Invoker`, so the whole lane is exercised in
 tests with an in-memory table and a recording invoker.
 """
 
@@ -41,16 +41,12 @@ from fastapi import Depends
 from starlette.concurrency import run_in_threadpool
 
 from evalharness.config import Settings, get_settings
-from evalharness.errors import BadRequestError, ConflictError, NotFoundError
+from evalharness.errors import BadRequestError, ConflictError, NotFoundError, UpstreamError
 from evalharness.evals import ddb_reader, jobs
 from evalharness.evals.ddb_reader import EvalTable
 from evalharness.evals.schemas import EvaluationRequest
 from evalharness.schemas.runs import EvaluationDetail, Page, RunDetail, RunSummary
 from evalharness.store import ddb_items
-
-# The worker exports the session-id derivation (rather than each side inventing
-# one) so a retried invoke lands on the same AgentCore runtime session.
-from evalharness.worker.interfaces import session_id_for
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +57,17 @@ POLL_INTERVAL_SECONDS = 1.5
 #: ``eval_complete`` (written *after* the terminal status) is never truncated.
 TERMINAL_GRACE_POLLS = 2
 
-JSON_CONTENT_TYPE = "application/json"
 
 
 class CloudLaneUnavailableError(BadRequestError):
-    """The cloud lane was asked for but the server has no runtime/table configured."""
+    """The cloud lane was asked for but the server has no worker/table configured."""
 
     code = "cloud_lane_unavailable"
 
 
 def is_configured(settings: Settings) -> bool:
-    """The lane needs *both* an AgentCore runtime and a DynamoDB table."""
-    return bool(settings.eval_runtime_arn and settings.eval_table)
+    """The lane needs *both* a worker function and a DynamoDB table."""
+    return bool(settings.eval_function_name and settings.eval_table)
 
 
 def _require_configured(settings: Settings) -> None:
@@ -80,7 +75,7 @@ def _require_configured(settings: Settings) -> None:
         raise CloudLaneUnavailableError(
             "The cloud evaluation lane is not configured on this server",
             detail={
-                "eval_runtime_arn": settings.eval_runtime_arn is not None,
+                "eval_function_name": settings.eval_function_name is not None,
                 "eval_table": settings.eval_table is not None,
             },
         )
@@ -96,7 +91,7 @@ def require_table(table: EvalTable | None) -> EvalTable:
 
 
 # --------------------------------------------------------------------------- #
-# Invoking the AgentCore runtime
+# Invoking the worker Lambda
 # --------------------------------------------------------------------------- #
 
 
@@ -114,58 +109,65 @@ class Invoker(Protocol):
     def invoke(self, evaluation_id: str, payload: dict[str, Any]) -> Any: ...
 
 
-class AgentCoreInvoker:
-    """The real invoker: ``bedrock-agentcore`` ``InvokeAgentRuntime``.
+class LambdaInvoker:
+    """The real invoker: an **asynchronous** ``lambda:Invoke``.
 
-    Botocore's ``bedrock-agentcore`` (api version 2024-02-28) models the
-    operation as ``invoke_agent_runtime`` with ``agentRuntimeArn`` (uri),
-    ``runtimeSessionId`` (the ``X-Amzn-Bedrock-AgentCore-Runtime-Session-Id``
-    header; ``SessionType`` is min 33 / max 256 chars, hence
-    :func:`~evalharness.worker.interfaces.session_id_for`),
-    ``contentType``/``accept`` headers, and ``payload`` -- a blob, so the JSON
-    body is encoded here.
+    ``InvocationType="Event"`` is the whole design. AWS queues the event and
+    returns ``202`` as soon as it is durably accepted, so this call finishes in
+    milliseconds while the evaluation runs for minutes inside the function --
+    and the server never holds anything open for it. Progress comes back
+    through DynamoDB, per ``docs/cloud-evals.md``.
 
-    The worker acknowledges immediately and continues as an async task inside
-    the runtime, so this call returns long before the evaluation finishes; the
-    streamed response body is closed without being read.
+    AWS retries a failed asynchronous invocation twice by default; the
+    function's ``EventInvokeConfig`` in ``infra/template.yaml`` sets
+    ``MaximumRetryAttempts: 0`` instead. The worker routes every *evaluation*
+    failure into DynamoDB rather than raising, so a retry would only ever mean
+    the invocation itself died -- most likely by exhausting its 15 minutes --
+    and re-running it would burn another 15 minutes and overwrite the first
+    attempt's state.
     """
 
-    def __init__(self, runtime_arn: str, region_name: str, client: Any | None = None) -> None:
-        self._runtime_arn = runtime_arn
+    def __init__(self, function_name: str, region_name: str, client: Any | None = None) -> None:
+        self._function_name = function_name
         self._region_name = region_name
         self._client = client
 
     @property
     def client(self) -> Any:
         if self._client is None:
-            self._client = boto3.client("bedrock-agentcore", region_name=self._region_name)
+            self._client = boto3.client("lambda", region_name=self._region_name)
         return self._client
 
     def invoke(self, evaluation_id: str, payload: dict[str, Any]) -> Any:
-        response = self.client.invoke_agent_runtime(
-            agentRuntimeArn=self._runtime_arn,
-            runtimeSessionId=session_id_for(evaluation_id),
-            contentType=JSON_CONTENT_TYPE,
-            accept=JSON_CONTENT_TYPE,
-            payload=json.dumps(payload).encode("utf-8"),
+        response = self.client.invoke(
+            FunctionName=self._function_name,
+            InvocationType="Event",
+            Payload=json.dumps(payload).encode("utf-8"),
         )
-        body = response.get("response")
-        if hasattr(body, "close"):
-            body.close()
+        # An async invoke answers 202 with no body worth reading; anything else
+        # means AWS did not accept the event, and the caller must not be told
+        # the evaluation started.
+        status = response.get("StatusCode")
+        if status != 202:
+            raise UpstreamError(
+                f"The evaluation worker did not accept the job (HTTP {status})",
+                detail={"evaluation_id": evaluation_id, "status_code": status},
+                code="eval_worker_unavailable",
+            )
         return response
 
 
-_invokers: dict[tuple[str, str], AgentCoreInvoker] = {}
+_invokers: dict[tuple[str, str], LambdaInvoker] = {}
 
 
 def get_invoker(settings: Settings = Depends(get_settings)) -> Invoker | None:
-    """FastAPI dependency: the AgentCore invoker, or ``None`` when unconfigured."""
-    runtime_arn = settings.eval_runtime_arn
-    if not runtime_arn:
+    """FastAPI dependency: the worker invoker, or ``None`` when unconfigured."""
+    function_name = settings.eval_function_name
+    if not function_name:
         return None
-    key = (runtime_arn, settings.aws_region)
+    key = (function_name, settings.aws_region)
     if key not in _invokers:
-        _invokers[key] = AgentCoreInvoker(runtime_arn, settings.aws_region)
+        _invokers[key] = LambdaInvoker(function_name, settings.aws_region)
     return _invokers[key]
 
 

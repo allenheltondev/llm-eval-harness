@@ -22,7 +22,7 @@ Two lanes share that core:
     repository (:class:`LocalEvalStore`). :func:`run_evaluation` is the whole
     adapter.
 *cloud*
-    An AgentCore Runtime worker outside this process, whose ``emit`` appends
+    The worker Lambda outside this process, whose ``emit`` appends
     DynamoDB ``EVENT#`` items and whose ``store`` writes DynamoDB ``META`` /
     ``RUN#`` items. See ``docs/cloud-evals.md`` and
     :mod:`evalharness.evals.cloud`; the worker imports
