@@ -37,11 +37,18 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends
 from starlette.concurrency import run_in_threadpool
 
 from evalharness.config import Settings, get_settings
-from evalharness.errors import BadRequestError, ConflictError, NotFoundError, UpstreamError
+from evalharness.errors import (
+    BadRequestError,
+    ConflictError,
+    NotFoundError,
+    PayloadTooLargeError,
+    UpstreamError,
+)
 from evalharness.evals import ddb_reader, jobs
 from evalharness.evals.ddb_reader import EvalTable
 from evalharness.evals.schemas import EvaluationRequest
@@ -103,6 +110,33 @@ def worker_payload(evaluation_id: str, request: EvaluationRequest) -> dict[str, 
     }
 
 
+#: The most this server will hand the worker in one asynchronous invocation.
+#:
+#: ``lambda:Invoke`` with ``InvocationType="Event"`` caps the payload at 1 MB
+#: (raised from 256 KB in October 2025) [aws]. Set at 10^6 rather than 2^20 so
+#: the check can never admit something AWS counts as over, whichever way it
+#: counts a megabyte. ``EvaluationRequest`` bounds none of the prompts, the
+#: rubric or ``run_ids``, and the Function URL accepts bodies up to 6 MB, so a
+#: request can be valid at the API and still be one AWS would refuse -- this is
+#: the cloud lane's own transport limit, and it is enforced here, up front.
+ASYNC_PAYLOAD_LIMIT_BYTES = 1_000_000
+
+
+def encode_payload(payload: dict[str, Any]) -> bytes:
+    """The exact bytes sent as the invoke payload -- and so the bytes measured."""
+    return json.dumps(payload).encode("utf-8")
+
+
+def _too_large(size: int) -> PayloadTooLargeError:
+    return PayloadTooLargeError(
+        f"This evaluation is {size:,} bytes once serialized, and the cloud lane can "
+        f"hand the worker at most {ASYNC_PAYLOAD_LIMIT_BYTES:,}. Shorten the "
+        "prompts or the rubric, or run it on the local lane.",
+        detail={"bytes": size, "limit_bytes": ASYNC_PAYLOAD_LIMIT_BYTES},
+        code="evaluation_too_large",
+    )
+
+
 class Invoker(Protocol):
     """Starts one evaluation on the worker. Synchronous (called off the loop)."""
 
@@ -138,11 +172,31 @@ class LambdaInvoker:
         return self._client
 
     def invoke(self, evaluation_id: str, payload: dict[str, Any]) -> Any:
-        response = self.client.invoke(
-            FunctionName=self._function_name,
-            InvocationType="Event",
-            Payload=json.dumps(payload).encode("utf-8"),
-        )
+        body = encode_payload(payload)
+        try:
+            response = self.client.invoke(
+                FunctionName=self._function_name,
+                InvocationType="Event",
+                Payload=body,
+            )
+        except ClientError as exc:
+            # Wrapped, never raw: an unwrapped botocore error is a generic 500
+            # to the caller, with nothing to say what actually went wrong.
+            aws_error = exc.response.get("Error", {}).get("Code", "")
+            if aws_error == "RequestTooLargeException":
+                # `submit` measures first, so this means AWS counted differently.
+                raise _too_large(len(body)) from exc
+            raise UpstreamError(
+                "The evaluation worker could not be invoked",
+                detail={"evaluation_id": evaluation_id, "aws_error": aws_error},
+                code="eval_worker_unavailable",
+            ) from exc
+        except BotoCoreError as exc:
+            raise UpstreamError(
+                "The evaluation worker could not be reached",
+                detail={"evaluation_id": evaluation_id, "aws_error": exc.__class__.__name__},
+                code="eval_worker_unavailable",
+            ) from exc
         # An async invoke answers 202 with no body worth reading; anything else
         # means AWS did not accept the event, and the caller must not be told
         # the evaluation started.
@@ -234,6 +288,11 @@ async def submit(
 
     evaluation_id = uuid4().hex
     payload = worker_payload(evaluation_id, request)
+    # Measured before anything is written: a request AWS would refuse must not
+    # leave a `pending` row behind to be abandoned.
+    size = len(encode_payload(payload))
+    if size > ASYNC_PAYLOAD_LIMIT_BYTES:
+        raise _too_large(size)
     factory = store_factory or build_eval_writer_factory(settings)
     store = factory(evaluation_id)
     store.begin(payload["request"], kind=request.kind)

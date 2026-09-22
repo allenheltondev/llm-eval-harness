@@ -68,6 +68,18 @@ The invoke is asynchronous, so AWS queues the event and answers immediately
 while the worker runs the whole evaluation inside one invocation: FastAPI never
 holds a connection open for it.
 
+**The payload is capped at 1,000,000 bytes.** An asynchronous `lambda:Invoke`
+accepts at most 1 MB [aws: raised from 256 KB in October 2025], and
+`EvaluationRequest` bounds none of the prompts, the rubric or `run_ids`, while
+the Function URL accepts bodies up to 6 MB. So the server serializes the worker
+payload and measures it *before* writing anything, and a request over the limit
+is a `413 evaluation_too_large` with `detail: {bytes, limit_bytes}` — no
+`pending` row is created and nothing is invoked. The limit sits at 10^6 rather
+than 2^20 so it can never admit a payload AWS counts as over. A local-lane
+evaluation has no such limit, and the error says so. Any other refusal from
+`lambda:Invoke` (throttling, access denied, an unreachable endpoint) is a
+`502 eval_worker_unavailable` naming the AWS error, never a bare 500.
+
 **The server writes META `pending` before it invokes.** The `202` from AWS only
 means the event was queued — the worker may not start for seconds, longer on a
 cold start — so the id in the `202` would otherwise 404 against

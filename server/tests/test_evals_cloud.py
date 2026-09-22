@@ -833,3 +833,120 @@ async def test_a_row_that_cannot_be_settled_does_not_mask_the_invoke_error(
     # The invoke's own error -- not the RuntimeError from the failed cleanup.
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "eval_worker_unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# The async payload limit
+#
+# `lambda:Invoke` with InvocationType="Event" caps the payload [aws: 1 MB since
+# Oct 2025, 256 KB before]. EvaluationRequest bounds none of user_prompt,
+# system_prompt, rubric or run_ids, and the Function URL accepts request bodies
+# up to 6 MB -- so a request can be valid at the API and still be one AWS will
+# refuse. That is the cloud lane's transport constraint, made explicit here.
+# --------------------------------------------------------------------------- #
+
+
+def _body_with_prompt(prompt: str) -> dict:
+    body = determinism_body()
+    body["run_config"] = {**body["run_config"], "user_prompt": prompt}
+    return body
+
+
+def _body_of_payload_size(target: int) -> dict:
+    """A valid determinism body whose worker payload is exactly `target` bytes.
+
+    The evaluation id is always 32 hex characters, so the payload's size is a
+    pure function of the prompt's length.
+    """
+    probe = cloud.EvaluationRequest.model_validate(_body_with_prompt("x"))
+    overhead = len(cloud.encode_payload(cloud.worker_payload("e" * 32, probe))) - 1
+    return _body_with_prompt("x" * (target - overhead))
+
+
+def test_the_probe_really_builds_a_payload_of_the_asked_size():
+    """Guard the boundary tests' own arithmetic, so they test the boundary."""
+    body = _body_of_payload_size(12_345)
+    request = cloud.EvaluationRequest.model_validate(body)
+    assert len(cloud.encode_payload(cloud.worker_payload("e" * 32, request))) == 12_345
+
+
+async def test_a_payload_exactly_at_the_limit_is_accepted(client, invoker, writers):
+    body = _body_of_payload_size(cloud.ASYNC_PAYLOAD_LIMIT_BYTES)
+
+    response = await client.post("/api/v1/evaluations", json=body)
+
+    assert response.status_code == 202
+    assert len(invoker.calls) == 1
+
+
+async def test_one_byte_over_the_limit_is_a_413_before_anything_is_written(
+    client, invoker, writers
+):
+    """Refused up front: no pending row to abandon, no invoke for AWS to reject."""
+    body = _body_of_payload_size(cloud.ASYNC_PAYLOAD_LIMIT_BYTES + 1)
+
+    response = await client.post("/api/v1/evaluations", json=body)
+
+    assert response.status_code == 413
+    error = response.json()["error"]
+    assert error["code"] == "evaluation_too_large"
+    assert error["detail"] == {
+        "bytes": cloud.ASYNC_PAYLOAD_LIMIT_BYTES + 1,
+        "limit_bytes": cloud.ASYNC_PAYLOAD_LIMIT_BYTES,
+    }
+    assert invoker.calls == []
+    assert writers == {}  # the pending row was never created
+
+
+def test_the_limit_is_inside_what_aws_enforces():
+    """Whether AWS counts 1 MB as 10^6 or 2^20 bytes, the check never lets
+    through a payload it would refuse."""
+    assert cloud.ASYNC_PAYLOAD_LIMIT_BYTES <= 1_000_000
+
+
+def test_aws_refusing_the_size_anyway_is_a_413_not_a_500():
+    """Defence in depth: if AWS's count ever disagrees with ours, the caller
+    still gets the same clear 4xx rather than an unwrapped botocore error."""
+    client = boto3.client("lambda", region_name="us-east-1")
+    with Stubber(client) as stubber:
+        stubber.add_client_error(
+            "invoke", service_error_code="RequestTooLargeException", http_status_code=413
+        )
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
+        with pytest.raises(cloud.PayloadTooLargeError) as caught:
+            invoker.invoke("e" * 32, {"evaluation_id": "e" * 32, "request": {}})
+
+    assert caught.value.code == "evaluation_too_large"
+
+
+@pytest.mark.parametrize(
+    ("error_code", "http_status"),
+    [("TooManyRequestsException", 429), ("AccessDeniedException", 403)],
+)
+def test_any_other_aws_refusal_is_an_upstream_error(error_code, http_status):
+    """Not a generic 500: the worker could not be reached, and the caller is told so."""
+    client = boto3.client("lambda", region_name="us-east-1")
+    with Stubber(client) as stubber:
+        stubber.add_client_error(
+            "invoke", service_error_code=error_code, http_status_code=http_status
+        )
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
+        with pytest.raises(UpstreamError) as caught:
+            invoker.invoke("e" * 32, {"evaluation_id": "e" * 32, "request": {}})
+
+    assert caught.value.code == "eval_worker_unavailable"
+    assert caught.value.detail["aws_error"] == error_code
+
+
+def test_an_unreachable_endpoint_is_an_upstream_error():
+    from botocore.exceptions import EndpointConnectionError
+
+    class Unreachable:
+        def invoke(self, **_kwargs):
+            raise EndpointConnectionError(endpoint_url="https://lambda.us-east-1.amazonaws.com")
+
+    invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=Unreachable())
+    with pytest.raises(UpstreamError) as caught:
+        invoker.invoke("e" * 32, {"evaluation_id": "e" * 32, "request": {}})
+
+    assert caught.value.code == "eval_worker_unavailable"
