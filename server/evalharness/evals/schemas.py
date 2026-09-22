@@ -14,6 +14,7 @@ from evalharness.providers import DEFAULT_PROVIDER, Provider
 
 MIN_RUNS = 2
 MAX_RUNS = 25
+DEFAULT_DETERMINISM_RUNS = 10
 
 #: Bounds on a test suite. Rejected when exceeded, never clamped: silently
 #: dropping cases from a suite would report a pass rate for tests nobody ran.
@@ -176,7 +177,7 @@ class EvaluationRequest(BaseModel):
     kind: Literal["determinism", "grade", "suite"]
     run_config: RunRequest | None = None
     suite: Suite | None = None
-    n: int = 10
+    n: int = DEFAULT_DETERMINISM_RUNS
     run_ids: list[str] = Field(default_factory=list)
     rubric: str | None = None
     grader: GraderConfig = Field(default_factory=GraderConfig)

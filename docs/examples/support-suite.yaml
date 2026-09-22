@@ -1,0 +1,58 @@
+# A test suite for a customer-support prompt.
+#
+#   evalharness eval --suite docs/examples/support-suite.yaml
+#   evalharness eval --suite docs/examples/support-suite.yaml -m <another-model>
+#
+# Reference: docs/suites.md
+
+name: support-basics
+
+# What every case runs with -- the same fields as a run, minus the prompt:
+# each case's `input` is the prompt.
+run_config:
+  model_id: amazon.nova-lite-v1:0
+  system_prompt: |
+    You are a support agent for an online shoe store. Returns are accepted
+    within 30 days of purchase for store credit, or 14 days for a refund.
+    The store opens at 10am on Sundays and 9am every other day.
+    Answer in one or two sentences.
+  inference:
+    temperature: 0
+
+# Optional. Run each case this many times; its score is the mean. More than one
+# catches a case that only passes some of the time.
+repeats: 1
+
+# Optional. A case passes when its score (0-1) reaches this. Default 0.7.
+pass_threshold: 0.7
+
+# Optional. How every case is judged; the built-in suite rubric is used if
+# omitted. `--rubric` on the command line overrides this.
+# rubric: ...
+
+# Optional. The judge. `--grader-*` flags override these.
+# grader:
+#   model_id: amazon.nova-pro-v1:0
+
+cases:
+  # A reference answer: the judge compares facts, not wording.
+  - id: refund-window
+    input: I bought shoes 20 days ago. Can I still get my money back?
+    expected: >-
+      No refund -- refunds are only within 14 days -- but you can return them
+      for store credit, since that is allowed up to 30 days.
+
+  # Criteria: what this particular answer must do, in plain language.
+  - id: sunday-hours
+    input: What time do you open on Sunday?
+    criteria: Must say 10am. Must not give the weekday opening time as the answer.
+
+  # Both: the reference fixes the facts, the criteria add a requirement.
+  - id: late-return
+    input: It has been 45 days. Can I return them?
+    expected: No -- returns are only accepted within 30 days of purchase.
+    criteria: Must be polite, and must not offer an exception to the policy.
+
+  # Neither: judged on the rubric alone -- is it a correct, helpful answer?
+  - id: off-topic
+    input: Can you recommend a good running route in Boston?

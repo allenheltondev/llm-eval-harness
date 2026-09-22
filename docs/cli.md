@@ -62,8 +62,8 @@ byte-for-byte the event stream the API serves, so anything wrapping the harness
 | `2` | The invocation was wrong. |
 | `130` | Cancelled (Ctrl-C). |
 
-A **grade of F is exit `0`**. The evaluation succeeded; it is telling you the
-answer is bad. Reserve `1` for "the harness could not do its job", so `set -e`
+A **grade of F is exit `0`**, and so is a suite with failing cases. The
+evaluation succeeded; it is telling you the answer is bad. Reserve `1` for "the harness could not do its job", so `set -e`
 in a script means what you want it to mean.
 
 ## `run`
@@ -107,8 +107,8 @@ persisted on the run row.
 
 ## `eval`
 
-Two shapes, same command. Without `--run` it is a determinism experiment:
-execute the prompt `n` times and grade the batch.
+Three shapes, same command. Without `--run` or `--suite` it is a determinism
+experiment: execute the prompt `n` times and grade the batch.
 
 ```bash
 evalharness eval -m <model-id> -p 'your prompt' -n 10
@@ -121,9 +121,18 @@ new:
 evalharness eval --run 3f2a… --run 9c81… --rubric 'Penalise any tool call.'
 ```
 
+With `--suite` it runs a file of test cases and grades each answer against
+that case's own expectations — see **[suites.md](suites.md)**:
+
+```bash
+evalharness eval --suite cases.yaml            # the file's model
+evalharness eval --suite cases.yaml -m <other> # same cases, another model
+```
+
 | Option | Meaning |
 |---|---|
 | `-n` | Repeats for a determinism experiment, clamped to 2–25 (default 10). |
+| `--suite FILE` | Run a test suite from a YAML or JSON file. Run options given on the command line override the file's `run_config`; `-p`, `-n` and `--run` are errors with it. |
 | `--run RUN_ID` | Grade this stored run instead of executing new ones; repeatable. |
 | `--rubric` | Extra rubric text for the judge. |
 | `--grader-model`, `--grader-provider`, `--grader-system` | The judge. Independent of the graded runs — an OpenAI judge grading Bedrock runs is a reasonable setup. A non-Bedrock `--grader-provider` **requires** `--grader-model`: the built-in default is a Bedrock model id, and no default is invented for the other providers. |

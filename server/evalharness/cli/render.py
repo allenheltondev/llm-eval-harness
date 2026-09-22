@@ -119,11 +119,11 @@ def eval_progress_line(entry: dict[str, Any]) -> str | None:
                 f"kind={entry.get('kind', '')}  n={entry.get('n', 0)}"
             )
         case "run_started":
-            return _line(f"run {entry.get('index', 0)} started")
+            return _line(f"{_run_label(entry)} started")
         case "run_completed":
             return _line(_repeat_summary(entry))
         case "run_failed":
-            return _line(f"run {entry.get('index', 0)} failed: {_error_text(entry.get('error'))}")
+            return _line(f"{_run_label(entry)} failed: {_error_text(entry.get('error'))}")
         case "grading_started":
             return _line("grading")
         case "eval_complete":
@@ -132,10 +132,17 @@ def eval_progress_line(entry: dict[str, Any]) -> str | None:
             return None
 
 
+def _run_label(entry: dict[str, Any]) -> str:
+    """``run 3``, or ``run 3 [refund-window]`` when the run answers a suite case."""
+    label = f"run {entry.get('index', 0)}"
+    case_id = entry.get("case_id")
+    return f"{label} [{case_id}]" if case_id else label
+
+
 def _repeat_summary(entry: dict[str, Any]) -> str:
     summary = entry.get("summary") or {}
     return (
-        f"run {entry.get('index', 0)} {entry.get('status', '')}  "
+        f"{_run_label(entry)} {entry.get('status', '')}  "
         f"id={entry.get('run_id', '')}  "
         f"{_count(summary.get('output_chars', 0))} chars, "
         f"{summary.get('tool_calls', 0)} tools, "
@@ -157,10 +164,50 @@ def eval_result_lines(result: dict[str, Any] | None) -> list[str]:
     """
     if not result:
         return []
+    if "cases" in result:
+        return suite_result_lines(result)
     lines = [_line(f"grade {result.get('grade', '?')}  score={result.get('score', '?')}")]
     reasoning = result.get("reasoning")
     if reasoning:
         lines.append(_line(f"       {_one_line(reasoning, 160)}"))
+    return lines
+
+
+#: How each suite-case status reads in the summary. Fixed width, so the scores
+#: and ids line up and `grep FAIL` finds exactly the failures.
+_CASE_LABELS = {
+    "passed": "PASS",
+    "failed": "FAIL",
+    "error": "ERR ",
+    "judge_error": "????",
+}
+
+
+def suite_result_lines(result: dict[str, Any]) -> list[str]:
+    """A suite's summary: the totals, then one grep-able line per case.
+
+    A passing case is one line. A case that did not pass also gets the judge's
+    reason or the error, because "what went wrong" is the reason to look.
+    """
+    metrics = result.get("metrics") or {}
+    lines = [
+        _line(
+            f"grade {result.get('grade') or '-'}  score={result.get('score')}  "
+            f"{metrics.get('cases_passed', 0)}/{metrics.get('cases_total', 0)} cases passed"
+        )
+    ]
+    for case in result.get("cases") or []:
+        label = _CASE_LABELS.get(case.get("status", ""), "?   ")
+        score = case.get("score")
+        shown = f"{score:.2f}" if isinstance(score, int | float) else "  - "
+        line = f"  {label}  {shown}  {case.get('id', '')}"
+        if case.get("status") == "failed" and case.get("reasoning"):
+            line += f"  {_one_line(case['reasoning'], 120)}"
+        elif case.get("error"):
+            line += f"  {_one_line(_error_text(case['error']), 120)}"
+        lines.append(_line(line))
+    if result.get("judge_error"):
+        lines.append(_line(f"judge error: {_one_line(result['judge_error'], 160)}"))
     return lines
 
 

@@ -146,12 +146,16 @@ _REGISTRY["support"] = [support.escalate_ticket]
 
 ## Evaluations
 
-`POST /api/v1/evaluations` runs one of two kinds of evaluation, both graded by an LLM-as-judge
-(`strands-agents-evals`):
+`POST /api/v1/evaluations` runs one of three kinds of evaluation, all graded by an
+LLM-as-judge (`strands-agents-evals`):
 
 - **`determinism`** — runs the same `run_config` `n` times (2–25, default 10) and grades the batch
   for response consistency.
 - **`grade`** — grades a set of already-executed runs (`run_ids`) against a rubric.
+- **`suite`** — runs a file of test cases, each an input plus an `expected` answer and/or
+  `criteria`, and grades every answer against its own case: which cases pass, and why the others
+  did not. `evalharness eval --suite cases.yaml`. See **[docs/suites.md](docs/suites.md)** and
+  the commented example **[docs/examples/support-suite.yaml](docs/examples/support-suite.yaml)**.
 
 The grader model, rubric, and system prompt are all configurable per request
 (`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.provider`, defaults to `bedrock`;
