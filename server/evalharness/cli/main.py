@@ -348,6 +348,7 @@ def _check_required(args: argparse.Namespace) -> None:
         )
     if (
         args.command == "eval"
+        and args.suite is None  # a suite file may name the model; checked once merged
         and args.grader_provider not in (None, "bedrock")
         and not args.grader_model
     ):

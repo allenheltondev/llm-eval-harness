@@ -78,9 +78,15 @@ class SuiteRunConfig(RunRequest):
     ``user_prompt`` is each case's ``input``. Setting it here is rejected rather
     than ignored: a suite file that sets one is written by someone who thinks it
     does something.
+
+    It is excluded from serialization *at the field*, not at each call site.
+    Otherwise every ``model_dump()`` carries the default ``user_prompt: ""``,
+    and whatever re-validates that dump -- the cloud worker, parsing the payload
+    the server sent -- sees the field as set and rejects the suite. Excluding it
+    here means no serialization path can leak it.
     """
 
-    user_prompt: str = ""
+    user_prompt: str = Field(default="", exclude=True)
 
     @model_validator(mode="after")
     def _prompt_comes_from_the_cases(self) -> SuiteRunConfig:
@@ -211,7 +217,7 @@ class EvaluationRequest(BaseModel):
         }
         if self.suite is not None:
             # The whole suite, so a stored evaluation says exactly what was tested.
-            config["suite"] = self.suite.model_dump(exclude={"run_config": {"user_prompt"}})
+            config["suite"] = self.suite.model_dump()
             config["run_config"] = config["suite"]["run_config"]
         return config
 

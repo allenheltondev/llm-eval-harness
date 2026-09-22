@@ -124,10 +124,10 @@ DYNAMODB_ITEM_LIMIT_BYTES = 400 * 1024
 #: request is also stored, whole, as ``config`` on the evaluation's ``META``
 #: item, and that same item gets the ``result`` when the evaluation finishes:
 #: two large attributes sharing one 400 KB item. So the request may use at most
-#: half of it, leaving the rest for a result that is itself bounded (a suite's
-#: per-case reasoning is clipped). The first version of this check enforced the
-#: 1 MB invoke limit, which let a 300 KB request through to fail at DynamoDB
-#: with a raw 500.
+#: half of it, leaving the rest for a result that is itself bounded (a suite
+#: result is held to ``engine.MAX_RESULT_BYTES`` serialized). The first
+#: version of this check enforced the 1 MB invoke limit, which let a 300 KB
+#: request through to fail at DynamoDB with a raw 500.
 #:
 #: ``EvaluationRequest`` bounds none of the prompts, the rubric, ``run_ids`` or a
 #: suite's cases, and the Function URL accepts bodies up to 6 MB, so without

@@ -58,6 +58,8 @@ Statuses
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -479,16 +481,72 @@ def _build_result(
     return result
 
 
-#: Longest judge reasoning kept per suite case. In the cloud lane the whole
-#: result is written to DynamoDB twice -- the META row and the
-#: ``grading_completed`` event -- and an item is capped at 400 KB. A hundred
-#: cases of unbounded judge prose must not be what breaks an evaluation that
-#: otherwise finished.
-MAX_CASE_REASONING_CHARS = 1_000
+#: Longest judge reasoning kept per suite case, in *serialized* bytes. In the
+#: cloud lane the whole result is written to DynamoDB twice -- the META row and
+#: the ``grading_completed`` event -- and an item is capped at 400 KB. The
+#: store writes plain ``json.dumps`` output, which escapes every non-ASCII
+#: character (six bytes for most, twelve for an emoji), so a limit counted in
+#: characters would not bound the item at all.
+MAX_CASE_REASONING_BYTES = 1_000
+
+#: The most a suite result may take once serialized. With the 200,000-byte cap
+#: on the request (stored beside it as ``config``) this keeps the META row
+#: under DynamoDB's 400 KB item limit with room for the other attributes.
+#: :func:`_fit_suite_result` enforces it, so it holds for any judge output.
+MAX_RESULT_BYTES = 180_000
+
+#: Successively tighter limits for the free-text fields of a result that is
+#: still over budget. ``0`` drops the text: the ids, statuses and scores --
+#: what a suite is *for* -- always survive.
+_TEXT_LIMITS = (MAX_CASE_REASONING_BYTES, 300, 100, 0)
 
 
-def _clip(text: str, limit: int = MAX_CASE_REASONING_CHARS) -> str:
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+def _serialized_size(value: Any) -> int:
+    """Bytes ``value`` takes as the store writes it (ASCII-escaped JSON)."""
+    return len(json.dumps(value, default=str))
+
+
+def _clip(text: str, limit: int = MAX_CASE_REASONING_BYTES) -> str:
+    """``text`` cut so its serialized form (quotes aside) fits in ``limit`` bytes."""
+    if _serialized_size(text) - 2 <= limit:
+        return text
+    low, high = 0, len(text)  # the longest prefix that fits, with its ellipsis
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _serialized_size(text[:middle].rstrip() + "…") - 2 <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low].rstrip() + "…" if low else ""
+
+
+def _fit_suite_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Shrink the free text of ``result`` until it serializes within budget.
+
+    Judge reasoning, run error messages and the judge error are the only parts
+    whose size the harness does not control; everything else is bounded by the
+    suite limits. When any of it had to be cut further than the per-case
+    limit, ``truncated`` says so, so a reader knows the prose is partial.
+    """
+    if _serialized_size(result) <= MAX_RESULT_BYTES:
+        return result
+    # The error dicts are shared with the run outcomes; clip copies, not those.
+    result = copy.deepcopy(result)
+    result["truncated"] = True
+    for limit in _TEXT_LIMITS:
+        for case in result["cases"]:
+            if case["reasoning"] is not None:
+                case["reasoning"] = _clip(case["reasoning"], limit) or None
+        errors = [case["error"] for case in result["cases"]]
+        errors += [failed["error"] for failed in result["failed_runs"]]
+        for error in errors:
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                error["message"] = _clip(error["message"], limit)
+        if isinstance(result.get("judge_error"), str):
+            result["judge_error"] = _clip(result["judge_error"], limit)
+        if _serialized_size(result) <= MAX_RESULT_BYTES:
+            break
+    return result
 
 
 def _suite_case_result(
@@ -500,22 +558,35 @@ def _suite_case_result(
 ) -> dict[str, Any]:
     """One case's line in a suite result.
 
-    ``status`` is ``passed`` / ``failed`` when the judge scored it, ``error``
-    when no run of it succeeded, and ``judge_error`` when it ran but the judge
-    returned no verdict. Only a scored case can pass: a case that never got an
-    answer, or whose answer was never judged, has not shown it works.
+    **Every repeat counts.** ``scores`` has one entry per repeat, in run order:
+    the judge's score; ``0.0`` for a repeat that failed to run, because the
+    application did not answer that time; or ``None`` for one that answered but
+    was never judged. The case score is the mean over all of them. Averaging
+    only the answers that came back would let one good answer in ten attempts
+    pass -- exactly the flakiness repeats exist to expose.
+
+    ``status`` is ``passed`` / ``failed`` when every repeat has a score,
+    ``error`` when no repeat produced an answer at all, and ``judge_error`` when
+    any answer went unjudged: that evidence is missing, and it is neither a pass
+    nor a zero. Only a fully scored case can pass.
     """
-    succeeded = [outcome for outcome in runs if outcome.succeeded]
+    ordered = sorted(runs, key=lambda outcome: outcome.index)
+    succeeded = [outcome for outcome in ordered if outcome.succeeded]
+    scores: list[float | None] = [
+        0.0 if not outcome.succeeded else verdict.scores.get(outcome.index) for outcome in ordered
+    ]
     entry: dict[str, Any] = {
         "id": case_id,
         "run_ids": [outcome.run_id for outcome in succeeded],
         "runs": {"total": len(runs), "succeeded": len(succeeded)},
         "passed": False,
         "score": None,
-        "scores": [],
+        "scores": [None if value is None else round(value, 4) for value in scores],
         "reasoning": None,
         "error": None,
     }
+    if verdict.reasons:
+        entry["reasoning"] = _clip(" | ".join(verdict.reasons))
     if not succeeded:
         entry["status"] = "error"
         entry["error"] = next(
@@ -523,19 +594,20 @@ def _suite_case_result(
             {"code": "not_run", "message": "No run of this case completed"},
         )
         return entry
-    if not verdict.scores:
+    if any(value is None for value in scores):
         entry["status"] = "judge_error"
-        message = (verdict.judge_errors or [judge_error or "The judge returned no verdict"])[0]
+        unjudged = [outcome.index for outcome in succeeded if outcome.index not in verdict.scores]
+        message = next(
+            (verdict.judge_errors[index] for index in unjudged if index in verdict.judge_errors),
+            judge_error or "The judge returned no verdict",
+        )
         entry["error"] = {"code": "judge_error", "message": message}
         return entry
 
-    score = sum(verdict.scores) / len(verdict.scores)
+    score = sum(value for value in scores if value is not None) / len(scores)
     entry["passed"] = score >= pass_threshold
     entry["status"] = "passed" if entry["passed"] else "failed"
     entry["score"] = round(score, 4)
-    entry["scores"] = [round(value, 4) for value in verdict.scores]
-    if verdict.reasons:
-        entry["reasoning"] = _clip(" | ".join(verdict.reasons))
     return entry
 
 
@@ -619,7 +691,7 @@ def _build_suite_result(
     }
     if judged.error is not None:
         result["judge_error"] = judged.error
-    return result
+    return _fit_suite_result(result)
 
 
 def _terminal(

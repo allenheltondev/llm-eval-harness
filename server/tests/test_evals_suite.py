@@ -9,6 +9,7 @@ are all the real thing, because that is where a suite can quietly go wrong.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -363,13 +364,93 @@ async def test_every_run_failing_is_an_errored_evaluation(initialized_db):
 
 
 def test_long_judge_reasoning_is_clipped_per_case():
-    verdict = grader.CaseVerdict(scores=[0.9], reasons=["x" * 5_000])
+    verdict = grader.CaseVerdict(scores={0: 0.9}, reasons=["x" * 5_000])
     outcome = evals_engine.RunOutcome(index=0, run_id="r", status="completed", case_id="c")
 
     entry = evals_engine._suite_case_result("c", [outcome], verdict, None, 0.7)
 
-    assert len(entry["reasoning"]) == evals_engine.MAX_CASE_REASONING_CHARS
+    stored = _stored_bytes(entry["reasoning"]) - 2  # the quotes are the key's, not the text's
+    limit = evals_engine.MAX_CASE_REASONING_BYTES
+    assert limit - 10 < stored <= limit
     assert entry["reasoning"].endswith("…")
+
+
+def _stored_bytes(value: Any) -> int:
+    """Bytes as the store writes them: plain ``json.dumps``, non-ASCII escaped."""
+    return len(json.dumps(value, default=str))
+
+
+@pytest.mark.parametrize("char", ["x", "語", "😀"])
+def test_reasoning_is_clipped_by_the_bytes_it_is_stored_as(char):
+    verdict = grader.CaseVerdict(scores={0: 0.9}, reasons=[char * 5_000])
+    outcome = evals_engine.RunOutcome(index=0, run_id="r", status="completed", case_id="c")
+
+    entry = evals_engine._suite_case_result("c", [outcome], verdict, None, 0.7)
+
+    # 1,000 characters of CJK would be ~6 KB stored; the limit is on that.
+    assert _stored_bytes(entry["reasoning"]) - 2 <= evals_engine.MAX_CASE_REASONING_BYTES
+    assert entry["reasoning"].rstrip("…").strip(char) == ""
+
+
+def _largest_suite_result(
+    reason: str, message: str
+) -> tuple[dict[str, Any], list[evals_engine.RunOutcome]]:
+    """The biggest result a suite can produce: every limit at its maximum.
+
+    100 cases with 100-character ids, the run cap spent on repeats, every run
+    judged with ``reason`` -- plus, for half the cases, a failed repeat whose
+    error message is ``message``.
+    """
+    repeats = MAX_SUITE_RUNS // MAX_SUITE_CASES
+    ids = [f"{index:03d}" + "x" * 97 for index in range(MAX_SUITE_CASES)]
+    request = EvaluationRequest.model_validate(
+        _suite_body(cases=[{"id": case_id, "input": "hi"} for case_id in ids], repeats=repeats)
+    )
+    outcomes, verdicts = [], {}
+    for number, case_id in enumerate(ids):
+        verdict = grader.CaseVerdict()
+        for repeat in range(repeats):
+            index = number * repeats + repeat
+            outcome = evals_engine.RunOutcome(
+                index=index, run_id=f"{index:032x}", status="completed", case_id=case_id
+            )
+            if number % 2 and repeat == 0:
+                outcome.status = "error"
+                outcome.error = {"code": "provider_error", "message": message, "retryable": False}
+            else:
+                verdict.scores[index] = 0.5
+                verdict.reasons.append(reason)
+            outcomes.append(outcome)
+        verdicts[case_id] = verdict
+    judged = grader.SuiteJudgement(verdicts=verdicts, error=message)
+    return evals_engine._build_suite_result(outcomes, judged, request), outcomes
+
+
+@pytest.mark.parametrize("char", ["x", "語", "😀"])
+def test_the_largest_suite_result_fits_its_byte_budget(char):
+    result, _ = _largest_suite_result(reason=char * 10_000, message=char * 10_000)
+
+    assert _stored_bytes(result) <= evals_engine.MAX_RESULT_BYTES
+    assert result["truncated"] is True
+    # The prose gave way; the verdicts did not.
+    assert len(result["cases"]) == MAX_SUITE_CASES
+    assert all(case["status"] in ("failed", "error") for case in result["cases"])
+    assert result["metrics"]["cases_total"] == MAX_SUITE_CASES
+
+
+def test_fitting_the_budget_leaves_the_run_outcomes_untouched():
+    result, outcomes = _largest_suite_result(reason="語" * 10_000, message="語" * 10_000)
+
+    assert len(result["failed_runs"][0]["error"]["message"]) < 10_000  # clipped here...
+    failed = [outcome for outcome in outcomes if not outcome.succeeded]
+    assert all(len(outcome.error["message"]) == 10_000 for outcome in failed)  # ...not there
+
+
+def test_a_result_within_budget_is_not_marked_truncated():
+    result, _ = _largest_suite_result(reason="fine", message="boom")
+
+    assert "truncated" not in result
+    assert result["judge_error"] == "boom"
 
 
 # --------------------------------------------------------------------------- #
@@ -464,3 +545,123 @@ def test_the_shared_config_keeps_run_validation():
             )
         )
     assert caught.value.code == "guardrail_requires_bedrock"
+
+
+# --------------------------------------------------------------------------- #
+# The wire: what the cloud worker actually receives
+# --------------------------------------------------------------------------- #
+
+
+def test_a_suite_survives_the_round_trip_to_the_cloud_worker():
+    """Validate, serialize exactly as the server does, parse exactly as the worker does.
+
+    The first version failed this: `SuiteRunConfig.user_prompt` has a default,
+    `model_dump()` includes defaults, so the payload carried `user_prompt: ""`
+    -- and the worker's own validation, seeing the field set, rejected every
+    cloud suite before it ran. The earlier cloud test missed it by handing the
+    worker a hand-written dict instead of what the server sends.
+    """
+    import json
+
+    from evalharness.evals import cloud
+    from evalharness.worker import interfaces
+
+    request = suite_request([REFUND, HOURS], repeats=2)
+    request = request.model_copy(update={"execution": "cloud"})
+    wire = json.loads(cloud.encode_payload(cloud.worker_payload("e" * 32, request)))
+
+    assert "user_prompt" not in wire["request"]["suite"]["run_config"]
+    received = interfaces.parse_request(wire["request"])
+    assert received.kind == "suite"
+    assert [case.id for case in received.suite.cases] == ["refund-window", "store-hours"]
+    assert received.planned_runs == 4
+
+
+def test_a_stored_suite_can_be_read_back_as_a_request():
+    """The same round trip through the stored `config`: what is persisted must re-validate."""
+    request = suite_request([REFUND])
+    stored = request.stored_config()
+
+    again = EvaluationRequest.model_validate(
+        {"kind": "suite", "suite": stored["suite"], "rubric": stored["rubric"]}
+    )
+
+    assert again.suite.cases[0].id == "refund-window"
+
+
+# --------------------------------------------------------------------------- #
+# Every repeat counts
+# --------------------------------------------------------------------------- #
+
+
+class FlakyAnswers(AnswerBook):
+    """Fails the first `failures` calls, then answers."""
+
+    def __init__(self, answers: dict[str, str], failures: int) -> None:
+        super().__init__(answers)
+        self.failures = failures
+
+    def __call__(self, request):
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError("model unavailable")
+        return super().__call__(request)
+
+
+async def test_a_repeat_that_failed_to_run_counts_as_zero(initialized_db):
+    """The first version averaged only the repeats that answered, so one good
+    answer out of ten attempts scored as a pass -- the exact flakiness repeats
+    exist to expose. A repeat with no answer did not pass that time."""
+    answers = FlakyAnswers({REFUND["input"]: "Within 30 days."}, failures=1)
+    judge = RoutingJudge([], default=0.9)
+
+    terminal, _ = await run_suite(suite_request([REFUND], repeats=2), answers, judge)
+
+    case = terminal["result"]["cases"][0]
+    assert sorted(case["scores"]) == [0.0, 0.9]
+    assert case["score"] == pytest.approx(0.45)
+    assert case["status"] == "failed"
+    assert case["runs"] == {"total": 2, "succeeded": 1}
+
+
+async def test_nine_failed_repeats_and_one_good_one_is_not_a_pass(initialized_db):
+    answers = FlakyAnswers({REFUND["input"]: "Within 30 days."}, failures=9)
+
+    terminal, _ = await run_suite(
+        suite_request([REFUND], repeats=10), answers, RoutingJudge([], default=0.95)
+    )
+
+    case = terminal["result"]["cases"][0]
+    assert case["score"] == pytest.approx(0.095)
+    assert case["passed"] is False
+
+
+async def test_one_unjudged_repeat_makes_the_case_inconclusive(initialized_db, monkeypatch):
+    """An answer the judge never scored is unknown -- neither a pass nor a zero.
+
+    Counting it as zero would blame the application for the judge's failure;
+    ignoring it would pass a case on half its evidence. So the case is
+    `judge_error`, and the repeats that were scored are still reported.
+    """
+    original = grader._rows_for
+
+    def first_repeat_errors(report, name):
+        return [
+            (0.0, "Evaluator error: throttled", row_name) if row_name.endswith("#0") else row
+            for row in original(report, name)
+            for row_name in [row[2]]
+        ]
+
+    monkeypatch.setattr(grader, "_rows_for", first_repeat_errors)
+    answers = AnswerBook({REFUND["input"]: "Within 30 days."})
+
+    terminal, _ = await run_suite(
+        suite_request([REFUND], repeats=2), answers, RoutingJudge([], default=0.9)
+    )
+
+    case = terminal["result"]["cases"][0]
+    assert case["status"] == "judge_error"
+    assert case["passed"] is False
+    assert case["score"] is None
+    assert case["scores"] == [None, 0.9]
+    assert case["error"] == {"code": "judge_error", "message": "throttled"}

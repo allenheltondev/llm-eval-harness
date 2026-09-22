@@ -129,10 +129,15 @@ Every case gets a line:
 | `passed` | Scored at or above `pass_threshold`. | yes |
 | `failed` | Scored below it. The judge's reason is shown. | no |
 | `error` | No run of this case completed — the answer never came back. | no |
-| `judge_error` | It ran, but the judge returned no verdict. | no |
+| `judge_error` | At least one answer came back but the judge returned no verdict for it. | no |
 
-**Only a scored case can pass.** A case that did not run, or whose answer was
-never judged, has not shown that it works.
+**Only a fully scored case can pass.** A case that did not run, or any of whose
+answers went unjudged, has not shown that it works.
+
+**Every repeat counts.** A case's score is the mean over *all* its repeats, and
+a repeat that failed to run scores 0 — so with `repeats: 10`, nine failures and
+one perfect answer is 0.1, not 1.0. A repeat that ran but was not judged is
+missing evidence rather than a zero, so it makes the whole case `judge_error`.
 
 Two headline numbers, answering different questions:
 
@@ -143,7 +148,9 @@ Two headline numbers, answering different questions:
   were answers.
 
 The full result on stdout (and from `GET /evaluations/{id}`) adds, per case,
-`score`, `scores` (one per repeat), `reasoning` (clipped to 1,000 characters),
+`score`, `scores` (one per repeat, in run order: `0.0` for a repeat that failed
+to run, `null` for one that was not judged), `reasoning` (clipped to 1,000
+bytes as stored),
 `run_ids`, `runs: {total, succeeded}` and `error`; and at the top level
 `metrics.cases_total/passed/failed/errored`, `failed_runs` (each with its
 `case_id`), and `suite: {name, repeats, pass_threshold}`.
@@ -166,8 +173,13 @@ The cloud lane stores the whole request on the evaluation's DynamoDB `META`
 item, and the same item later holds the result. An item is capped at 400 KB, so
 a cloud request may be at most **200,000 bytes**; anything larger is a
 `413 evaluation_too_large` before anything is written. That is roughly a hundred
-cases of a couple of kilobytes each. The local lane has no such limit. Per-case
-reasoning is clipped for the same reason: so the result still fits.
+cases of a couple of kilobytes each. The local lane has no such limit.
+
+The result is held to **180,000 bytes** for the same reason, measured as stored
+(JSON with non-ASCII escaped, so a CJK character is six bytes and an emoji
+twelve). Ids, statuses and scores always survive; if the judge's reasoning and
+error messages would push past that, they are cut shorter — dropped entirely
+if need be — and the result carries `truncated: true`.
 
 ## Not built yet
 

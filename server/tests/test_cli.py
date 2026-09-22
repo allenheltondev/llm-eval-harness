@@ -864,6 +864,20 @@ class TestSuiteOverrides:
         assert result.code == 2
         assert "needs an explicit grader.model_id" in result.err
 
+    def test_grader_provider_alone_uses_the_files_judge_model(self, suite_file):
+        text = SUITE_YAML + "grader:\n  model_id: gpt-judge\n"
+
+        request = self._request(lambda: suite_file(text), "--grader-provider", "openai")
+
+        assert (request.grader.provider, request.grader.model_id) == ("openai", "gpt-judge")
+
+    def test_grader_provider_alone_without_any_judge_model_is_a_usage_error(self, cli, suite_file):
+        result = cli("eval", "--suite", suite_file(), "--grader-provider", "openai")
+
+        assert result.code == 2
+        assert "--suite" in result.err
+        assert "needs an explicit grader.model_id" in result.err
+
 
 def test_the_documented_example_suite_is_valid(cli):
     """docs/examples/support-suite.yaml is what people will copy; it must work."""

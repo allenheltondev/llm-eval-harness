@@ -276,11 +276,16 @@ class CaseCriteriaOutputEvaluator(OutputEvaluator):
 
 @dataclass
 class CaseVerdict:
-    """What the judge said about every judged repeat of one case."""
+    """What the judge said about each repeat of one case, keyed by run index.
 
-    scores: list[float] = field(default_factory=list)
+    Per repeat, not pooled: a case's score has to account for every repeat --
+    one that failed to run, one the judge never scored -- and a pooled list of
+    the scores that happened to come back cannot tell which ones are missing.
+    """
+
+    scores: dict[int, float] = field(default_factory=dict)
     reasons: list[str] = field(default_factory=list)
-    judge_errors: list[str] = field(default_factory=list)
+    judge_errors: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -351,11 +356,12 @@ async def judge_suite(
     rows = _rows_for(report, SUITE_EVALUATOR_NAME)
     judgement = SuiteJudgement(error=_judge_failure(rows))
     for score, reason, name in rows:
-        verdict = judgement.verdicts.setdefault(name.rsplit("#", 1)[0], CaseVerdict())
+        case_id, _, index = name.rpartition("#")
+        verdict = judgement.verdicts.setdefault(case_id, CaseVerdict())
         if reason.startswith(_EVALUATOR_ERROR_PREFIX):
-            verdict.judge_errors.append(reason[len(_EVALUATOR_ERROR_PREFIX) :].strip())
+            verdict.judge_errors[int(index)] = reason[len(_EVALUATOR_ERROR_PREFIX) :].strip()
         else:
-            verdict.scores.append(score)
+            verdict.scores[int(index)] = score
             if reason:
                 verdict.reasons.append(reason)
     return judgement

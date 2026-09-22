@@ -913,6 +913,17 @@ def test_the_limit_leaves_the_meta_item_room_for_its_result():
     assert cloud.CLOUD_REQUEST_LIMIT_BYTES <= cloud.DYNAMODB_ITEM_LIMIT_BYTES // 2
 
 
+def test_the_largest_request_and_the_largest_suite_result_share_one_item():
+    """The two big attributes of META, each at its cap, plus room for the rest
+    (status, run ids, timestamps, attribute names). The result's cap is enforced
+    in bytes by the engine, so this sum is a real bound, not a hope."""
+    from evalharness.evals.engine import MAX_RESULT_BYTES
+
+    headroom = 20_000
+    total = cloud.CLOUD_REQUEST_LIMIT_BYTES + MAX_RESULT_BYTES + headroom
+    assert total <= cloud.DYNAMODB_ITEM_LIMIT_BYTES
+
+
 async def test_a_request_under_the_invoke_limit_but_too_big_to_store_is_refused(
     client, invoker, writers
 ):

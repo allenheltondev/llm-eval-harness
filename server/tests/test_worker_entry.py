@@ -1050,17 +1050,29 @@ def test_a_failing_dispose_still_restores_the_previous_engine(monkeypatch, tmp_p
 async def test_a_suite_runs_on_the_cloud_lane(real_engine, client, store_factory):
     """The worker needs nothing suite-specific: the seam dispatches on kind, and
     the per-case result and `case_id` events land in DynamoDB like any other."""
+    from evalharness.evals import cloud
+    from evalharness.evals.schemas import EvaluationRequest
+
     real_engine()
-    suite_request = {
-        "kind": "suite",
-        "suite": {
-            "run_config": {"model_id": "fake.model"},
-            "cases": [
-                {"id": "first", "input": "one?", "expected": "done"},
-                {"id": "second", "input": "two?", "criteria": "Says done."},
-            ],
-        },
-    }
+    # Exactly what the server would send -- serialized and parsed back -- not a
+    # hand-written dict. A hand-written one is how a serialization bug in
+    # SuiteRunConfig (an unset field dumped as `user_prompt: ""`) hid here.
+    request = EvaluationRequest.model_validate(
+        {
+            "kind": "suite",
+            "execution": "cloud",
+            "suite": {
+                "run_config": {"model_id": "fake.model"},
+                "cases": [
+                    {"id": "first", "input": "one?", "expected": "done"},
+                    {"id": "second", "input": "two?", "criteria": "Says done."},
+                ],
+            },
+        }
+    )
+    suite_request = json.loads(cloud.encode_payload(cloud.worker_payload(EVAL_ID, request)))[
+        "request"
+    ]
     store = store_factory(EVAL_ID)
     store.begin(suite_request)
     store.mark_running()
