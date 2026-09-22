@@ -225,14 +225,30 @@ def build_app(settings: Settings, invoker: RecordingInvoker) -> FastAPI:
     application.include_router(health_router.router, prefix="/api/v1")
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[evals_cloud.get_invoker] = lambda: invoker
+    # `submit` writes the pending row before invoking; these tests are about
+    # lane gating, not about the row, so the writer is a no-op double rather
+    # than a DynamoDB client.
+    application.dependency_overrides[evals_cloud.get_eval_writer_factory] = (
+        lambda: lambda _evaluation_id: _NullWriter()
+    )
     return application
+
+
+class _NullWriter:
+    """Accepts the writes `submit` makes and remembers nothing."""
+
+    def begin(self, request, *, kind=None) -> None:  # noqa: D102
+        pass
+
+    def complete(self, status, *, result=None, error=None, run_ids=None) -> None:  # noqa: D102
+        pass
 
 
 @pytest.fixture
 async def gated_client(initialized_db, invoker) -> AsyncIterator[httpx.AsyncClient]:
     """A server with the local lane off but the cloud lane configured."""
     app = build_app(
-        Settings(local_evals="off", eval_runtime_arn=RUNTIME_ARN, eval_table=TABLE_NAME),
+        Settings(local_evals="off", eval_function_name=RUNTIME_ARN, eval_table=TABLE_NAME),
         invoker,
     )
     transport = httpx.ASGITransport(app=app)

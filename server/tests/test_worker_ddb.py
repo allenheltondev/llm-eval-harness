@@ -24,7 +24,7 @@ from evalharness.worker.ddb import (
     event_sk,
     unwrap,
 )
-from tests.fake_dynamodb import FakeDynamoDBClient
+from tests.fake_dynamodb import ConditionalCheckFailedException, FakeDynamoDBClient
 
 TABLE = "llm-eval-harness-ScenariosTable-TEST"
 EVAL_ID = "0123456789abcdef0123456789abcdef"
@@ -842,3 +842,195 @@ def test_save_run_with_no_local_db_configured_is_a_no_op(store, client, monkeypa
 
     assert client.item("RUN#run-never-local", "META") is None
     assert store.saved_run_ids == []
+
+
+# --------------------------------------------------------------------------- #
+# stop_with: a stop that is not a user's cancel
+# --------------------------------------------------------------------------- #
+
+DEADLINE = {"code": "deadline_exceeded", "message": "out of time"}
+
+
+def _events(client: FakeDynamoDBClient) -> list[dict]:
+    return [
+        json.loads(item["event"]["S"])
+        for item in client.items_with_prefix(f"EVAL#{EVAL_ID}", "EVENT#")
+    ]
+
+
+def test_an_armed_stop_records_the_engines_cancel_as_the_reason(client, store):
+    """The engine only knows how to settle `cancelled`; the store knows why."""
+    store.begin({"kind": "determinism"})
+    store.stop_with(DEADLINE)
+
+    # Exactly what the engine's _settle_cancelled does.
+    store.save_evaluation(status="cancelled", run_ids=["run-1"])
+    store.emit({"type": "eval_complete", "status": "cancelled", "result": None})
+
+    item = meta(client)
+    assert item["status"] == {"S": "error"}
+    assert json.loads(item["error"]["S"]) == DEADLINE
+    assert json.loads(item["run_ids"]["S"]) == ["run-1"]
+    # The stream's last line agrees with the row it closes.
+    assert _events(client)[-1] == {"type": "eval_complete", "status": "error", "result": None}
+    assert store.is_terminal
+
+
+def test_without_a_reason_a_cancel_is_still_a_cancel(client, store):
+    """A user's cancel arms nothing, and must read exactly as it did before."""
+    store.begin({"kind": "determinism"})
+
+    store.save_evaluation(status="cancelled", run_ids=[])
+    store.emit({"type": "eval_complete", "status": "cancelled", "result": None})
+
+    assert meta(client)["status"] == {"S": "cancelled"}
+    assert meta(client)["error"] == {"NULL": True}
+    assert _events(client)[-1]["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("status", ["completed", "error"])
+def test_an_armed_stop_leaves_other_outcomes_alone(client, store, status):
+    """Only a `cancelled` is reinterpreted. An evaluation that finished anyway,
+    or failed on its own, keeps its own outcome."""
+    store.begin({"kind": "determinism"})
+    store.stop_with(DEADLINE)
+
+    own_error = None if status == "completed" else {"code": "no_successful_runs"}
+    store.save_evaluation(status=status, error=own_error)
+    store.emit({"type": "eval_complete", "status": status, "result": None})
+
+    item = meta(client)
+    assert item["status"] == {"S": status}
+    assert (json.loads(item["error"]["S"]) if "S" in item["error"] else None) == own_error
+    assert _events(client)[-1]["status"] == status
+
+
+def test_arming_again_replaces_the_reason(client, store):
+    """The hard stop after the cooperative one is what actually happened."""
+    store.begin({"kind": "determinism"})
+    store.stop_with({"code": "deadline_exceeded", "message": "run boundary"})
+    store.stop_with({"code": "deadline_exceeded", "message": "in flight"})
+
+    store.save_evaluation(status="cancelled")
+    store.finalize()
+
+    assert json.loads(meta(client)["error"]["S"])["message"] == "in flight"
+
+
+def test_the_reason_is_copied_not_aliased(client, store):
+    reason = {"code": "deadline_exceeded", "message": "original"}
+    store.begin({"kind": "determinism"})
+    store.stop_with(reason)
+    reason["message"] = "mutated after arming"
+
+    store.save_evaluation(status="cancelled")
+    store.finalize()
+
+    assert json.loads(meta(client)["error"]["S"])["message"] == "original"
+
+
+def test_non_complete_events_are_never_rewritten(client, store):
+    """Only the closing line is translated -- a `status` field elsewhere is not."""
+    store.begin({"kind": "determinism"})
+    store.stop_with(DEADLINE)
+
+    store.emit({"type": "run_completed", "index": 0, "status": "cancelled"})
+
+    assert _events(client)[-1] == {"type": "run_completed", "index": 0, "status": "cancelled"}
+    assert not store.is_terminal
+
+
+def test_the_client_is_built_lazily_for_the_stores_region(monkeypatch):
+    """Nothing talks to AWS until something is written -- and then in the right region."""
+    import boto3
+
+    built: list[tuple[str, str | None]] = []
+    sentinel = object()
+
+    def fake_client(service, region_name=None):
+        built.append((service, region_name))
+        return sentinel
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    store = DynamoEvalStore(TABLE, EVAL_ID, region_name="eu-west-2")
+
+    assert built == []
+    assert store.client is sentinel
+    assert store.client is sentinel  # built once, then reused
+    assert built == [("dynamodb", "eu-west-2")]
+
+
+# --------------------------------------------------------------------------- #
+# The claim survives an ambiguous write
+# --------------------------------------------------------------------------- #
+
+
+class _Lost(Exception):
+    """A network error after the request went out: the response never came back."""
+
+
+def _status(client: FakeDynamoDBClient) -> str:
+    return meta(client)["status"]["S"]
+
+
+def test_a_claim_whose_response_was_lost_is_still_ours(client, store):
+    """The write landed; only the reply was lost. Without reading back, this
+    invocation would raise, every redelivery would see `running`, and the
+    evaluation would sit `running` forever with nobody executing it."""
+    store.begin({"kind": "determinism"})
+    client.lose_response_on["update_item"] = _Lost("connection reset")
+
+    assert store.mark_running() is True
+    assert _status(client) == "running"
+
+
+def test_botocores_retry_of_a_landed_claim_is_still_ours(client, store):
+    """botocore retries the lost request itself, and the retry fails its own
+    condition against the write that already landed. That surfaces as a
+    ConditionalCheckFailed -- which, read naively, says someone else won."""
+    store.begin({"kind": "determinism"})
+    client.lose_response_on["update_item"] = ConditionalCheckFailedException()
+
+    assert store.mark_running() is True
+
+
+def test_a_claim_that_did_not_land_is_raised_for_a_retry(client, store):
+    """Nothing claimed, so failing the invocation is safe: the retry claims it."""
+    store.begin({"kind": "determinism"})
+    client.fail_on["update_item"] = _Lost("connection refused")
+
+    with pytest.raises(_Lost):
+        store.mark_running()
+    assert _status(client) == "pending"
+
+
+def test_an_ambiguous_write_that_another_delivery_won_is_not_ours(client, store):
+    """The read-back decides by token, not by status: `running` alone proves nothing."""
+    store.begin({"kind": "determinism"})
+    rival = DynamoEvalStore(TABLE, EVAL_ID, client=client, clock=lambda: FIXED_NOW)
+    assert rival.mark_running() is True
+
+    client.lose_response_on["update_item"] = _Lost("timeout")  # never lands: condition fails
+    assert store.mark_running() is False
+
+
+def test_if_the_read_back_fails_too_the_claim_is_not_assumed(client, store):
+    """With no way to know, do not execute. Raising lets Lambda redeliver."""
+    store.begin({"kind": "determinism"})
+    client.lose_response_on["update_item"] = _Lost("connection reset")
+    client.fail_on["get_item"] = _Lost("still unreachable")
+
+    with pytest.raises(_Lost, match="still unreachable"):
+        store.mark_running()
+
+
+def test_every_store_claims_with_its_own_token(client):
+    """Per invocation, deliberately -- see DynamoEvalStore.mark_running."""
+    first = DynamoEvalStore(TABLE, EVAL_ID, client=client)
+    second = DynamoEvalStore(TABLE, EVAL_ID, client=client)
+    first.begin({"kind": "determinism"})
+
+    assert first.mark_running() is True
+    token = meta(client)["claim_token"]["S"]
+    assert token and second.mark_running() is False
+    assert meta(client)["claim_token"]["S"] == token  # the loser changed nothing

@@ -1,6 +1,6 @@
 """Every DynamoDB access the cloud evaluation lane makes, in one place.
 
-The server is a *reader* of the cloud lane (the AgentCore worker is the writer)
+The server is a *reader* of the cloud lane (the worker Lambda is the writer)
 with one exception: ``DELETE /evaluations/{id}`` puts the ``CANCEL`` flag item.
 
 Item shapes are normative in ``docs/cloud-evals.md``; the constants and key

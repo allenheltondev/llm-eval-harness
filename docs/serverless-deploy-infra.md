@@ -200,9 +200,10 @@ changed.
 Differences from the worker's packaging:
 
 - The root entry is `run.sh`, executable, not a Python module.
-- **No `--extra worker`.** `bedrock-agentcore` (with its OpenTelemetry and MCP
-  tails) belongs to the AgentCore artifact; this server only ever *invokes* the
-  runtime, through boto3.
+- **The same dependency set.** Both artifacts now export the server's locked
+  runtime dependencies with no extras — the eval worker stopped needing
+  anything of its own when it moved to Lambda, and this server only ever
+  *invokes* it, through boto3.
 - Dev dependencies are excluded (`--no-dev`), same as the worker.
 - uv's `.lock` marker file is removed from the staging tree — build-machine
   state, not code, and it would otherwise perturb the content hash.
@@ -210,7 +211,7 @@ Differences from the worker's packaging:
 ### Artifact size
 
 Lambda's ceiling is **250 MB unzipped**, counted across the function *and*
-every layer it attaches — much tighter than AgentCore's 750 MB, with no slack
+every layer it attaches — the same ceiling the worker artifact now lives under, with no slack
 to be relaxed about. Measured on this branch **[measured]**:
 
 | | zipped | unzipped |
@@ -257,7 +258,7 @@ CloudFormation or API Gateway.
 | Env var | Value | Why |
 |---|---|---|
 | `EVALHARNESS_EVAL_TABLE` | `!Ref EvalTable` | History backend and cloud-eval state |
-| `EVALHARNESS_EVAL_RUNTIME_ARN` | `!GetAtt EvalWorkerRuntime.AgentRuntimeArn`, or absent when the worker is not deployed | The cloud evaluation lane |
+| `EVALHARNESS_EVAL_FUNCTION_NAME` | `!Ref EvalWorkerFunction`, or absent when the worker is not deployed | The cloud evaluation lane |
 | `EVALHARNESS_AUTH_USER_POOL_ID` / `EVALHARNESS_AUTH_CLIENT_ID` | `!Ref UserPool` / `!Ref UserPoolClient` | The bearer-token gate ("Auth" below) |
 | `EVALHARNESS_DB_PATH` | `/tmp/evalharness.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
 | `EVALHARNESS_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
@@ -399,6 +400,41 @@ in principle, run up invocation and egress charges. Neither door can be
 closed for a browser that POSTs, which is the whole reason the gate lives in
 the application:
 
+**`AuthType: NONE` is not the same as reachable.** A Function URL with
+`AuthType: NONE` is still closed until a resource policy opens it: every
+request 403s with `Forbidden. For troubleshooting Function URL authorization
+issues, see ...` until something grants `lambda:InvokeFunctionUrl` to
+Principal `*`. SAM normally emits that permission for you — but only when
+`AuthType` is the **literal** string `NONE`. Its test is
+`auth_type not in ["NONE"]` (`samtranslator/model/sam_resources.py`,
+`_construct_url_permission`), and once `AuthType` is `!Ref
+ServerFunctionUrlAuthType` the value at transform time is an unresolved
+intrinsic dict, which never equals `"NONE"`. Both permissions SAM would have
+added are silently skipped. The stack still deploys clean — with a server
+nothing can call.
+
+Parameterising `AuthType` is what dropped them, and `sam validate --lint`
+cannot catch it, because what is missing is a resource the transform declined
+to add rather than a malformed one. Running the transform locally is what
+shows it **[measured]**: the template as deployed produces *zero*
+`AWS::Lambda::Permission` resources, while the same template with a literal
+`NONE` produces `ServerFunctionUrlPublicPermissions`
+(`lambda:InvokeFunctionUrl`) and `ServerFunctionURLInvokeAllowPublicAccess`
+(`lambda:InvokeFunction` + `InvokedViaFunctionUrl`).
+
+So the template declares both itself —
+`ServerFunctionUrlPublicPermission` and `ServerFunctionUrlInvokePermission`,
+under a `ServerFunctionUrlIsPublic` condition (`DeployServer` **and**
+`AuthType == NONE`). That follows the parameter instead of the literal:
+present while the URL is public, absent under `AWS_IAM`, where the caller's
+SigV4 identity is the grant and a public policy would undo the point of
+switching.
+
+This is the bug `scripts/deploy_smoke.py` was written for, and it found it on
+its first real run **[measured]**: `SPA is served at /` and `SPA deep link
+resolves` both passed — CloudFront and S3 were fine — while `health responds`
+retried ten times into that 403. Every other check in the pipeline was green.
+
 **Why not `AWS_IAM` + CloudFront OAC.** CloudFront supports origin access
 control for Lambda function URLs, and it would make the function reachable
 only through the distribution. But with OAC, requests carrying a body require
@@ -456,7 +492,7 @@ for `Tracing: Active`:
 | `bedrock:ListGuardrails` | `*` |
 | `dynamodb:Query`, `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` | `EvalTable` |
 | `dynamodb:Query` | that table's `GSI1` |
-| `bedrock-agentcore:InvokeAgentRuntime` | the eval worker runtime (only when it is deployed) |
+| `lambda:InvokeFunction` | the eval worker function (only when it is deployed) |
 
 Two differences from the worker's role are worth noting. The server **does**
 get `Query` (listing runs and evaluations walks the `GSI1` `RUN`/`EVAL`
@@ -508,6 +544,36 @@ Makefile comment, and this paragraph.
 
 ---
 
+## Tearing it down
+
+```
+make destroy CONFIRM=llm-eval-harness
+```
+
+`delete-stack` alone does not do it, and the failure mode is expensive.
+CloudFormation will not delete a bucket that still holds objects, and
+`ArtifactBucket` sets `VersioningConfiguration: Status: Enabled`, so
+`aws s3 rm --recursive` only writes delete markers — the bucket is still
+non-empty as far as CloudFormation is concerned. The stack then sits in
+`DELETE_FAILED` with `AppBucket` and `ArtifactBucket` orphaned, and the next
+`make deploy-backend` fails too, because a stack in `DELETE_FAILED` accepts no
+updates. **[measured]** on 2026-09-22, when exactly this blocked the staging
+deploy on `claude/nice-ramanujan-x2wvoi`.
+
+So `destroy` does it in the order that works:
+
+1. Resolve `AppBucket` and `ArtifactBucket` from the stack's outputs (missing
+   or already-gone outputs are skipped, not an error).
+2. For each, `list-object-versions` and `delete-objects` in batches over both
+   `Versions` and `DeleteMarkers`, looping until both come back empty.
+3. `delete-stack`, then `wait stack-delete-complete`.
+
+The `CONFIRM=` guard has to match `STACK_NAME` exactly; without it the target
+prints what it would destroy and exits non-zero. Nothing else in the repo
+deletes a stack, and CI never calls this target.
+
+---
+
 ## What the first deploy proved
 
 The stack deployed for the first time on 2026-09-17 from the `Staging`
@@ -537,9 +603,55 @@ under "Packaging and boot", "Streaming through CloudFront" or "Auth" is
 settled by a successful deploy. The first `GET /api/v1/health` through
 `AppUrl` is what proves the adapter boots at all.
 
+## What the first green smoke settled
+
+`scripts/deploy_smoke.py` first passed all five checks against a real stage
+deploy on 2026-09-22 (run
+[35763664350](https://github.com/allenheltondev/llm-eval-harness/actions/runs/35763664350))
+**[measured]**:
+
+```
+PASS  health responds  (attempt 1)
+PASS  auth is required and published  (pool us-east-1_ZDuoyZSbo)
+PASS  protected route refuses anonymous callers
+PASS  SPA is served at /
+PASS  SPA deep link resolves
+5 passed, 0 failed
+```
+
+That is anonymous HTTP through `AppUrl`, so it moves several items out of the
+list below:
+
+- **The adapter boots on arm64 and FastAPI answers.** `Handler: run.sh` +
+  `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap` works for a *package* entrypoint on
+  an arm64 managed runtime, and the artifact's manylinux wheels load. The
+  first `/health` answered on attempt 1, cold start included, in about seven
+  seconds.
+- **`/api/*` reaches the application.** The protected route came back with the
+  API's *own* 401 envelope rather than a CloudFront error or a 5xx — so the
+  `/api/*` behaviour, the `AllViewerExceptHostHeader` origin request policy
+  and the Function URL origin all work together.
+- **`!Select [2, !Split ['/', !GetAtt ServerFunctionUrl.FunctionUrl]]`
+  produces a working origin domain.** The string surgery is right against a
+  real `FunctionUrl`.
+- **OAC + `S3OriginConfig: {OriginAccessIdentity: ''}` and the SPA fallback.**
+  `/` and a deep link both return HTML, so the empty-string-alongside-OAC form
+  is correct and the custom error responses route to `index.html`.
+- **Auth is switched on in a deployed stack** and the pool the SPA signs in
+  against is published on `/health`.
+
+What it still does not touch, because it carries no token: `Authorization`
+surviving CloudFront, NDJSON staying incremental, the SPA's call to
+`cognito-idp`, and everything about the eval worker.
+
+This run is also where the missing Function URL resource policy was caught —
+see "`AuthType: NONE` is not the same as reachable" above.
+
 ## Open risks — still unverified
 
-Everything below is reasoned or read, not observed.
+Everything below is reasoned or read, not observed. Some of it was settled by
+the smoke run described above; where the two disagree, the section above is
+the measurement.
 
 **Packaging and boot**
 

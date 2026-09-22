@@ -21,17 +21,17 @@ from botocore.stub import Stubber
 from fastapi import FastAPI
 
 from evalharness.config import Settings, get_settings
-from evalharness.errors import register_exception_handlers
+from evalharness.errors import UpstreamError, register_exception_handlers
 from evalharness.evals import cloud
 from evalharness.evals import jobs as evals_jobs
 from evalharness.evals.ddb_reader import GSI1_PK, GSI1_SK, EvalTable
 from evalharness.routers import health as health_router
 from evalharness.routers import runs
-from evalharness.store import db
-from evalharness.worker.interfaces import session_id_for
+from evalharness.store import db, ddb_items
+from evalharness.store.history import EvaluationRecord
 from tests.fake_table import FakeTable
 
-RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/llm-eval-harness-evals-abc"
+FUNCTION_NAME = "llm-eval-harness-EvalWorkerFunction-ABC123"
 TABLE_NAME = "llm-eval-harness-store"
 
 
@@ -117,13 +117,78 @@ START_EVENT = {"type": "eval_start", "evaluation_id": "eval-1", "kind": "determi
 
 
 class RecordingInvoker:
-    """A stand-in for AgentCore: remembers every submission."""
+    """A stand-in for the worker Lambda: remembers every submission."""
 
-    def __init__(self) -> None:
+    def __init__(self, fail: Exception | None = None) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.fail = fail
 
     def invoke(self, evaluation_id: str, payload: dict[str, Any]) -> None:
         self.calls.append((evaluation_id, payload))
+        if self.fail is not None:
+            raise self.fail
+
+
+class RecordingWriter:
+    """A stand-in for ``DynamoEvalStore`` that lands items where the reader looks.
+
+    The real store speaks the low-level client's AttributeValue dicts while
+    ``FakeTable`` holds plain items, so this bridges the two: it records the
+    calls (the *ordering* is the contract -- the row has to exist before the
+    invoke) and writes the same ``ddb_items`` shape the reader decodes, which
+    is what lets a test follow a POST straight into a GET.
+    """
+
+    def __init__(self, table: FakeTable, evaluation_id: str, invoker: RecordingInvoker) -> None:
+        self.table = table
+        self.evaluation_id = evaluation_id
+        self._invoker = invoker
+        self.calls: list[tuple[str, int]] = []
+
+    def _record(self, name: str) -> None:
+        # How many invokes had happened when this write landed.
+        self.calls.append((name, len(self._invoker.calls)))
+
+    def begin(self, request: dict[str, Any], *, kind: str | None = None) -> None:
+        self._record("begin")
+        self._put(status="pending", kind=kind or request.get("kind"), error=None)
+
+    def complete(self, status: str, *, result=None, error=None, run_ids=None) -> None:
+        self._record("complete")
+        self._put(status=status, kind=None, error=error)
+
+    def _put(self, *, status: str, kind: str | None, error: dict | None) -> None:
+        existing = self.table.get_item(
+            Key={"pk": f"EVAL#{self.evaluation_id}", "sk": "META"}
+        ).get("Item")
+        record = EvaluationRecord(
+            id=self.evaluation_id,
+            ts=datetime.now(UTC),
+            kind=kind or (existing or {}).get("kind") or "determinism",
+            status=status,
+            config={},
+            run_ids=[],
+            result=None,
+            progress=None,
+            error=error,
+        )
+        self.table.put_item(Item=ddb_items.evaluation_item(record))
+
+
+@pytest.fixture
+def writers(table, invoker) -> dict[str, RecordingWriter]:
+    """Every writer ``submit`` built, by evaluation id."""
+    return {}
+
+
+@pytest.fixture
+def writer_factory(table, invoker, writers):
+    def build(evaluation_id: str) -> RecordingWriter:
+        writer = RecordingWriter(table, evaluation_id, invoker)
+        writers[evaluation_id] = writer
+        return writer
+
+    return lambda: build
 
 
 @pytest.fixture
@@ -156,11 +221,11 @@ def invoker() -> RecordingInvoker:
 
 @pytest.fixture
 def cloud_settings() -> Settings:
-    return Settings(eval_runtime_arn=RUNTIME_ARN, eval_table=TABLE_NAME)
+    return Settings(eval_function_name=FUNCTION_NAME, eval_table=TABLE_NAME)
 
 
 @pytest.fixture
-def app(initialized_db, table, invoker, cloud_settings) -> FastAPI:
+def app(initialized_db, table, invoker, cloud_settings, writer_factory) -> FastAPI:
     application = FastAPI()
     register_exception_handlers(application)
     application.include_router(runs.router, prefix="/api/v1")
@@ -168,6 +233,7 @@ def app(initialized_db, table, invoker, cloud_settings) -> FastAPI:
     application.dependency_overrides[get_settings] = lambda: cloud_settings
     application.dependency_overrides[cloud.get_eval_table] = lambda: EvalTable(table)
     application.dependency_overrides[cloud.get_invoker] = lambda: invoker
+    application.dependency_overrides[cloud.get_eval_writer_factory] = writer_factory
     return application
 
 
@@ -239,14 +305,74 @@ async def test_submitting_a_cloud_evaluation_invokes_the_runtime(client, invoker
     assert payload["request"]["grader"]["model_id"] == "amazon.nova-pro-v1:0"
 
 
-async def test_a_cloud_submission_writes_nothing_locally(client, invoker):
+async def test_a_cloud_submission_writes_nothing_to_the_local_history(client, invoker):
+    """The pending row goes to DynamoDB, never to this server's own history.
+
+    The distinction only shows when the two differ -- a laptop driving the
+    cloud lane keeps its history in SQLite -- and it matters: the detail and
+    event routes read the local repository *first* and only fall back to
+    DynamoDB on NotFoundError, so a local row would shadow the worker's and
+    replay an empty `pending` record forever.
+    """
     accepted = await client.post("/api/v1/evaluations", json=determinism_body())
 
     listing = await client.get("/api/v1/evaluations")
     assert listing.json()["items"] == []
-    # ...and the local detail route only finds it via the DynamoDB fallback.
-    missing = await client.get(f"/api/v1/evaluations/{accepted.json()['id']}")
-    assert missing.status_code == 404
+
+    # ...but the detail route resolves it right away through the fallback.
+    detail = await client.get(f"/api/v1/evaluations/{accepted.json()['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "pending"
+    # `/events` gates on the same lookup (`evals_cloud.get_evaluation`) before
+    # it streams anything, so this is also what stops the SPA following its own
+    # 202 into a 404.
+
+
+async def test_the_row_exists_before_the_invoke_is_queued(client, invoker, writers):
+    """Ordering is the contract, not an implementation detail.
+
+    `InvocationType="Event"` means the 202 says only that AWS queued the event.
+    The worker may not run -- and so may not write META -- for seconds, longer
+    on a cold start. The SPA follows the 202 straight into the event stream,
+    which preflights the row and 404s while it is absent, so a successfully
+    queued evaluation would surface to the user as an error.
+    """
+    accepted = await client.post("/api/v1/evaluations", json=determinism_body())
+    writer = writers[accepted.json()["id"]]
+
+    # `begin` landed while zero invokes had been made.
+    assert writer.calls == [("begin", 0)]
+    assert len(invoker.calls) == 1
+
+
+async def test_an_evaluation_that_was_never_queued_does_not_sit_pending(table, initialized_db):
+    """If the invoke fails, the row we just wrote has to be settled, not abandoned."""
+    invoker = RecordingInvoker(fail=UpstreamError("nope", code="eval_worker_unavailable"))
+    writers: dict[str, RecordingWriter] = {}
+
+    def build(evaluation_id: str) -> RecordingWriter:
+        writers[evaluation_id] = RecordingWriter(table, evaluation_id, invoker)
+        return writers[evaluation_id]
+
+    application = FastAPI()
+    register_exception_handlers(application)
+    application.include_router(runs.router, prefix="/api/v1")
+    settings = Settings(eval_function_name=FUNCTION_NAME, eval_table=TABLE_NAME)
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[cloud.get_eval_table] = lambda: EvalTable(table)
+    application.dependency_overrides[cloud.get_invoker] = lambda: invoker
+    application.dependency_overrides[cloud.get_eval_writer_factory] = lambda: build
+
+    transport = httpx.ASGITransport(app=application)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+        response = await ac.post("/api/v1/evaluations", json=determinism_body())
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "eval_worker_unavailable"
+    (writer,) = writers.values()
+    assert [name for name, _ in writer.calls] == ["begin", "complete"]
+    item = table.get_item(Key={"pk": f"EVAL#{writer.evaluation_id}", "sk": "META"})["Item"]
+    assert item["status"] == "error"
 
 
 async def test_a_cloud_grade_submission_carries_its_run_ids(client, invoker):
@@ -279,36 +405,48 @@ async def test_a_local_submission_is_unaffected_by_the_cloud_settings(client, in
     assert invoker.calls == []
 
 
-def test_the_runtime_session_id_clears_the_api_minimum():
-    """32-char uuid hex ids are always one short of ``SessionType``'s min of 33."""
-    session_id = session_id_for("0123456789abcdef0123456789abcdef")
+def test_the_real_invoker_invokes_the_function_asynchronously():
+    """Validated against botocore's shipped ``lambda`` service model.
 
-    assert len(session_id) >= 33
-    assert session_id.startswith("0123456789abcdef0123456789abcdef")
-    # Deterministic: a retried invoke lands on the same runtime session.
-    assert session_id == session_id_for("0123456789abcdef0123456789abcdef")
-
-
-def test_the_real_invoker_calls_invoke_agent_runtime_with_contract_params():
-    """Validated against botocore's shipped ``bedrock-agentcore`` service model."""
-    client = boto3.client("bedrock-agentcore", region_name="us-east-1")
+    ``InvocationType="Event"`` is the contract: AWS queues the event and answers
+    202 immediately, which is what lets an evaluation run for minutes while the
+    server's POST returns at once.
+    """
+    client = boto3.client("lambda", region_name="us-east-1")
     payload = {"evaluation_id": "e" * 32, "request": {"kind": "determinism"}}
 
     with Stubber(client) as stubber:
         stubber.add_response(
-            "invoke_agent_runtime",
-            {"contentType": "application/json"},
+            "invoke",
+            {"StatusCode": 202},
             expected_params={
-                "agentRuntimeArn": RUNTIME_ARN,
-                "runtimeSessionId": session_id_for("e" * 32),
-                "contentType": "application/json",
-                "accept": "application/json",
-                "payload": json.dumps(payload).encode("utf-8"),
+                "FunctionName": FUNCTION_NAME,
+                "InvocationType": "Event",
+                "Payload": json.dumps(payload).encode("utf-8"),
             },
         )
-        invoker = cloud.AgentCoreInvoker(RUNTIME_ARN, "us-east-1", client=client)
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
         invoker.invoke("e" * 32, payload)
         stubber.assert_no_pending_responses()
+
+
+def test_the_real_invoker_refuses_to_report_success_when_aws_did_not_accept():
+    """Anything but 202 means the event was not queued.
+
+    Swallowing that would tell the caller an evaluation had started when
+    nothing is ever going to run it, and the row would read `pending` forever.
+    """
+    client = boto3.client("lambda", region_name="us-east-1")
+    payload = {"evaluation_id": "e" * 32, "request": {"kind": "determinism"}}
+
+    with Stubber(client) as stubber:
+        stubber.add_response("invoke", {"StatusCode": 200}, expected_params=None)
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
+        with pytest.raises(UpstreamError) as caught:
+            invoker.invoke("e" * 32, payload)
+
+    assert caught.value.code == "eval_worker_unavailable"
+    assert caught.value.detail["status_code"] == 200
 
 
 # --------------------------------------------------------------------------- #
@@ -594,9 +732,9 @@ async def test_health_reports_the_cloud_lane_as_unconfigured(unconfigured_client
 
 
 async def test_a_half_configured_lane_is_not_configured():
-    assert cloud.is_configured(Settings(eval_runtime_arn=RUNTIME_ARN)) is False
+    assert cloud.is_configured(Settings(eval_function_name=FUNCTION_NAME)) is False
     assert cloud.is_configured(Settings(eval_table=TABLE_NAME)) is False
-    assert cloud.is_configured(Settings(eval_runtime_arn=RUNTIME_ARN, eval_table=TABLE_NAME))
+    assert cloud.is_configured(Settings(eval_function_name=FUNCTION_NAME, eval_table=TABLE_NAME))
 
 
 # --------------------------------------------------------------------------- #
@@ -626,7 +764,7 @@ async def test_a_native_json_value_in_config_is_passed_through_unparsed(client, 
 
 
 def test_get_invoker_reuses_the_same_instance_for_the_same_settings():
-    settings = Settings(eval_runtime_arn=RUNTIME_ARN, aws_region="us-east-1")
+    settings = Settings(eval_function_name=FUNCTION_NAME, aws_region="us-east-1")
 
     first = cloud.get_invoker(settings)
     second = cloud.get_invoker(settings)
@@ -635,10 +773,9 @@ def test_get_invoker_reuses_the_same_instance_for_the_same_settings():
     assert first is second
 
 
-def test_get_invoker_builds_a_distinct_instance_per_runtime_arn():
-    settings_a = Settings(eval_runtime_arn=RUNTIME_ARN, aws_region="us-east-1")
-    other_arn = RUNTIME_ARN.replace("llm-eval-harness-evals-abc", "llm-eval-harness-evals-xyz")
-    settings_b = Settings(eval_runtime_arn=other_arn, aws_region="us-east-1")
+def test_get_invoker_builds_a_distinct_instance_per_function():
+    settings_a = Settings(eval_function_name=FUNCTION_NAME, aws_region="us-east-1")
+    settings_b = Settings(eval_function_name=FUNCTION_NAME + "-other", aws_region="us-east-1")
 
     first = cloud.get_invoker(settings_a)
     second = cloud.get_invoker(settings_b)
@@ -648,3 +785,168 @@ def test_get_invoker_builds_a_distinct_instance_per_runtime_arn():
 
 def test_get_invoker_is_none_when_unconfigured():
     assert cloud.get_invoker(Settings()) is None
+
+
+def test_the_writer_factory_is_off_without_a_table():
+    assert cloud.get_eval_writer_factory(Settings()) is None
+
+
+def test_the_writer_factory_builds_stores_for_this_servers_table():
+    """The real factory, which every other test here substitutes."""
+    from evalharness.worker.ddb import DynamoEvalStore
+
+    settings = Settings(eval_table=TABLE_NAME, aws_region="eu-west-2")
+    factory = cloud.get_eval_writer_factory(settings)
+
+    store = factory("abc123")
+
+    assert isinstance(store, DynamoEvalStore)
+    assert store.table_name == TABLE_NAME
+    assert store.evaluation_id == "abc123"
+
+
+async def test_a_row_that_cannot_be_settled_does_not_mask_the_invoke_error(
+    table, initialized_db
+):
+    """If settling the orphaned row fails too, the caller still sees WHY it failed."""
+    invoker = RecordingInvoker(fail=UpstreamError("worker gone", code="eval_worker_unavailable"))
+
+    class UnsettleableWriter(RecordingWriter):
+        def complete(self, status, **kwargs):
+            raise RuntimeError("table is gone as well")
+
+    application = FastAPI()
+    register_exception_handlers(application)
+    application.include_router(runs.router, prefix="/api/v1")
+    settings = Settings(eval_function_name=FUNCTION_NAME, eval_table=TABLE_NAME)
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[cloud.get_eval_table] = lambda: EvalTable(table)
+    application.dependency_overrides[cloud.get_invoker] = lambda: invoker
+    application.dependency_overrides[cloud.get_eval_writer_factory] = lambda: (
+        lambda evaluation_id: UnsettleableWriter(table, evaluation_id, invoker)
+    )
+
+    transport = httpx.ASGITransport(app=application)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+        response = await ac.post("/api/v1/evaluations", json=determinism_body())
+
+    # The invoke's own error -- not the RuntimeError from the failed cleanup.
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "eval_worker_unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# The async payload limit
+#
+# `lambda:Invoke` with InvocationType="Event" caps the payload [aws: 1 MB since
+# Oct 2025, 256 KB before]. EvaluationRequest bounds none of user_prompt,
+# system_prompt, rubric or run_ids, and the Function URL accepts request bodies
+# up to 6 MB -- so a request can be valid at the API and still be one AWS will
+# refuse. That is the cloud lane's transport constraint, made explicit here.
+# --------------------------------------------------------------------------- #
+
+
+def _body_with_prompt(prompt: str) -> dict:
+    body = determinism_body()
+    body["run_config"] = {**body["run_config"], "user_prompt": prompt}
+    return body
+
+
+def _body_of_payload_size(target: int) -> dict:
+    """A valid determinism body whose worker payload is exactly `target` bytes.
+
+    The evaluation id is always 32 hex characters, so the payload's size is a
+    pure function of the prompt's length.
+    """
+    probe = cloud.EvaluationRequest.model_validate(_body_with_prompt("x"))
+    overhead = len(cloud.encode_payload(cloud.worker_payload("e" * 32, probe))) - 1
+    return _body_with_prompt("x" * (target - overhead))
+
+
+def test_the_probe_really_builds_a_payload_of_the_asked_size():
+    """Guard the boundary tests' own arithmetic, so they test the boundary."""
+    body = _body_of_payload_size(12_345)
+    request = cloud.EvaluationRequest.model_validate(body)
+    assert len(cloud.encode_payload(cloud.worker_payload("e" * 32, request))) == 12_345
+
+
+async def test_a_payload_exactly_at_the_limit_is_accepted(client, invoker, writers):
+    body = _body_of_payload_size(cloud.ASYNC_PAYLOAD_LIMIT_BYTES)
+
+    response = await client.post("/api/v1/evaluations", json=body)
+
+    assert response.status_code == 202
+    assert len(invoker.calls) == 1
+
+
+async def test_one_byte_over_the_limit_is_a_413_before_anything_is_written(
+    client, invoker, writers
+):
+    """Refused up front: no pending row to abandon, no invoke for AWS to reject."""
+    body = _body_of_payload_size(cloud.ASYNC_PAYLOAD_LIMIT_BYTES + 1)
+
+    response = await client.post("/api/v1/evaluations", json=body)
+
+    assert response.status_code == 413
+    error = response.json()["error"]
+    assert error["code"] == "evaluation_too_large"
+    assert error["detail"] == {
+        "bytes": cloud.ASYNC_PAYLOAD_LIMIT_BYTES + 1,
+        "limit_bytes": cloud.ASYNC_PAYLOAD_LIMIT_BYTES,
+    }
+    assert invoker.calls == []
+    assert writers == {}  # the pending row was never created
+
+
+def test_the_limit_is_inside_what_aws_enforces():
+    """Whether AWS counts 1 MB as 10^6 or 2^20 bytes, the check never lets
+    through a payload it would refuse."""
+    assert cloud.ASYNC_PAYLOAD_LIMIT_BYTES <= 1_000_000
+
+
+def test_aws_refusing_the_size_anyway_is_a_413_not_a_500():
+    """Defence in depth: if AWS's count ever disagrees with ours, the caller
+    still gets the same clear 4xx rather than an unwrapped botocore error."""
+    client = boto3.client("lambda", region_name="us-east-1")
+    with Stubber(client) as stubber:
+        stubber.add_client_error(
+            "invoke", service_error_code="RequestTooLargeException", http_status_code=413
+        )
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
+        with pytest.raises(cloud.PayloadTooLargeError) as caught:
+            invoker.invoke("e" * 32, {"evaluation_id": "e" * 32, "request": {}})
+
+    assert caught.value.code == "evaluation_too_large"
+
+
+@pytest.mark.parametrize(
+    ("error_code", "http_status"),
+    [("TooManyRequestsException", 429), ("AccessDeniedException", 403)],
+)
+def test_any_other_aws_refusal_is_an_upstream_error(error_code, http_status):
+    """Not a generic 500: the worker could not be reached, and the caller is told so."""
+    client = boto3.client("lambda", region_name="us-east-1")
+    with Stubber(client) as stubber:
+        stubber.add_client_error(
+            "invoke", service_error_code=error_code, http_status_code=http_status
+        )
+        invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=client)
+        with pytest.raises(UpstreamError) as caught:
+            invoker.invoke("e" * 32, {"evaluation_id": "e" * 32, "request": {}})
+
+    assert caught.value.code == "eval_worker_unavailable"
+    assert caught.value.detail["aws_error"] == error_code
+
+
+def test_an_unreachable_endpoint_is_an_upstream_error():
+    from botocore.exceptions import EndpointConnectionError
+
+    class Unreachable:
+        def invoke(self, **_kwargs):
+            raise EndpointConnectionError(endpoint_url="https://lambda.us-east-1.amazonaws.com")
+
+    invoker = cloud.LambdaInvoker(FUNCTION_NAME, "us-east-1", client=Unreachable())
+    with pytest.raises(UpstreamError) as caught:
+        invoker.invoke("e" * 32, {"evaluation_id": "e" * 32, "request": {}})
+
+    assert caught.value.code == "eval_worker_unavailable"

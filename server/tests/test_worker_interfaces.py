@@ -21,15 +21,15 @@ def test_importing_the_worker_does_not_import_the_evals_engine():
 
     Two things depend on this. The evals refactor is concurrent with this
     package, so a module-scope import of ``evalharness.evals.engine`` would make
-    the whole worker un-importable until the seam lands; and an AgentCore cold
-    start should not pay for the run engine (boto3 clients, strands, the SQLite
-    store) before an invocation has even arrived.
+    the whole worker un-importable until the seam lands; and a Lambda cold start
+    should not pay for the run engine (boto3 clients, strands, the SQLite store)
+    before an invocation has even arrived.
 
     Checked in a subprocess because the assertion is about a *fresh*
     interpreter's module table, which this one has already polluted.
     """
     probe = (
-        "import sys; import evalharness.worker.agentcore_app;"
+        "import sys; import evalharness.worker.lambda_app;"
         " assert 'evalharness.evals.engine' not in sys.modules, sorted(sys.modules)"
     )
     subprocess.run([sys.executable, "-c", probe], check=True)

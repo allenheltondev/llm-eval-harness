@@ -55,10 +55,10 @@ class Settings(BaseSettings):
     )
 
     # -- the cloud evaluation lane (docs/cloud-evals.md) -------------------- #
-    #: AgentCore Runtime ARN of the evaluation worker. None = lane unavailable.
+    #: Name (or ARN) of the evaluation worker Lambda. None = lane unavailable.
     #: The deployed template injects it; locally, copy it from the stack's
-    #: ``EvalWorkerRuntimeArn`` output.
-    eval_runtime_arn: str | None = None
+    #: ``EvalWorkerFunctionName`` output.
+    eval_function_name: str | None = None
     #: DynamoDB table holding cloud evaluation state and deployed history
     #: (the stack's ``TableName`` output). None = lane unavailable.
     eval_table: str | None = None

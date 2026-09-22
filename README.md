@@ -31,7 +31,7 @@ starts them.
                                              v
                               +---------------------------+
                               |  infra/ (AWS SAM)           |
-                              |  AgentCore eval worker      |
+                              |  Lambda eval worker         |
                               |  DynamoDB: history + eval   |
                               |  state; Lambda server; S3 + |
                               |  CloudFront; Cognito pool   |
@@ -45,7 +45,7 @@ starts them.
   client of it.
 - **`app/`** — React + TypeScript SPA. Talks only to the server (`VITE_API_URL`); it never holds
   AWS credentials.
-- **`infra/`** — one AWS SAM template: the DynamoDB table, the AgentCore Runtime worker for the
+- **`infra/`** — one AWS SAM template: the DynamoDB table, the Lambda worker for the
   cloud evaluation lane, and (optionally) the server on Lambda, the SPA on S3 + CloudFront, and
   the Cognito user pool that gates it. No application code lives here.
 
@@ -154,7 +154,11 @@ _REGISTRY["support"] = [support.escalate_ticket]
 - **`grade`** — grades a set of already-executed runs (`run_ids`) against a rubric.
 
 The grader model, rubric, and system prompt are all configurable per request
-(`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.system_prompt`; `rubric`). Progress
+(`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.provider`, defaults to `bedrock`;
+`grader.system_prompt`; `rubric`). The judge is independent of the graded runs — an OpenAI judge
+grading Bedrock runs is a reasonable setup — but a non-Bedrock `grader.provider` **must** name its
+own `grader.model_id`, since the default is a Bedrock model id and inheriting it elsewhere builds a
+judge that can only fail at the provider. Progress
 streams as NDJSON from `GET /api/v1/evaluations/{id}/events`; results and history live alongside
 runs in the server's SQLite database.
 
@@ -165,17 +169,17 @@ Evals tab (`execution: "local" | "cloud"` on the API):
 
 - **This machine** (default) — executed in-process by the server; history stays in local SQLite.
   Nothing leaves your machine except the model calls themselves.
-- **Cloud — persisted** — executed by a worker hosted on Amazon Bedrock AgentCore Runtime; job
+- **Cloud — persisted** — executed by a worker Lambda, invoked asynchronously; job
   state, progress events, and every run record are persisted to the stack's DynamoDB table, so
   evaluations survive laptop/server restarts and are reviewable from any machine pointed at the
   same stack. Cloud evaluations appear under the **Cloud** filters in the Evals and History tabs.
 
 The cloud lane is part of the stack: `make deploy-backend` packages the Python worker as an
-AgentCore CodeZip artifact alongside the server zip and deploys both. It prints the two values a
+worker Lambda zip alongside the server zip and deploys both. It prints the two values a
 local server needs to use the deployed lane:
 
 ```bash
-EVALHARNESS_EVAL_RUNTIME_ARN=arn:aws:bedrock-agentcore:...   # stack output EvalWorkerRuntimeArn
+EVALHARNESS_EVAL_FUNCTION_NAME=llm-eval-harness-EvalWorker... # stack output EvalWorkerFunctionName
 EVALHARNESS_EVAL_TABLE=llm-eval-harness-EvalTable-...         # stack output TableName
 ```
 
@@ -195,7 +199,7 @@ run. `GET /guardrails/{id}/versions` lists the full version history for a guardr
 Optional. When you want the harness on the internet, it is serverless end to end: **no containers
 anywhere**, one Lambda for the FastAPI server (unchanged, behind the
 [AWS Lambda Web Adapter](https://github.com/aws/aws-lambda-web-adapter)), S3 + CloudFront for the
-SPA, DynamoDB for history, and the AgentCore Runtime for evaluations.
+SPA, DynamoDB for history, and a second Lambda for evaluations.
 
 ```bash
 AWS_PROFILE=your-profile make deploy
@@ -305,8 +309,7 @@ Attach a deploy policy that grants CloudFormation, S3 (the SAM-managed bucket, t
 bucket **and** the SPA bucket, including `s3:DeleteObject` for the `--delete` sync), Lambda, IAM
 (role creation and `iam:PassRole`), DynamoDB, CloudFront (distributions, origin access controls,
 functions, and `cloudfront:CreateInvalidation`, which cannot be resource-scoped), Cognito user
-pools, and Bedrock AgentCore runtimes (`bedrock-agentcore:*` on runtimes plus
-`iam:CreateServiceLinkedRole` for its first use). `make create-user` additionally needs
+pools. `make create-user` additionally needs
 `cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
 
 Two grants are easy to miss because nothing else in a typical SAM stack needs them, and **both
@@ -350,6 +353,24 @@ exact IAM, and the list of things only a real deploy can prove — are in
 [`docs/serverless-deploy.md`](docs/serverless-deploy.md) (the contract) and
 [`docs/serverless-deploy-infra.md`](docs/serverless-deploy-infra.md) (the build).
 
+### Tearing the stack down
+
+```
+make destroy CONFIRM=llm-eval-harness
+```
+
+The `CONFIRM=` value has to match `STACK_NAME` exactly, because this deletes the history table,
+the Cognito user pool and both buckets along with the stack — everything the deployment holds.
+
+It exists because `aws cloudformation delete-stack` on its own does not work here. CloudFormation
+refuses to delete a bucket that still has objects in it, and `ArtifactBucket` has versioning
+enabled, so `aws s3 rm --recursive` does not empty it either: it writes delete markers, and every
+version and marker has to be removed explicitly. A stack deleted the naive way lands in
+`DELETE_FAILED` with the buckets orphaned — which then blocks the next deploy as well. `make
+destroy` empties both buckets version by version first, then deletes the stack and waits for it.
+
+Use a different `STACK_NAME=` to target a non-default stack, exactly as with `make deploy`.
+
 ## Make targets
 
 | Target | What it does |
@@ -366,6 +387,7 @@ exact IAM, and the list of things only a real deploy can prove — are in
 | `make deploy-backend` | Package both zips, upload them, `sam deploy` the whole stack |
 | `make deploy-frontend` | Build the SPA against the deployed stack, sync it to S3, invalidate CloudFront |
 | `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): `deploy-backend` then `deploy-frontend` |
+| `make destroy CONFIRM=<stack>` | [Tear the stack down](#tearing-the-stack-down): empty both buckets (every object version), then `delete-stack` and wait |
 | `make create-user EMAIL=...` | Invites a user to the deployed stack's Cognito pool ([Sign-in](#sign-in-cognito)); Cognito emails them a temporary password |
 
 `make dev` runs both processes as background jobs of one recipe with a `trap ... EXIT INT TERM`
@@ -386,7 +408,7 @@ terminals instead; they run the exact same commands.
 | `EVALHARNESS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
 | `EVALHARNESS_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
 | `EVALHARNESS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
-| `EVALHARNESS_EVAL_RUNTIME_ARN` | *(unset)* | AgentCore runtime ARN of the eval worker (stack output `EvalWorkerRuntimeArn`). With `EVAL_TABLE`, enables the cloud lane |
+| `EVALHARNESS_EVAL_FUNCTION_NAME` | *(unset)* | Name of the eval worker Lambda (stack output `EvalWorkerFunctionName`). With `EVAL_TABLE`, enables the cloud lane |
 | `EVALHARNESS_EVAL_TABLE` | *(unset)* | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
 | `EVALHARNESS_HISTORY_BACKEND` | `auto` | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda, SQLite elsewhere) |
 | `EVALHARNESS_LOCAL_EVALS` | `auto` | `on` \| `off` \| `auto` (off inside Lambda) — whether evaluations may run in this process |
@@ -426,7 +448,7 @@ llm-eval-harness/
 │   │   ├── guardrails/       # guardrail schemas/service/translator
 │   │   ├── tools/            # @tool toolsets + registry.py
 │   │   ├── store/            # SQLite + DynamoDB run/evaluation history
-│   │   ├── worker/           # the AgentCore eval worker entrypoint
+│   │   ├── worker/           # the Lambda eval worker entrypoint
 │   │   └── auth.py           # Cognito bearer-token verification (deployed)
 │   └── tests/
 ├── app/                      # React + TypeScript SPA (Vite, :3000)
@@ -449,7 +471,22 @@ cd app && npm test          # app only (vitest)
 cd server && uv run pytest  # server only (pytest, fake model — no network)
 make e2e                    # Playwright against the fake-model full stack
 make validate-template      # cfn-lint on infra/template.yaml
+make smoke                  # gated real-AWS smoke (RUN_LIVE_BEDROCK=1; costs money)
 ```
+
+Every deploy also runs **`scripts/deploy_smoke.py`** against the URL it just published — anonymous
+HTTP checks that the adapter boots and `/health` answers, that auth is switched on and the Cognito
+pool is published, that a protected route returns the API's own 401 envelope, and that CloudFront
+routes deep SPA links to `index.html`. It needs no credentials and spends nothing, which is why it
+runs on every deploy rather than on request. Point it at anything yourself:
+
+```bash
+python3 scripts/deploy_smoke.py --url https://your-distribution.cloudfront.net
+```
+
+It exists because `evalharness serve` once shipped completely broken and passed every check in the
+pipeline twice: unit tests, coverage and mutation testing all measure code as *imported*, and
+nothing executed the thing and watched it answer.
 
 Coverage gates are ratchets set at achieved numbers (`fail_under` in `server/pyproject.toml`,
 `thresholds` in `app/vitest.config.ts`): raise them when coverage climbs, never lower them to make

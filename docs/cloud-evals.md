@@ -4,8 +4,8 @@ Evaluations run in one of two lanes, chosen per launch in the UI:
 
 - **local** (default): executed in-process by the FastAPI server, history in SQLite.
   Nothing leaves the machine except the Bedrock calls themselves.
-- **cloud**: executed by a worker hosted on Amazon Bedrock AgentCore Runtime,
-  with job state, progress events, and run records persisted to the stack's
+- **cloud**: executed by a worker Lambda, with job state, progress events,
+  and run records persisted to the stack's
   DynamoDB table (`EvalTable`). Durable across laptop/server restarts and
   reviewable from any machine pointed at the same stack.
 
@@ -60,14 +60,41 @@ Reader rules (FastAPI):
 
 ## Invocation
 
-FastAPI → AgentCore Runtime via `bedrock-agentcore` `InvokeAgentRuntime` with a
-JSON payload `{ "evaluation_id": ..., "request": <EvaluationRequest minus execution> }`,
-`runtimeSessionId = evaluation_id` (padded to minimum length if required).
-The worker acknowledges fast (writes META pending→running) and processes as an
-async task within the runtime; FastAPI does not hold the connection open beyond
-acknowledgment. Exact async mechanics are the infra work item's to pin down and
-report (this is the one unproven-by-reference area — bedrock-agentcore Python SDK
-`@app.async_task` pattern or equivalent).
+FastAPI → the worker Lambda via `lambda:Invoke` with
+`InvocationType="Event"` and a JSON payload
+`{ "evaluation_id": ..., "request": <EvaluationRequest minus execution> }`.
+
+The invoke is asynchronous, so AWS queues the event and answers immediately
+while the worker runs the whole evaluation inside one invocation: FastAPI never
+holds a connection open for it.
+
+**The payload is capped at 1,000,000 bytes.** An asynchronous `lambda:Invoke`
+accepts at most 1 MB [aws: raised from 256 KB in October 2025], and
+`EvaluationRequest` bounds none of the prompts, the rubric or `run_ids`, while
+the Function URL accepts bodies up to 6 MB. So the server serializes the worker
+payload and measures it *before* writing anything, and a request over the limit
+is a `413 evaluation_too_large` with `detail: {bytes, limit_bytes}` — no
+`pending` row is created and nothing is invoked. The limit sits at 10^6 rather
+than 2^20 so it can never admit a payload AWS counts as over. A local-lane
+evaluation has no such limit, and the error says so. Any other refusal from
+`lambda:Invoke` (throttling, access denied, an unreachable endpoint) is a
+`502 eval_worker_unavailable` naming the AWS error, never a bare 500.
+
+**The server writes META `pending` before it invokes.** The `202` from AWS only
+means the event was queued — the worker may not start for seconds, longer on a
+cold start — so the id in the `202` would otherwise 404 against
+`/evaluations/{id}` and its event stream. Both sides may write the item; the
+worker's `begin` is a conditional put, so whichever goes first wins.
+
+The worker's conditional `pending` → `running` update is an **ownership
+claim**. Asynchronous delivery is at-least-once, so a duplicate event can
+arrive; the delivery that loses the claim executes nothing.
+
+An evaluation that would exceed Lambda's 15-minute limit is stopped
+cooperatively at a run boundary, or cancelled outright if it is inside a run or
+grading when the hard bound is reached, and settled as `error` with code
+`deadline_exceeded`, keeping whatever runs finished. See
+`docs/cloud-evals-infra.md`.
 
 The worker reuses `evalharness`'s existing engine/evals/tools code; the ONLY
 behavioral difference is the emitter (DDB writes instead of asyncio queue) and
@@ -77,7 +104,7 @@ seam to make that swap injectable.
 ## Configuration
 
 Server (pydantic-settings, `EVALHARNESS_` prefix):
-- `eval_runtime_arn: str | None` — AgentCore runtime ARN; None = cloud lane unavailable.
+- `eval_function_name: str | None` — worker Lambda name; None = cloud lane unavailable.
 - `eval_table: str | None` — DynamoDB table name (the stack's `TableName` output; also
   the deployed server's history store).
 

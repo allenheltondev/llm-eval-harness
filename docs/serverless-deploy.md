@@ -5,10 +5,9 @@ The harness has two ways to run, and the second is strictly additive:
 - **Local-first (unchanged, the default)**: `make dev` — uvicorn + vite on your
   machine, SQLite history, evals in either lane. Nothing here changes.
 - **Deployed (this document)**: everything on AWS is serverless. Lambda for the
-  server, S3 + CloudFront for the SPA, DynamoDB for state, Bedrock AgentCore
-  Runtime for evaluation execution. **No long-lived containers anywhere** —
-  AgentCore Runtime is the single sanctioned exception (managed microVMs,
-  scale-to-zero).
+  server, S3 + CloudFront for the SPA, DynamoDB for state, and a second Lambda
+  for evaluation execution. **No long-lived containers anywhere**, and no
+  exceptions to that.
 
 This is the contract between the server-side work (history backend, lane
 gating) and the infra work (Lambda hosting, packaging, CDN). Names here are
@@ -34,7 +33,7 @@ distribution-wide `CustomErrorResponses` (which would corrupt the API's own
   evaluation event streams keep their NDJSON semantics. `AWS_LWA_INVOKE_MODE=response_stream`. |
 | React SPA | Static build in S3 behind CloudFront. `VITE_API_URL` baked at build
   time pointing at the server's URL. |
-| Eval execution | Existing AgentCore Runtime worker (unchanged). |
+| Eval execution | A worker Lambda, invoked asynchronously (`docs/cloud-evals-infra.md`). |
 | History | DynamoDB (below). SQLite never runs in Lambda. |
 
 Timeout: server Lambda 900s (a streaming run must finish inside one invocation).
@@ -118,8 +117,8 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
 - Stack outputs added: `ServerFunctionUrl`, `AppUrl` (CloudFront domain),
   `AppBucket`.
 - IAM for the server function role: Bedrock invoke + guardrails, DynamoDB on the
-  table, `bedrock-agentcore:InvokeAgentRuntime` on the worker runtime. The
-  template injects EVALHARNESS_EVAL_TABLE / EVAL_RUNTIME_ARN / AUTH_* directly
+  table, `lambda:InvokeFunction` on the worker function. The
+  template injects EVALHARNESS_EVAL_TABLE / EVAL_FUNCTION_NAME / AUTH_* directly
   from `!Ref`/`!GetAtt`; there is no runtime discovery of anything.
 
 ## Out of scope (documented, not built)

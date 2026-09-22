@@ -59,7 +59,7 @@ async def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
         # Which model providers this server can actually run against -- the same
         # object `GET /models` returns, so the UI can read it from either.
         "providers": provider_block,
-        # Both an AgentCore runtime ARN and a DynamoDB table are needed before
+        # Both a worker function name and a DynamoDB table are needed before
         # the UI may offer "Cloud — persisted" (docs/cloud-evals.md).
         "cloud_evals": {
             "configured": evals_cloud.is_configured(settings),

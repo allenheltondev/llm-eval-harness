@@ -45,6 +45,13 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class PayloadTooLargeError(AppError):
+    """A well-formed request that is too big for somewhere it has to go."""
+
+    status_code = status.HTTP_413_CONTENT_TOO_LARGE
+    code = "payload_too_large"
+
+
 class UpstreamError(AppError):
     """Raised when a dependency (e.g. a user pool's JWKS endpoint) fails or is unreachable."""
 

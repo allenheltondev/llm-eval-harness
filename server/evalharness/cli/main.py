@@ -263,10 +263,11 @@ def _check_required(args: argparse.Namespace) -> None:
             "eval needs either --model (to execute new runs) or --run (to grade stored ones)"
         )
     if args.command == "eval" and args.grader_provider != "bedrock" and not args.grader_model:
-        # The judge's default model id is a Bedrock one, so inheriting it on
-        # another provider builds a judge that can only fail at the provider.
-        # No default is invented here: the right judge model for OpenAI or a
-        # local Ollama is the caller's to name, and guessing would rot.
+        # `GraderConfig` enforces this same invariant for every caller, so the
+        # rule has one home and the HTTP API cannot drift from it. This check
+        # is not that rule: it is the *invocation* shape, caught early so the
+        # message names the flags the user actually typed and the process exits
+        # 2 (bad invocation) rather than 1 (the harness failed).
         raise UsageError(
             f"--grader-provider {args.grader_provider} needs an explicit --grader-model: "
             f"the default judge model ({DEFAULT_JUDGE_MODEL_ID}) is a Bedrock model id"

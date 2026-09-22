@@ -16,9 +16,8 @@
 #
 #   * the root entry is a `run.sh` bootstrap, not a Python module, and it must
 #     be executable inside the zip -- Lambda execs it directly;
-#   * the `worker` extra is NOT installed. bedrock-agentcore (with its
-#     OpenTelemetry and MCP tails) belongs to the AgentCore artifact; the
-#     server only ever *invokes* the runtime, via boto3.
+#   * nothing worker-only is installed: the server only ever *invokes* the
+#     eval worker, via boto3.
 #
 # Like package-eval-worker.sh, the S3 key is content-hashed. CloudFormation
 # only rolls a Lambda when a property it can see changes, and for an
@@ -49,8 +48,8 @@ PYTHON_PLATFORM="${SERVER_PYTHON_PLATFORM:-aarch64-manylinux_2_28}"
 
 # Packages pulled in transitively that no request path in this server imports,
 # and which together are most of the artifact. Lambda's hard ceiling is 250 MB
-# *unzipped* across the function and its layers, and unlike AgentCore's 750 MB
-# there is no headroom to be relaxed about. Set SERVER_PRUNE=0 to keep them and
+# *unzipped* across the function and its layers, and there is no headroom to be
+# relaxed about. Set SERVER_PRUNE=0 to keep them and
 # see the raw size. See docs/serverless-deploy-infra.md ("Artifact size").
 PRUNE_DEFAULT=1
 PRUNE="${SERVER_PRUNE:-${PRUNE_DEFAULT}}"
@@ -65,8 +64,7 @@ rm -rf "${STAGING}"
 mkdir -p "${STAGING}" "${BUILD_DIR}"
 
 # 1. Pin the dependency set from the server's lockfile. `--no-dev` drops pytest
-#    /ruff/mutmut; no `--extra worker`, so bedrock-agentcore stays out (see the
-#    header). `--no-emit-project` leaves `evalharness` itself out: it is pure
+#    /ruff/mutmut (see the header). `--no-emit-project` leaves `evalharness` itself out: it is pure
 #    Python and gets copied in below, so there is no wheel to cross-build.
 log "Exporting locked runtime dependencies (no dev, no worker extra)"
 uv export \

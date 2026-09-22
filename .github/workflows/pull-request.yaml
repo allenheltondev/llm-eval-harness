@@ -192,6 +192,9 @@ jobs:
       needs.predeploy-validations.result == 'success' &&
       (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped') &&
       (needs.changes.outputs.frontend_changed == 'true' || needs.changes.outputs.backend_changed == 'true')
+    outputs:
+      # Published so the smoke job downstream can reach what was just deployed.
+      app_url: ${{ steps.deploy.outputs.app_url }}
     environment:
       name: Staging
       # Surfaces on the PR / deployment as the link reviewers click through to.
@@ -231,3 +234,19 @@ jobs:
             echo "- **Region:** \`us-east-1\`"
             echo "- **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: Smoke the deployed app
+    needs: [changes, deploy-frontend]
+    # Only when something was actually published. Deliberately carries **no**
+    # AWS credentials and no `id-token: write`: every check is an anonymous
+    # request against the public front door, so this job cannot spend money and
+    # cannot touch the account even if the script were wrong.
+    if: always() && needs.deploy-frontend.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # stdlib only, so there is nothing to install before it runs.
+      - name: Smoke the deployed app
+        run: python3 scripts/deploy_smoke.py --url "${{ needs.deploy-frontend.outputs.app_url }}"

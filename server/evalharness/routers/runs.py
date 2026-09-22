@@ -14,7 +14,7 @@ Two lanes
 ---------
 ``POST /evaluations`` branches on ``execution``: ``"local"`` (the default) is the
 in-process background task described above, ``"cloud"`` hands the work to an
-AgentCore Runtime worker with state in DynamoDB (:mod:`evalharness.evals.cloud`,
+worker Lambda with state in DynamoDB (:mod:`evalharness.evals.cloud`,
 contract in ``docs/cloud-evals.md``).
 
 **Lane detection on reads is "history store first, then the cloud lane".** A
@@ -56,7 +56,13 @@ from evalharness.errors import ConflictError, InternalError, NotFoundError, Upst
 from evalharness.evals import cloud as evals_cloud
 from evalharness.evals import engine as evals_engine
 from evalharness.evals import jobs as evals_jobs
-from evalharness.evals.cloud import Invoker, get_eval_table, get_invoker
+from evalharness.evals.cloud import (
+    EvalWriterFactory,
+    Invoker,
+    get_eval_table,
+    get_eval_writer_factory,
+    get_invoker,
+)
 from evalharness.evals.ddb_reader import EvalTable
 from evalharness.evals.events import EvalCompleteEvent
 from evalharness.evals.judge import JudgeFactory, get_judge_factory
@@ -269,6 +275,7 @@ async def create_evaluation(
     judge_factory: JudgeFactory = Depends(get_judge_factory),
     repo: HistoryRepo = Depends(get_repo),
     invoker: Invoker | None = Depends(get_invoker),
+    eval_writer_factory: EvalWriterFactory | None = Depends(get_eval_writer_factory),
 ):
     """Accept an evaluation and run it in the background.
 
@@ -278,7 +285,7 @@ async def create_evaluation(
     is immediately usable against ``/evaluations/{id}`` and its event stream.
 
     ``execution="cloud"`` short-circuits all of that: the work goes to the
-    AgentCore worker and the ``202`` is synthesized from the request, with no
+    worker Lambda and the ``202`` is synthesized from the request, with no
     local row written at all (400 ``cloud_lane_unavailable`` when the lane is
     not configured).
 
@@ -289,7 +296,9 @@ async def create_evaluation(
     decision to make.
     """
     if payload.execution == "cloud":
-        return await evals_cloud.submit(payload, settings=settings, invoker=invoker)
+        return await evals_cloud.submit(
+            payload, settings=settings, invoker=invoker, store_factory=eval_writer_factory
+        )
 
     deployment.require_local_lane(settings)
 
