@@ -105,6 +105,13 @@ arms nothing, so it still settles as `cancelled`. Only `cancelled` is ever
 reinterpreted: an evaluation that finished, or failed on its own, keeps its own
 outcome.
 
+**A user's cancel still wins at the hard stop.** A cancel that lands while a
+call is stuck is never seen by the engine — it polls between runs — so the
+hard stop is merely what *interrupts* it. At that moment the worker checks the
+cancel flag before arming anything; if it is set, nothing is armed and the
+evaluation settles `cancelled`, exactly as the cooperative path does by
+checking the flag before the deadline.
+
 This is also why the hard stop does not use `asyncio.wait_for`. `wait_for`
 cancels the task and only then raises, leaving no moment in which to arm the
 reason before the engine settles.
@@ -122,27 +129,61 @@ A clock that cannot be read imposes no hard bound at all: `Deadline.budget()`
 returns `None` and the evaluation runs unbounded, because a broken clock must
 not cut a healthy evaluation short.
 
-### Retries are off, but delivery is still at-least-once
+### Delivery is at-least-once, so the claim is what keeps retries safe
 
-`EventInvokeConfig.MaximumRetryAttempts: 0`. AWS retries a failed asynchronous
-invocation twice by default **[aws]**; that is wrong here. The handler routes
-every *evaluation* failure into DynamoDB rather than raising, so a retry would
-only ever mean the invocation itself died — most likely by exhausting its 15
-minutes — and re-running it would burn another 15 minutes and overwrite the
-first attempt's state.
+Asynchronous invocation is **at-least-once** **[aws]**: the same event can
+arrive twice whatever the retry setting, which only governs redelivery *after a
+failure*. Two deliveries executing the same evaluation would buy every model run
+twice and overwrite each other's `EVENT#` items, because each store numbers its
+events from zero.
 
-That setting governs retries *after a failure*. It does not make delivery
-exactly-once: asynchronous invocation is **at-least-once** **[aws]**, so the
-same event can arrive twice regardless. Two deliveries executing the same
-evaluation would buy every model run twice and overwrite each other's `EVENT#`
-items, because each store numbers its events from zero.
+So the conditional `pending` → `running` update is an **ownership claim**, not a
+status change: exactly one caller can move the row out of `pending`.
+`DynamoEvalStore.mark_running()` returns whether it won, and a delivery that
+lost executes nothing — it returns `{"status": "duplicate"}` and writes nothing
+at all, because writing anything would step on the delivery that owns the job.
 
-The conditional `pending` → `running` update is therefore an **ownership
-claim**, not a status change: exactly one caller can move the row out of
-`pending`. `DynamoEvalStore.mark_running()` returns whether it won, and the
-handler executes nothing when it did not — it returns `{"status":
-"duplicate"}` and writes nothing at all, because writing anything would step on
-the delivery that does own the job.
+### Retries are on, because of the claim
+
+`EventInvokeConfig.MaximumRetryAttempts: 2`. This used to be `0`, on the
+reasoning that a retry could only mean the invocation had died mid-evaluation,
+and re-running would burn another 15 minutes over the first attempt's state.
+The claim removed that danger — a redelivery of a claimed evaluation runs
+nothing — and a real case needs the retry:
+
+**A failure before the claim.** If DynamoDB is throttled or unreachable as the
+worker starts, `begin()` or `mark_running()` raises. The server has already
+written the `pending` row by then. Returning an error body here would be
+useless — nobody reads an async invocation's return value, and returning tells
+Lambda the invocation *succeeded*, so there would be no retry and the row would
+read `pending` forever. So the handler **raises**, Lambda redelivers, and the
+retry claims the row and runs it. Nothing was bought on the failed attempt,
+because nothing had been claimed.
+
+What retries still cannot recover: an evaluation stuck at `running` because its
+invocation died after claiming (every redelivery finds it claimed and runs
+nothing), and a failure that persists through every retry, which leaves the row
+`pending`. The two deadline guards exist to keep the first from happening. The
+second would need an on-failure destination and something to settle what lands
+there; that is not built.
+
+## The scratch database is per invocation
+
+The run engine writes every run to SQLite, and `DynamoEvalStore.save_run`
+mirrors it into a `RUN#` item; after that the local row is scratch. But Lambda
+reuses both the process and `/tmp` across warm invocations, and `store.db`
+keeps a module-level engine, so a single shared file would accumulate the
+outputs and tool transcripts of every unrelated evaluation the environment ever
+ran, until ephemeral storage became the failure mode.
+
+`lambda_app.scratch_database()` gives each invocation a database of its own
+under `<tmp>/evalharness-worker/`, via `store.db.scoped_db`, which disposes the
+engine afterwards and restores whatever was active before. The directory is
+wiped at the **start** of an invocation, which clears whatever a killed one left
+behind, and again at the **end**, so a frozen idle environment holds no
+evaluation's data. It is a directory rather than a file because SQLite runs in
+WAL mode here and keeps `-wal` and `-shm` files beside the database, and
+deleting only the `.db` would leave both behind.
 
 ## Who writes the pending row
 

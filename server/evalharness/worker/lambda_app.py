@@ -47,21 +47,28 @@ and the store writes the engine's ``cancelled`` as ``deadline_exceeded``.
 
 Duplicate deliveries
 --------------------
-Asynchronous invocation is at-least-once, and ``MaximumRetryAttempts: 0`` does
-not change that -- it governs retries after a *failure*. So the conditional
-``pending`` -> ``running`` update is an ownership claim: exactly one delivery
-can win it, and a delivery that loses executes nothing and writes nothing.
+An evaluation's event can arrive more than once: asynchronous invocation is
+at-least-once, and Lambda also redelivers after a failed invocation
+(``MaximumRetryAttempts``). So the conditional ``pending`` -> ``running``
+update is an ownership claim: exactly one delivery can win it, and a delivery
+that loses executes nothing and writes nothing. That claim is also what makes
+the retries safe to leave on.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import shutil
+import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Any
 
+from evalharness.store import db
 from evalharness.worker import interfaces
 from evalharness.worker.ddb import DynamoEvalStore
 
@@ -208,6 +215,37 @@ def build_store(evaluation_id: str) -> DynamoEvalStore:
     )
 
 
+#: Where each invocation's scratch database lives. A directory rather than a
+#: file because SQLite runs in WAL mode here, which keeps ``-wal`` and ``-shm``
+#: files beside the database; removing the directory removes all of them.
+SCRATCH_ROOT = os.path.join(tempfile.gettempdir(), "evalharness-worker")
+
+
+@contextlib.contextmanager
+def scratch_database(root: str = SCRATCH_ROOT) -> Iterator[None]:
+    """Give one invocation a SQLite database of its own, and leave nothing behind.
+
+    The run engine writes every run to SQLite and ``DynamoEvalStore.save_run``
+    mirrors it to DynamoDB; the local row is scratch from then on. But Lambda
+    reuses both the process and ``/tmp`` across warm invocations, and
+    ``store.db`` keeps a module-level engine -- so a single shared file would
+    accumulate the outputs and tool transcripts of every unrelated evaluation
+    this environment ever ran, until ephemeral storage became the failure mode.
+
+    So the directory is wiped at the start, which clears whatever a killed
+    invocation left, and again at the end, so an idle frozen environment holds
+    no evaluation's data at all. One environment runs one invocation at a time,
+    so nothing else can be using it.
+    """
+    shutil.rmtree(root, ignore_errors=True)
+    os.makedirs(root)
+    try:
+        with db.scoped_db(os.path.join(root, "scratch.db")):
+            yield
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _rejected(code: str, message: str) -> dict[str, Any]:
     """The result body for an invocation we refuse to start."""
     logger.warning("rejecting invocation: %s: %s", code, message)
@@ -278,10 +316,21 @@ async def execute(
             # which flushes the row -- so this is the last moment the reason
             # can still be recorded. (`asyncio.wait_for` cancels and only then
             # raises, which is too late.)
+            #
+            # Unless the user got there first. A cancel that lands while a call
+            # is stuck is never seen by the engine -- it polls between runs --
+            # so the hard stop is merely what *interrupts* it. The user asked
+            # for this; it settles as `cancelled`, as the cooperative path
+            # already does by checking the flag before the deadline.
+            if store.cancel_requested():
+                logger.info("eval %s: cancelled during a stalled call", evaluation_id)
+                await _cancel_and_settle(task)
+                _settle(store, "cancelled", None)
+                return "cancelled"
             logger.warning("eval %s hit the hard deadline mid-flight", evaluation_id)
             store.stop_with(IN_FLIGHT_STOP)
             await _cancel_and_settle(task)
-            _settle_deadline(store, IN_FLIGHT_STOP)
+            _settle(store, "error", IN_FLIGHT_STOP)
             return "error"
         outcome = task.result()
 
@@ -290,15 +339,19 @@ async def execute(
             # the engine's `cancelled` has already been recorded as the
             # deadline -- in the row and in the stream's last line. Nobody
             # cancelled this.
-            _settle_deadline(store, BOUNDARY_STOP)
+            _settle(store, "error", BOUNDARY_STOP)
             logger.warning("eval %s stopped at the deadline", evaluation_id)
             return "error"
 
-        # The engine settles the row itself (`save_evaluation(status=...)`),
-        # which the store buffers until `eval_complete` is durable; `finalize`
-        # flushes it. A `False` return means the engine returned without
-        # settling at all, so the worker settles from the outcome instead.
-        if not store.finalize():
+        # The engine settles the row itself and then publishes `eval_complete`,
+        # which flushes it -- so the store is normally terminal already, and
+        # `finalize()` returning False means "nothing left to do", NOT "the
+        # engine never settled". Reading it the second way wrote again, hit
+        # "already terminal", and reported every successful evaluation as
+        # `error`. Settle from the outcome only when the store is not terminal
+        # and there was nothing buffered either: the engine really did return
+        # without settling.
+        if not store.is_terminal and not store.finalize():
             store.complete(
                 outcome["status"],
                 result=outcome["result"],
@@ -372,18 +425,19 @@ async def _cancel_and_settle(task: asyncio.Task[Any]) -> None:
             raise
 
 
-def _settle_deadline(store: DynamoEvalStore, reason: dict[str, Any]) -> None:
-    """Make sure a deadline stop is durably written as one.
+def _settle(store: DynamoEvalStore, status: str, error: dict[str, Any] | None) -> None:
+    """Make sure a stopped evaluation is durably written as ``status``.
 
     With the real engine this is normally already done: it settled through the
-    store, which translated its ``cancelled`` using the armed reason, and the
-    ``eval_complete`` it published flushed the row. This covers the rest -- a
-    buffered state that was never flushed, or an engine that never settled at
-    all -- without ever overwriting a row that is already terminal.
+    store -- which, for a deadline, translated its ``cancelled`` using the armed
+    reason -- and the ``eval_complete`` it published flushed the row. This
+    covers the rest -- a buffered state that was never flushed, or an engine
+    that never settled at all -- without ever overwriting a row that is already
+    terminal.
     """
     if store.is_terminal or store.finalize():
         return
-    store.complete("error", error=reason, run_ids=store.saved_run_ids)
+    store.complete(status, error=error, run_ids=store.saved_run_ids)
 
 
 def _finalize_quietly(store: DynamoEvalStore, status: str, error: dict[str, Any] | None) -> None:
@@ -414,6 +468,7 @@ def handler(
     context: Any = None,
     *,
     store_factory: Callable[[str], DynamoEvalStore] = build_store,
+    scratch: Callable[[], AbstractContextManager[Any]] = scratch_database,
 ) -> dict[str, Any]:
     """Lambda handler: run one evaluation from an async invocation.
 
@@ -434,18 +489,27 @@ def handler(
         store = store_factory(evaluation_id)
         store.begin(request)
         claimed = store.mark_running()
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("eval %s: could not write initial state", evaluation_id)
-        return _rejected("store_unavailable", str(exc) or exc.__class__.__name__)
+    except Exception:
+        # Fail the invocation rather than return. Nobody reads an async
+        # invocation's return value, and returning tells Lambda it succeeded:
+        # no retry, and the `pending` row the server wrote before invoking sits
+        # there forever. Raising gets the event redelivered
+        # (`MaximumRetryAttempts` in infra/template.yaml), and redelivery is
+        # safe because nothing has been claimed yet -- the retry claims the row
+        # and runs it, while a delivery that finds it already claimed runs
+        # nothing.
+        logger.exception("eval %s: could not claim; failing for a retry", evaluation_id)
+        raise
 
     if not claimed:
-        # Lambda's asynchronous delivery is at-least-once, so a second copy of
-        # this event can arrive even with MaximumRetryAttempts: 0. Running it
+        # A second copy of this event can arrive -- asynchronous delivery is
+        # at-least-once, and Lambda redelivers after a failure. Running it
         # would buy every model run twice and overwrite the first delivery's
         # EVENT# items, since each store numbers its events from zero. The
         # conditional pending -> running update is the claim; losing it means
         # someone else owns this evaluation.
         return _duplicate(evaluation_id)
 
-    status = asyncio.run(execute(evaluation_id, request, store, deadline_from(context)))
+    with scratch():
+        status = asyncio.run(execute(evaluation_id, request, store, deadline_from(context)))
     return {"status": status, "evaluation_id": evaluation_id, "execution": "cloud"}

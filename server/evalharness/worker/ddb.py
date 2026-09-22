@@ -346,9 +346,9 @@ class DynamoEvalStore:
         """Transition ``pending`` → ``running``, and report whether *we* did it.
 
         This is the ownership claim for the invocation, not a status update.
-        Lambda's asynchronous delivery is **at-least-once**: AWS can deliver the
-        same event twice even with ``MaximumRetryAttempts: 0``, which only
-        governs retries after a failure. Two deliveries executing the same
+        The same event can reach the worker more than once: Lambda's
+        asynchronous delivery is **at-least-once**, and it also redelivers after
+        a failed invocation (``MaximumRetryAttempts``). Two deliveries executing the same
         evaluation would buy the model runs twice and overwrite each other's
         ``EVENT#`` items, because every store starts its sequence at zero.
 

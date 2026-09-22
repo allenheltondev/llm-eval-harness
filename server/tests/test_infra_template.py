@@ -107,8 +107,15 @@ def test_function_url_has_a_public_resource_policy(resources: dict, template: di
     assert "ServerFunctionUrlIsPublic" in template["Conditions"]
 
 
-def test_worker_never_retries_an_async_invocation(resources: dict) -> None:
-    """A retry can only mean the invocation died; re-running burns another 15 minutes."""
-    assert resources["EvalWorkerFunction"]["Properties"]["EventInvokeConfig"][
+def test_worker_retries_an_invocation_that_fails_before_claiming(resources: dict) -> None:
+    """The recovery path for a failure before the claim, where the handler raises.
+
+    With retries off, raising would change nothing: Lambda would drop the event
+    and the server's `pending` row would never move. Retries are safe only
+    because a redelivery of a claimed evaluation runs nothing -- so this is on,
+    and bounded.
+    """
+    retries = resources["EvalWorkerFunction"]["Properties"]["EventInvokeConfig"][
         "MaximumRetryAttempts"
-    ] == 0
+    ]
+    assert 1 <= retries <= 2

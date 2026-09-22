@@ -102,14 +102,71 @@ def test_handler_rejects_a_bad_payload_without_touching_dynamodb(client, store_f
     assert client.calls == []
 
 
-def test_handler_reports_an_unwritable_store():
+def test_an_unreachable_store_fails_the_invocation_so_lambda_retries_it():
+    """A return value from an async invocation is observed by nobody.
+
+    Returning `rejected` here would tell Lambda the invocation *succeeded*, so it
+    would never retry, and the `pending` row the server wrote before invoking
+    would sit there forever. Raising is what makes Lambda redeliver the event.
+    """
+
     def exploding(_evaluation_id: str):
         raise RuntimeError("table is gone")
 
-    response = lambda_app.handler(PAYLOAD, store_factory=exploding)
+    with pytest.raises(RuntimeError, match="table is gone"):
+        lambda_app.handler(PAYLOAD, store_factory=exploding)
 
-    assert response["status"] == "rejected"
-    assert response["error"]["code"] == "store_unavailable"
+
+def test_a_retry_after_a_failure_before_the_claim_runs_the_evaluation(
+    monkeypatch, client, store_factory
+):
+    """What makes raising safe: the redelivery claims the row and does the work.
+
+    The first delivery failed before it claimed anything, so nothing ran and
+    nothing was bought. The retry finds the server's `pending` row, wins the
+    claim, and executes -- the recovery the async invoke never had.
+    """
+    ran: list[str] = []
+
+    async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
+        ran.append(store.evaluation_id)
+        store.save_evaluation(status="completed", result=None, error=None)
+        emit({"type": "eval_complete", "status": "completed", "result": None})
+        return {"status": "completed", "result": None, "error": None, "run_ids": []}
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
+    # The server wrote this before invoking.
+    store_factory(EVAL_ID).begin(REQUEST)
+
+    client.fail_on["update_item"] = RuntimeError("transient: throttled")
+    with pytest.raises(RuntimeError, match="throttled"):
+        lambda_app.handler(PAYLOAD, store_factory=store_factory)
+    assert ran == []
+    assert meta(client)["status"] == {"S": "pending"}
+
+    # Lambda's retry.
+    result = lambda_app.handler(PAYLOAD, store_factory=store_factory)
+
+    assert result["status"] == "completed"
+    assert ran == [EVAL_ID]
+    assert meta(client)["status"] == {"S": "completed"}
+
+
+def test_a_retry_after_the_claim_is_a_no_op(monkeypatch, client, store_factory):
+    """And retries never double-execute: past the claim, a redelivery is a duplicate."""
+    calls: list[str] = []
+
+    async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
+        calls.append("ran")
+        store.save_evaluation(status="completed", result=None, error=None)
+        emit({"type": "eval_complete", "status": "completed", "result": None})
+        return {"status": "completed", "result": None, "error": None, "run_ids": []}
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
+
+    assert lambda_app.handler(PAYLOAD, store_factory=store_factory)["status"] == "completed"
+    assert lambda_app.handler(PAYLOAD, store_factory=store_factory)["status"] == "duplicate"
+    assert calls == ["ran"]
 
 
 def test_handler_runs_the_whole_evaluation_inside_the_invocation(
@@ -533,7 +590,7 @@ async def test_a_broken_clock_imposes_no_hard_bound(monkeypatch, client, store_f
 
 
 def test_a_duplicate_delivery_does_not_execute_anything(client, store_factory):
-    """Lambda async delivery is at-least-once; MaximumRetryAttempts: 0 does not change that.
+    """Lambda async delivery is at-least-once, and it retries failed invocations too.
 
     A second delivery that ran the evaluation again would buy every model run
     twice and overwrite the first delivery's EVENT# items, because each store
@@ -786,3 +843,156 @@ async def test_an_outer_cancel_while_waiting_does_not_leak_the_engine(
     # And settling twice is not an ERROR: the second writer sees a terminal row.
     assert "failed to write terminal state" not in caplog.text
     assert collected(client)[-1] == {"type": "eval_complete", "status": "cancelled", "result": None}
+
+
+async def test_a_cancel_that_lands_while_a_call_is_stuck_still_reads_cancelled(
+    real_engine, client, store_factory
+):
+    """The race the review found: the user cancels mid-call, then the hard stop fires.
+
+    The engine is inside a stalled model call, so it never polls the CANCEL
+    flag; the hard deadline is what ends the call. The user did ask for this,
+    so it must settle `cancelled` -- not be relabelled a deadline just because
+    the deadline is what happened to interrupt it.
+    """
+    real_engine(stall=True)
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+    # Never trips cooperatively (margin 0); a short hard budget ends the stall.
+    budget = lambda_app.HARD_DEADLINE_RESERVE_SECONDS + 0.3
+    deadline = lambda_app.Deadline(lambda: budget, margin=0.0)
+
+    running = asyncio.ensure_future(lambda_app.execute(EVAL_ID, REQUEST, store, deadline))
+    for _ in range(50):  # into the stalled call, past the up-front cancel check
+        await asyncio.sleep(0)
+    assert not running.done()
+    client.put_item(TableName=TABLE, Item={"pk": {"S": f"EVAL#{EVAL_ID}"}, "sk": {"S": "CANCEL"}})
+
+    status = await running
+
+    assert status == "cancelled"
+    assert meta(client)["status"] == {"S": "cancelled"}
+    assert meta(client)["error"] == {"NULL": True}
+    assert _final_event(client)["status"] == "cancelled"
+
+
+async def test_a_real_successful_evaluation_reports_completed_cleanly(
+    real_engine, caplog, client, store_factory
+):
+    """The happy path, against the real engine -- which no test here had driven.
+
+    The engine settles `completed` and then publishes `eval_complete`, which
+    flushes the row. `finalize()` then has nothing left to do and returns
+    False -- which the worker used to read as "the engine never settled", so it
+    wrote again, hit "already terminal", logged an ERROR, and returned `error`
+    for an evaluation that succeeded. The fakes above publish in the opposite
+    order, which is why they never saw it.
+    """
+    real_engine()
+    store = store_factory(EVAL_ID)
+    store.begin(REQUEST)
+    store.mark_running()
+
+    status = await lambda_app.execute(EVAL_ID, REQUEST, store, None)
+
+    assert status == "completed"
+    assert meta(client)["status"] == {"S": "completed"}
+    assert _final_event(client)["status"] == "completed"
+    assert "failed" not in caplog.text
+    assert "already terminal" not in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# The scratch database is invocation-scoped
+# --------------------------------------------------------------------------- #
+
+
+def _run_rows(db_path: str) -> list[str]:
+    import sqlite3
+
+    with sqlite3.connect(db_path) as connection:
+        return [row[0] for row in connection.execute("SELECT id FROM run")]
+
+
+def test_an_invocation_leaves_no_scratch_behind(monkeypatch, tmp_path, real_engine, client):
+    """Warm environments reuse /tmp; nothing of one evaluation may outlive it."""
+    real_engine()
+    root = tmp_path / "scratch"
+    seen: list[list[str]] = []
+    real_run = interfaces.run_evaluation
+
+    async def recording(request, emit, store, cancelled):
+        outcome = await real_run(request, emit, store, cancelled)
+        seen.append(_run_rows(str(root / "scratch.db")))  # written here, mid-invocation
+        return outcome
+
+    monkeypatch.setattr(interfaces, "run_evaluation", recording)
+
+    def factory(evaluation_id: str) -> DynamoEvalStore:
+        return DynamoEvalStore(TABLE, evaluation_id, client=client)
+
+    result = lambda_app.handler(
+        PAYLOAD,
+        store_factory=factory,
+        scratch=lambda: lambda_app.scratch_database(str(root)),
+    )
+
+    assert result["status"] == "completed"
+    assert len(seen[0]) == 2  # both runs really went through the scratch db
+    assert not root.exists()  # ...and the db, its WAL files and the dir are gone
+
+
+def test_warm_invocations_do_not_see_each_others_runs(monkeypatch, tmp_path, real_engine, client):
+    """Two evaluations in one warm process: the second starts from nothing."""
+    real_engine()
+    root = tmp_path / "scratch"
+    counts: list[int] = []
+    real_run = interfaces.run_evaluation
+
+    async def counting(request, emit, store, cancelled):
+        counts.append(len(_run_rows(str(root / "scratch.db"))))  # before this one runs
+        return await real_run(request, emit, store, cancelled)
+
+    monkeypatch.setattr(interfaces, "run_evaluation", counting)
+
+    def factory(evaluation_id: str) -> DynamoEvalStore:
+        return DynamoEvalStore(TABLE, evaluation_id, client=client)
+
+    for evaluation_id in ("a" * 32, "b" * 32):
+        lambda_app.handler(
+            {"evaluation_id": evaluation_id, "request": REQUEST},
+            store_factory=factory,
+            scratch=lambda: lambda_app.scratch_database(str(root)),
+        )
+
+    assert counts == [0, 0]
+
+
+def test_a_killed_invocations_leftovers_are_cleared_on_the_next(tmp_path):
+    """A timeout never reaches the cleanup, so the next invocation starts with it."""
+    root = tmp_path / "scratch"
+    root.mkdir()
+    (root / "scratch.db").write_text("an earlier evaluation's runs")
+    (root / "scratch.db-wal").write_text("and its write-ahead log")
+
+    with lambda_app.scratch_database(str(root)):
+        # A brand-new database (with its own WAL sidecars), none of the old bytes.
+        assert (root / "scratch.db").read_bytes().startswith(b"SQLite format 3")
+        for path in root.iterdir():
+            assert b"earlier evaluation" not in path.read_bytes()
+            assert b"write-ahead log" not in path.read_bytes()
+
+    assert not root.exists()
+
+
+def test_the_previous_engine_is_restored_afterwards(tmp_path):
+    """Scoping must not strand the process on a disposed engine for a deleted file."""
+    from evalharness.store import db
+
+    outer = db.init_db(str(tmp_path / "outer.db"))
+
+    with lambda_app.scratch_database(str(tmp_path / "scratch")):
+        assert db.get_engine() is not outer
+
+    assert db.get_engine() is outer

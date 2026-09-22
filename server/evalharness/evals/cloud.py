@@ -118,13 +118,12 @@ class LambdaInvoker:
     and the server never holds anything open for it. Progress comes back
     through DynamoDB, per ``docs/cloud-evals.md``.
 
-    AWS retries a failed asynchronous invocation twice by default; the
-    function's ``EventInvokeConfig`` in ``infra/template.yaml`` sets
-    ``MaximumRetryAttempts: 0`` instead. The worker routes every *evaluation*
-    failure into DynamoDB rather than raising, so a retry would only ever mean
-    the invocation itself died -- most likely by exhausting its 15 minutes --
-    and re-running it would burn another 15 minutes and overwrite the first
-    attempt's state.
+    AWS retries a failed asynchronous invocation, and the function's
+    ``EventInvokeConfig`` in ``infra/template.yaml`` keeps that on. It is safe
+    because the worker's ``pending`` -> ``running`` update is an ownership
+    claim: a redelivery of an evaluation that was already claimed runs nothing.
+    What a retry buys is recovery from a failure *before* the claim, where the
+    worker raises precisely so that Lambda redelivers the event.
     """
 
     def __init__(self, function_name: str, region_name: str, client: Any | None = None) -> None:

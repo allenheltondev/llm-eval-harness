@@ -215,13 +215,22 @@ Resources:
       # instead of being killed mid-write and left reading `running` forever.
       Timeout: 900
       EventInvokeConfig:
-        # The server invokes asynchronously, and AWS retries a failed async
-        # invocation twice by default. Never retry this one: the handler
-        # already routes every evaluation failure into DynamoDB rather than
-        # raising, so a retry here only ever means the *invocation* died --
-        # most likely by exhausting the 15 minutes -- and re-running it would
-        # burn another 15 minutes and overwrite the first attempt's state.
-        MaximumRetryAttempts: 0
+        # Retries are ON, and they are safe because of the ownership claim.
+        #
+        # The handler's conditional pending -> running update is a claim that
+        # exactly one delivery can win (DynamoEvalStore.mark_running). So a
+        # redelivery of an evaluation that was already claimed -- after a
+        # crash, a timeout, or Lambda's own at-least-once duplicates -- runs
+        # nothing. That removes what used to make retries dangerous here: a
+        # second 15-minute run over the first attempt's state.
+        #
+        # What retries buy is the one case with no other recovery: a failure
+        # *before* the claim (DynamoDB throttled or unreachable as the worker
+        # starts). The server has already written the `pending` row by then,
+        # and the handler raises rather than returning, so Lambda redelivers
+        # and the retry claims the row and runs it. Without this, that row
+        # would read `pending` forever.
+        MaximumRetryAttempts: 2
       Environment:
         Variables:
           # Worker-owned (docs/cloud-evals.md "Configuration").
@@ -230,9 +239,11 @@ Resources:
           # evals.engine.default_deps() builds from the environment because the
           # worker has no FastAPI request to hang dependencies off.
           EVALHARNESS_AWS_REGION: !Ref AWS::Region
-          # /var/task is read-only; /tmp is not. This SQLite file is scratch
-          # space for the run engine, which writes each run there before
-          # save_run mirrors it to DynamoDB.
+          # /var/task is read-only; /tmp is not. The run engine's SQLite
+          # scratch is per invocation (lambda_app.scratch_database, under
+          # /tmp/evalharness-worker/, wiped at the start and end of each one),
+          # so this is only the fallback for anything touching the engine
+          # outside that scope -- it must still be writable.
           EVALHARNESS_DB_PATH: /tmp/evalharness-worker.db
           # Setting the path is NOT enough to select SQLite, and getting this
           # wrong costs the whole evaluation. `history_backend` defaults to

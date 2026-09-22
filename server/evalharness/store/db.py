@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import event
@@ -61,6 +62,26 @@ def init_db(db_path: str) -> Engine:
     SQLModel.metadata.create_all(engine)
     _engine = engine
     return engine
+
+
+@contextmanager
+def scoped_db(db_path: str) -> Iterator[Engine]:
+    """Point the store at ``db_path`` for the duration, then put things back.
+
+    On exit the scoped engine is disposed -- its pooled connections closed, so
+    the file can be deleted -- and whatever engine was active before is
+    restored. The eval worker uses this to give every invocation a database of
+    its own inside a warm Lambda environment, where the process (and so the
+    module-level engine) outlives any one evaluation.
+    """
+    global _engine
+    previous = _engine
+    engine = init_db(db_path)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        _engine = previous
 
 
 def get_engine() -> Engine:
