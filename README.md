@@ -154,7 +154,11 @@ _REGISTRY["support"] = [support.escalate_ticket]
 - **`grade`** — grades a set of already-executed runs (`run_ids`) against a rubric.
 
 The grader model, rubric, and system prompt are all configurable per request
-(`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.system_prompt`; `rubric`). Progress
+(`grader.model_id`, defaults to `amazon.nova-pro-v1:0`; `grader.provider`, defaults to `bedrock`;
+`grader.system_prompt`; `rubric`). The judge is independent of the graded runs — an OpenAI judge
+grading Bedrock runs is a reasonable setup — but a non-Bedrock `grader.provider` **must** name its
+own `grader.model_id`, since the default is a Bedrock model id and inheriting it elsewhere builds a
+judge that can only fail at the provider. Progress
 streams as NDJSON from `GET /api/v1/evaluations/{id}/events`; results and history live alongside
 runs in the server's SQLite database.
 

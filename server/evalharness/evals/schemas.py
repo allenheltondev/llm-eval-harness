@@ -24,11 +24,37 @@ class GraderConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    #: Defaults to a *Bedrock* model id, which is why the validator below
+    #: exists: the default is only meaningful on the default provider.
     model_id: str = Field(default=DEFAULT_JUDGE_MODEL_ID, min_length=1)
     #: Which SDK runs the judge. Independent of the graded runs' provider -- an
     #: OpenAI judge grading Bedrock runs is a perfectly reasonable setup.
     provider: Provider = DEFAULT_PROVIDER
     system_prompt: str | None = None
+
+    @model_validator(mode="after")
+    def _judge_model_belongs_to_its_provider(self) -> GraderConfig:
+        """A non-Bedrock judge must name its own model.
+
+        ``model_id`` defaults to a Bedrock model id, and
+        :func:`~evalharness.evals.judge.build_judge_model` hands whatever it is
+        given straight to the named provider. Inheriting the default onto
+        OpenAI, Anthropic or Ollama therefore builds a judge that can only fail
+        at the provider, minutes into an evaluation, after the repeats have
+        already been executed and paid for.
+
+        Rejected up front rather than defaulted per provider: model ids churn,
+        and for a local Ollama the right judge depends entirely on what the
+        caller has pulled. Guessing here would rot; asking cannot.
+        """
+        if self.provider != "bedrock" and "model_id" not in self.model_fields_set:
+            raise BadRequestError(
+                f"A {self.provider!r} judge needs an explicit grader.model_id: "
+                f"the default ({DEFAULT_JUDGE_MODEL_ID}) is a Bedrock model id",
+                detail={"provider": self.provider, "default_model_id": DEFAULT_JUDGE_MODEL_ID},
+                code="judge_model_requires_provider",
+            )
+        return self
 
 
 class EvaluationRequest(BaseModel):

@@ -20,7 +20,12 @@ from evalharness.engine.schemas import RunRequest
 from evalharness.errors import BadRequestError, register_exception_handlers
 from evalharness.evals import engine as evals_engine
 from evalharness.evals import grader
-from evalharness.evals.judge import FakeJudgeModel, build_judge_model, call_judge_factory
+from evalharness.evals.judge import (
+    DEFAULT_JUDGE_MODEL_ID,
+    FakeJudgeModel,
+    build_judge_model,
+    call_judge_factory,
+)
 from evalharness.evals.outcomes import RunOutcome
 from evalharness.evals.schemas import EvaluationRequest, GraderConfig
 from evalharness.routers import runs
@@ -160,6 +165,47 @@ def test_the_evaluation_config_persists_both_providers():
 
 def test_the_grader_defaults_to_bedrock():
     assert GraderConfig().provider == "bedrock"
+
+
+def test_a_non_bedrock_judge_must_name_its_own_model():
+    """The default model id is a Bedrock one, so it is only valid on Bedrock.
+
+    `build_judge_model` hands whatever it is given straight to the named
+    provider, so inheriting the default elsewhere builds a judge that can only
+    fail -- minutes in, after the repeats have been executed and paid for.
+    """
+    with pytest.raises(BadRequestError) as caught:
+        GraderConfig(provider="openai")
+    assert caught.value.code == "judge_model_requires_provider"
+    assert DEFAULT_JUDGE_MODEL_ID in caught.value.message
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai", "ollama"])
+def test_every_non_bedrock_provider_is_held_to_it(provider):
+    with pytest.raises(BadRequestError):
+        GraderConfig(provider=provider)
+
+
+def test_an_explicit_model_id_is_always_accepted():
+    assert GraderConfig(provider="openai", model_id="gpt-4o").model_id == "gpt-4o"
+    # Even naming the Bedrock default explicitly: saying it is not inheriting it.
+    assert GraderConfig(provider="ollama", model_id=DEFAULT_JUDGE_MODEL_ID).provider == "ollama"
+
+
+async def test_the_api_reports_the_mismatch_as_a_400(client):
+    """The CLI guards this too, but the rule lives here so both doors agree."""
+    response = await client.post(
+        "/api/v1/evaluations",
+        json={
+            "kind": "determinism",
+            "run_config": {"model_id": "m", "user_prompt": "hi"},
+            "grader": {"provider": "openai"},
+        },
+    )
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["code"] == "judge_model_requires_provider"
+    assert error["detail"] == {"provider": "openai", "default_model_id": DEFAULT_JUDGE_MODEL_ID}
 
 
 # --------------------------------------------------------------------------- #
