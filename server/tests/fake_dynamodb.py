@@ -42,6 +42,11 @@ class FakeDynamoDBClient:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         #: Operation names that should raise on their next invocation.
         self.fail_on: dict[str, Exception] = {}
+        #: Operation names whose next invocation should *take effect* and then
+        #: raise -- a write that landed in DynamoDB but whose response was lost.
+        #: With a ``ConditionalCheckFailedException`` this is also botocore's own
+        #: retry of a landed write failing its condition against itself.
+        self.lose_response_on: dict[str, Exception] = {}
 
     # -- helpers ----------------------------------------------------------- #
 
@@ -124,6 +129,9 @@ class FakeDynamoDBClient:
             attribute = names.get(target.strip(), target.strip())
             updated[attribute] = values[source.strip()]
         self.items[key] = updated
+        lost = self.lose_response_on.pop("update_item", None)
+        if lost is not None:
+            raise lost
         return {}
 
     def query(self, **kwargs: Any) -> dict[str, Any]:

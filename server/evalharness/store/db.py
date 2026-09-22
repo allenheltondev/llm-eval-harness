@@ -80,8 +80,10 @@ def scoped_db(db_path: str) -> Iterator[Engine]:
     try:
         yield engine
     finally:
-        engine.dispose()
+        # Restore first: if disposing raises, the process must still not be
+        # left pointing at this engine and a file about to be deleted.
         _engine = previous
+        engine.dispose()
 
 
 def get_engine() -> Engine:

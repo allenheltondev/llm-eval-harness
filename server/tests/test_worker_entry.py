@@ -15,6 +15,7 @@ guarantee.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 
 import pytest
@@ -994,5 +995,53 @@ def test_the_previous_engine_is_restored_afterwards(tmp_path):
 
     with lambda_app.scratch_database(str(tmp_path / "scratch")):
         assert db.get_engine() is not outer
+
+    assert db.get_engine() is outer
+
+
+def test_a_scratch_setup_failure_happens_before_the_claim(monkeypatch, client, store_factory):
+    """Anything fallible that runs after the claim can strand the row at `running`:
+    every retry would see it claimed and stand down, and nothing would ever
+    execute it. So the scratch database is set up first -- a failure there
+    leaves `pending`, and the retry claims and runs it."""
+
+    @contextlib.contextmanager
+    def disk_full():
+        raise OSError(28, "No space left on device")
+        yield  # pragma: no cover - never reached
+
+    async def fake_seam(request, emit, store, cancelled=None, **_kwargs):
+        store.save_evaluation(status="completed", result=None, error=None)
+        emit({"type": "eval_complete", "status": "completed", "result": None})
+        return {"status": "completed", "result": None, "error": None, "run_ids": []}
+
+    monkeypatch.setattr(interfaces, "load_seam", lambda: fake_seam)
+    store_factory(EVAL_ID).begin(REQUEST)  # the server's pending row
+
+    with pytest.raises(OSError, match="No space left"):
+        lambda_app.handler(PAYLOAD, store_factory=store_factory, scratch=disk_full)
+    assert meta(client)["status"] == {"S": "pending"}  # unclaimed: recoverable
+
+    retried = lambda_app.handler(
+        PAYLOAD, store_factory=store_factory, scratch=contextlib.nullcontext
+    )
+    assert retried["status"] == "completed"
+
+
+def test_a_failing_dispose_still_restores_the_previous_engine(monkeypatch, tmp_path):
+    """Restore first: a dispose that raises must not strand the process on a
+    scratch engine whose file is about to be deleted."""
+    from evalharness.store import db
+
+    outer = db.init_db(str(tmp_path / "outer.db"))
+
+    def failing_dispose() -> None:
+        raise RuntimeError("dispose failed")
+
+    with (
+        pytest.raises(RuntimeError, match="dispose failed"),
+        db.scoped_db(str(tmp_path / "scoped.db")) as scoped,
+    ):
+        monkeypatch.setattr(scoped, "dispose", failing_dispose)
 
     assert db.get_engine() is outer

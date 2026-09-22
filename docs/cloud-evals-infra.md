@@ -143,6 +143,33 @@ status change: exactly one caller can move the row out of `pending`.
 lost executes nothing — it returns `{"status": "duplicate"}` and writes nothing
 at all, because writing anything would step on the delivery that owns the job.
 
+**An ambiguous claim is resolved, not guessed.** The claim's `UpdateItem` can
+land in DynamoDB while its response is lost — and botocore may retry the call
+itself, so the retry fails its condition against the write that already landed
+and surfaces as a `ConditionalCheckFailed`. Read naively, both say "someone else
+won", every redelivery then finds `running` and stands down, and the evaluation
+reads `running` forever with nobody executing it. So the claim writes a
+`claim_token` alongside `status`, and *any* failure is settled by a consistent
+read of the row:
+
+| Row after the failed call | Meaning | Worker |
+| --- | --- | --- |
+| `running`, our token | the write landed; only the reply was lost | owns it, executes |
+| `pending` (or no status) | the write never landed; nothing claimed | re-raises, so Lambda redelivers |
+| anything else | another delivery won, or it is terminal | `duplicate`, runs nothing |
+| read-back fails too | unknowable | raises rather than guess |
+
+The token is random per invocation and deliberately **not** the Lambda request
+id: at-least-once duplicates are deliveries of the *same* event, and a token
+they could share would let two of them both believe they had won.
+
+**The claim is the point of no return, so everything fallible runs before
+it.** Past the claim, any failure strands the row at `running`, because every
+redelivery finds it claimed. Before it, a failure leaves `pending` and a retry
+recovers it. That is why the scratch database is set up before
+`mark_running()`: a full disk or a SQLite error there fails the invocation with
+nothing claimed.
+
 ### Retries are on, because of the claim
 
 `EventInvokeConfig.MaximumRetryAttempts: 2`. This used to be `0`, on the
@@ -160,12 +187,20 @@ read `pending` forever. So the handler **raises**, Lambda redelivers, and the
 retry claims the row and runs it. Nothing was bought on the failed attempt,
 because nothing had been claimed.
 
-What retries still cannot recover: an evaluation stuck at `running` because its
-invocation died after claiming (every redelivery finds it claimed and runs
-nothing), and a failure that persists through every retry, which leaves the row
-`pending`. The two deadline guards exist to keep the first from happening. The
-second would need an on-failure destination and something to settle what lands
-there; that is not built.
+What retries still cannot recover, listed so nobody has to rediscover them:
+
+- **Stuck at `running`**, because the invocation got past the claim and then
+  could not finish settling. That is an invocation killed after claiming, which
+  the two deadline guards exist to prevent; a terminal write that fails because
+  DynamoDB itself is unavailable at the end of the evaluation (logged, never
+  retried, since by then the handler has returned normally); and the narrow case
+  where the claim write landed *and* both it and the consistent read-back failed.
+- **Stuck at `pending`**, because a failure before the claim outlasted every
+  retry.
+
+Both would need something outside the invocation to notice and settle them —
+an on-failure destination, or a sweeper for rows that have not moved in longer
+than an invocation can live. That is not built.
 
 ## The scratch database is per invocation
 

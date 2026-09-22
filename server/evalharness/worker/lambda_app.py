@@ -485,31 +485,34 @@ def handler(
     except interfaces.InvalidPayload as exc:
         return _rejected("invalid_payload", str(exc))
 
-    try:
-        store = store_factory(evaluation_id)
-        store.begin(request)
-        claimed = store.mark_running()
-    except Exception:
-        # Fail the invocation rather than return. Nobody reads an async
-        # invocation's return value, and returning tells Lambda it succeeded:
-        # no retry, and the `pending` row the server wrote before invoking sits
-        # there forever. Raising gets the event redelivered
-        # (`MaximumRetryAttempts` in infra/template.yaml), and redelivery is
-        # safe because nothing has been claimed yet -- the retry claims the row
-        # and runs it, while a delivery that finds it already claimed runs
-        # nothing.
-        logger.exception("eval %s: could not claim; failing for a retry", evaluation_id)
-        raise
-
-    if not claimed:
-        # A second copy of this event can arrive -- asynchronous delivery is
-        # at-least-once, and Lambda redelivers after a failure. Running it
-        # would buy every model run twice and overwrite the first delivery's
-        # EVENT# items, since each store numbers its events from zero. The
-        # conditional pending -> running update is the claim; losing it means
-        # someone else owns this evaluation.
-        return _duplicate(evaluation_id)
-
+    # Everything that can fail runs BEFORE the claim, and the scratch database
+    # is part of that. The claim is the point of no return: past it, a failure
+    # strands the row at `running`, because every redelivery finds it claimed
+    # and stands down. Before it, a failure leaves `pending`, and raising gets
+    # the event redelivered to a retry that claims and runs it.
     with scratch():
+        try:
+            store = store_factory(evaluation_id)
+            store.begin(request)
+            claimed = store.mark_running()
+        except Exception:
+            # Fail the invocation rather than return. Nobody reads an async
+            # invocation's return value, and returning tells Lambda it
+            # succeeded: no retry, and the `pending` row the server wrote before
+            # invoking sits there forever. Raising gets the event redelivered
+            # (`MaximumRetryAttempts` in infra/template.yaml), and redelivery is
+            # safe because nothing has been claimed yet.
+            logger.exception("eval %s: could not claim; failing for a retry", evaluation_id)
+            raise
+
+        if not claimed:
+            # A second copy of this event can arrive -- asynchronous delivery is
+            # at-least-once, and Lambda redelivers after a failure. Running it
+            # would buy every model run twice and overwrite the first delivery's
+            # EVENT# items, since each store numbers its events from zero. The
+            # conditional pending -> running update is the claim; losing it
+            # means someone else owns this evaluation.
+            return _duplicate(evaluation_id)
+
         status = asyncio.run(execute(evaluation_id, request, store, deadline_from(context)))
     return {"status": status, "evaluation_id": evaluation_id, "execution": "cloud"}

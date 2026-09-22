@@ -24,7 +24,7 @@ from evalharness.worker.ddb import (
     event_sk,
     unwrap,
 )
-from tests.fake_dynamodb import FakeDynamoDBClient
+from tests.fake_dynamodb import ConditionalCheckFailedException, FakeDynamoDBClient
 
 TABLE = "llm-eval-harness-ScenariosTable-TEST"
 EVAL_ID = "0123456789abcdef0123456789abcdef"
@@ -958,3 +958,79 @@ def test_the_client_is_built_lazily_for_the_stores_region(monkeypatch):
     assert store.client is sentinel
     assert store.client is sentinel  # built once, then reused
     assert built == [("dynamodb", "eu-west-2")]
+
+
+# --------------------------------------------------------------------------- #
+# The claim survives an ambiguous write
+# --------------------------------------------------------------------------- #
+
+
+class _Lost(Exception):
+    """A network error after the request went out: the response never came back."""
+
+
+def _status(client: FakeDynamoDBClient) -> str:
+    return meta(client)["status"]["S"]
+
+
+def test_a_claim_whose_response_was_lost_is_still_ours(client, store):
+    """The write landed; only the reply was lost. Without reading back, this
+    invocation would raise, every redelivery would see `running`, and the
+    evaluation would sit `running` forever with nobody executing it."""
+    store.begin({"kind": "determinism"})
+    client.lose_response_on["update_item"] = _Lost("connection reset")
+
+    assert store.mark_running() is True
+    assert _status(client) == "running"
+
+
+def test_botocores_retry_of_a_landed_claim_is_still_ours(client, store):
+    """botocore retries the lost request itself, and the retry fails its own
+    condition against the write that already landed. That surfaces as a
+    ConditionalCheckFailed -- which, read naively, says someone else won."""
+    store.begin({"kind": "determinism"})
+    client.lose_response_on["update_item"] = ConditionalCheckFailedException()
+
+    assert store.mark_running() is True
+
+
+def test_a_claim_that_did_not_land_is_raised_for_a_retry(client, store):
+    """Nothing claimed, so failing the invocation is safe: the retry claims it."""
+    store.begin({"kind": "determinism"})
+    client.fail_on["update_item"] = _Lost("connection refused")
+
+    with pytest.raises(_Lost):
+        store.mark_running()
+    assert _status(client) == "pending"
+
+
+def test_an_ambiguous_write_that_another_delivery_won_is_not_ours(client, store):
+    """The read-back decides by token, not by status: `running` alone proves nothing."""
+    store.begin({"kind": "determinism"})
+    rival = DynamoEvalStore(TABLE, EVAL_ID, client=client, clock=lambda: FIXED_NOW)
+    assert rival.mark_running() is True
+
+    client.lose_response_on["update_item"] = _Lost("timeout")  # never lands: condition fails
+    assert store.mark_running() is False
+
+
+def test_if_the_read_back_fails_too_the_claim_is_not_assumed(client, store):
+    """With no way to know, do not execute. Raising lets Lambda redeliver."""
+    store.begin({"kind": "determinism"})
+    client.lose_response_on["update_item"] = _Lost("connection reset")
+    client.fail_on["get_item"] = _Lost("still unreachable")
+
+    with pytest.raises(_Lost, match="still unreachable"):
+        store.mark_running()
+
+
+def test_every_store_claims_with_its_own_token(client):
+    """Per invocation, deliberately -- see DynamoEvalStore.mark_running."""
+    first = DynamoEvalStore(TABLE, EVAL_ID, client=client)
+    second = DynamoEvalStore(TABLE, EVAL_ID, client=client)
+    first.begin({"kind": "determinism"})
+
+    assert first.mark_running() is True
+    token = meta(client)["claim_token"]["S"]
+    assert token and second.mark_running() is False
+    assert meta(client)["claim_token"]["S"] == token  # the loser changed nothing
