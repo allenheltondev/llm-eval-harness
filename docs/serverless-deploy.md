@@ -92,18 +92,29 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
   `exp` and `token_use` checked. Failure is `401 {"error": {"code":
   "unauthorized"}}`; an unreachable JWKS is `502 upstream_error`. Neither
   setting present (every local run, the E2E suite) means no gate.
-- **Health**: `GET /health` stays open and gains
-  `"auth": {"required": false}` or `{"required": true, "provider":
-  "cognito", "region", "user_pool_id", "client_id"}` — the SPA's only source
-  of auth configuration, so nothing is baked in at build time.
-- **SPA** (`app/src/auth/`): `AuthGate` reads `/health`; when auth is
-  required it configures the core, installs a token provider on the HTTP
-  layer (`setAuthTokenProvider`, so every JSON request and NDJSON stream
-  carries the bearer header) and renders `LoginPage` until a session exists.
-  A `401` from the API drops the session and returns to sign-in with a
-  notice. Sign-in, the `NEW_PASSWORD_REQUIRED` first-login step, forgot /
-  reset password, silent refresh and revoke-on-sign-out are the rsc-core
-  core, minus sign-up and the cross-subdomain cookie bridge.
+- **Authorization** (optional): `NIMBUS_AUTH_REQUIRED_GROUP` names a Cognito
+  group a token must carry in `cognito:groups`; a valid token without it is
+  `403 {"error": {"code": "forbidden", "detail": {"required_group": ...}}}`.
+  This is what makes a pool that other apps share -- and that anyone can sign
+  up to -- safe: an account proves who someone is; the group grants them
+  this stack.
+- **Health**: `GET /health` stays open and publishes
+  `"auth": {"required": false, "supports_required_group": true}` or
+  `{"required": true, "provider": "cognito", "region", "user_pool_id",
+  "client_id", "required_group", "supports_required_group": true}` — the
+  SPA's only source of auth configuration, so nothing is baked in at build
+  time. `supports_required_group` says the running server enforces a group,
+  which a deploy that moves the stack to a shared pool checks first.
+- **SPA** (`app/src/auth/`): sign-in is the Ready, Set, Cloud package,
+  `@readysetcloud/ui/auth` (its `LoginForm` with the new-password,
+  confirmation, reset and -- on a group-gated pool -- sign-up flows; silent
+  refresh; revoke on sign-out; the `rsc:auth` session). `AuthGate` reads
+  `/health`; when auth is required it configures the package, installs its
+  token provider on the HTTP layer (`setAuthTokenProvider`, so every JSON
+  request and NDJSON stream carries the bearer header) and renders the
+  sign-in flows until a session exists. A `401` from the API drops the
+  session and returns to sign-in with a notice; a `403` shows a no-access
+  screen naming the account and the group to ask for.
 - **Users**: `make create-user EMAIL=...` (`admin-create-user` against the
   stack's `UserPoolId` output). Cognito emails a temporary password.
 
@@ -137,7 +148,15 @@ something the code on the other side of that gap still needs. The rename from
 2. the `EVALHARNESS_*` variables were dropped and the `Handler` moved to
    `nimbus.worker.lambda_app.handler`, with the shim still shipped in case the
    new code landed before the new handler;
-3. the shim was deleted.
+3. the shim was deleted. That release is only safe once step 2 has
+   *succeeded* on the stack, so `make deploy-backend` now first runs
+   `scripts/check-deploy-prerequisites.sh`, which reads the live worker's
+   `Handler` and stops the deploy unless it is already
+   `nimbus.worker.lambda_app.handler`. The workflow's concurrency group orders
+   deploys but would still run this one after a failed step 2. The check fails
+   closed: it needs `cloudformation:DescribeStackResource` and
+   `lambda:GetFunctionConfiguration`, and a denial stops the deploy with the
+   reason.
 
 The same pattern applies to any future rename of a setting or a handler: add
 the new name alongside the old, switch over, then remove the old — one deploy

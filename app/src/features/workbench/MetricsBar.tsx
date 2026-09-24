@@ -42,7 +42,7 @@ export default function MetricsBar() {
   const elapsed = startedAt === null ? undefined : (endedAt ?? Date.now()) - startedAt
 
   return (
-    <section className="card" aria-labelledby="metrics-bar-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="metrics-bar-heading">
       <h2 id="metrics-bar-heading" className="sr-only">
         Run metrics
       </h2>

@@ -1,5 +1,5 @@
 /**
- * AppShell: the tab bar mounts exactly one page at a time, and every tab in
+ * AppShell: the AppNav rail mounts exactly one page at a time, and every section in
  * `TABS` resolves to a real page (a missing case in `TabPage` would render
  * nothing and fail here rather than silently showing a blank tab).
  *
@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 
 const toolsMock = vi.fn()
 const getEvaluationMock = vi.fn()
@@ -48,8 +48,10 @@ const PAGE_TEST_IDS: Record<string, string> = {
 }
 
 beforeEach(() => {
-  // The route is the URL fragment, which outlives a test in jsdom.
+  // The route is the URL fragment, which outlives a test in jsdom; so does the
+  // theme AppNav writes onto <html>.
   window.history.replaceState(null, '', '/')
+  delete document.documentElement.dataset.theme
   getEvaluationMock.mockReset()
   getEvaluationMock.mockReturnValue(new Promise(() => {}))
   localStorage.clear()
@@ -69,55 +71,72 @@ beforeEach(() => {
 })
 
 describe('AppShell', () => {
-  it('renders the header title and exactly the five tabs, with no Scenarios tab', () => {
+  /** The rail's link for a section. */
+  const link = (name: string) =>
+    within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('link', {
+      name
+    })
+
+  it('renders the Nimbus rail with exactly the five sections, and no Scenarios', () => {
     render(<AppShell />)
 
-    expect(screen.getByRole('heading', { name: 'Nimbus' })).toBeInTheDocument()
+    expect(screen.getByText('Nimbus')).toBeInTheDocument()
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    expect(
+      within(nav)
+        .getAllByRole('link')
+        .map(item => item.textContent)
+    ).toEqual(['Workbench', 'Evals', 'History', 'Guardrails', 'About'])
+    expect(within(nav).queryByRole('link', { name: 'Scenarios' })).not.toBeInTheDocument()
+  })
 
-    const tabs = screen.getAllByRole('tab')
-    expect(tabs.map(tab => tab.textContent)).toEqual([
-      'Workbench',
-      'Evals',
-      'History',
-      'Guardrails',
-      'About'
-    ])
-    expect(screen.queryByRole('tab', { name: 'Scenarios' })).not.toBeInTheDocument()
+  it('groups the sections under their headings', () => {
+    render(<AppShell />)
+
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    const titles = Array.from(nav.querySelectorAll('.app-nav-section-title'), el => el.textContent)
+    expect(titles).toEqual(['Run', 'Review', 'Manage'])
   })
 
   it('opens on the Workbench', () => {
     render(<AppShell />)
 
     expect(screen.getByTestId('workbench-page')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Workbench' })).toHaveAttribute('aria-selected', 'true')
+    expect(link('Workbench')).toHaveAttribute('aria-current', 'page')
   })
 
   it.each(TABS.map(tab => [tab.id, tab.label] as const))(
-    'switching to %s mounts its page and nothing else',
+    'following the %s link mounts its page and nothing else',
     (id, label) => {
       render(<AppShell />)
 
-      fireEvent.click(screen.getByRole('tab', { name: label }))
+      expect(link(label)).toHaveAttribute('href', `#/${id}`)
+      act(() => {
+        window.history.replaceState(null, '', `/#/${id}`)
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+      })
 
       expect(screen.getByTestId(PAGE_TEST_IDS[id])).toBeInTheDocument()
-      expect(screen.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true')
+      expect(link(label)).toHaveAttribute('aria-current', 'page')
 
-      // Every other page is unmounted.
+      // Every other page is unmounted, and no other link is current.
       for (const [otherId, testId] of Object.entries(PAGE_TEST_IDS)) {
         if (otherId === id) continue
         expect(screen.queryByTestId(testId)).not.toBeInTheDocument()
       }
+      expect(
+        within(screen.getByRole('navigation', { name: 'Primary navigation' }))
+          .getAllByRole('link')
+          .filter(item => item.getAttribute('aria-current') === 'page')
+      ).toHaveLength(1)
     }
   )
 
-  it('points the tabpanel at the active tab', () => {
+  it('labels the main region with the current section', () => {
+    window.history.replaceState(null, '', '/#/about')
     render(<AppShell />)
 
-    fireEvent.click(screen.getByRole('tab', { name: 'About' }))
-
-    const panel = screen.getByRole('tabpanel')
-    expect(panel).toHaveAttribute('id', 'tabpanel-about')
-    expect(panel).toHaveAttribute('aria-labelledby', 'tab-about')
+    expect(screen.getByRole('main', { name: 'About' })).toHaveAttribute('id', 'section-about')
   })
 
   it('renders no mascot, companion or bring-back control', () => {
@@ -133,7 +152,7 @@ describe('AppShell', () => {
     render(<AppShell />)
 
     expect(screen.getByTestId('evals-page')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Evals' })).toHaveAttribute('aria-selected', 'true')
+    expect(link('Evals')).toHaveAttribute('aria-current', 'page')
     expect(getEvaluationMock).toHaveBeenCalledWith('eval-1')
   })
 
@@ -144,12 +163,10 @@ describe('AppShell', () => {
     expect(screen.getByTestId('history-page')).toBeInTheDocument()
   })
 
-  it('writes the tab into the address bar', () => {
+  it('points the brand at the Workbench', () => {
     render(<AppShell />)
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Guardrails' }))
-
-    expect(window.location.hash).toBe('#/guardrails')
+    expect(screen.getByRole('link', { name: 'Nimbus' })).toHaveAttribute('href', '#/workbench')
   })
 
   it('follows the address bar (back button, pasted link)', () => {
@@ -161,5 +178,50 @@ describe('AppShell', () => {
     })
 
     expect(screen.getByTestId('about-page')).toBeInTheDocument()
+  })
+
+  it('remembers the theme the toggle picks', () => {
+    render(<AppShell />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Switch to (dark|light) theme/ }))
+
+    const chosen = localStorage.getItem('nimbus.theme')
+    expect(chosen === 'dark' || chosen === 'light').toBe(true)
+    expect(document.documentElement.dataset.theme).toBe(chosen)
+  })
+
+  it('starts from the remembered theme', () => {
+    localStorage.setItem('nimbus.theme', 'dark')
+    render(<AppShell />)
+
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeInTheDocument()
+  })
+
+  it('still themes when storage is unavailable (private mode)', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    try {
+      render(<AppShell />)
+
+      fireEvent.click(screen.getByRole('button', { name: /Switch to (dark|light) theme/ }))
+
+      expect(document.documentElement.dataset.theme).toMatch(/^(dark|light)$/)
+    } finally {
+      getItem.mockRestore()
+      setItem.mockRestore()
+    }
+  })
+
+  it('shows no sign-in controls or app launcher when the stack has no sign-in', () => {
+    render(<AppShell />)
+
+    expect(screen.queryByRole('button', { name: 'Open profile menu' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open app launcher' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Sign in' })).not.toBeInTheDocument()
   })
 })

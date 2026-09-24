@@ -74,6 +74,22 @@ describe('JSON requests', () => {
     expect(onUnauthorized).not.toHaveBeenCalled()
   })
 
+  it('report a 403 to the provider as not granted, not as signed out', async () => {
+    const onUnauthorized = vi.fn()
+    const onForbidden = vi.fn()
+    setAuthTokenProvider({ getToken: async () => 'tok', onUnauthorized, onForbidden })
+    mockFetch(jsonResponse({ error: { code: 'forbidden', message: 'no', detail: null } }, 403))
+    await expect(http.get('/runs')).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    expect(onForbidden).toHaveBeenCalledTimes(1)
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('tolerate a provider without an onForbidden hook', async () => {
+    setAuthTokenProvider({ getToken: async () => 'tok' })
+    mockFetch(jsonResponse({}, 403))
+    await expect(http.get('/runs')).rejects.toMatchObject({ status: 403 })
+  })
+
   it('tolerate a provider without an onUnauthorized hook', async () => {
     setAuthTokenProvider({ getToken: async () => 'tok' })
     mockFetch(jsonResponse({}, 401))
@@ -107,5 +123,15 @@ describe('NDJSON streams', () => {
       status: 401
     })
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 403 on a stream is reported to the provider', async () => {
+    const onForbidden = vi.fn()
+    setAuthTokenProvider({ getToken: async () => 'tok', onForbidden })
+    mockFetch(jsonResponse({ error: { code: 'forbidden', message: 'no', detail: null } }, 403))
+    await expect(streamNdjson('/runs', {}, { onEvent: () => undefined })).rejects.toMatchObject({
+      status: 403
+    })
+    expect(onForbidden).toHaveBeenCalledTimes(1)
   })
 })

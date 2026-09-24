@@ -11,7 +11,7 @@ export default function PromptPanel() {
   const setUserPrompt = useRunConfigStore(state => state.setUserPrompt)
 
   return (
-    <section className="card" aria-labelledby="prompt-panel-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="prompt-panel-heading">
       <h2 id="prompt-panel-heading" className="text-base font-semibold text-gray-900 mb-3">
         Prompts
       </h2>
@@ -22,7 +22,7 @@ export default function PromptPanel() {
         </label>
         <textarea
           id="system-prompt"
-          className="input-field font-mono text-sm"
+          className="input font-mono text-sm"
           rows={6}
           placeholder="You are a helpful assistant…"
           value={systemPrompt}
@@ -36,7 +36,7 @@ export default function PromptPanel() {
         </label>
         <textarea
           id="user-prompt"
-          className="input-field font-mono text-sm"
+          className="input font-mono text-sm"
           rows={5}
           placeholder="Ask the model something…"
           value={userPrompt}

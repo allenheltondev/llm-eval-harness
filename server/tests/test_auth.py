@@ -115,7 +115,7 @@ def test_auth_config_derives_issuer_and_jwks_url():
 
 
 def test_health_block_off():
-    assert auth.health_block(Settings()) == {"required": False}
+    assert auth.health_block(Settings()) == {"required": False, "supports_required_group": True}
 
 
 def test_health_block_on_publishes_sign_in_inputs():
@@ -126,7 +126,21 @@ def test_health_block_on_publishes_sign_in_inputs():
         "region": "eu-west-1",
         "user_pool_id": POOL_ID,
         "client_id": CLIENT_ID,
+        "required_group": None,
+        "supports_required_group": True,
     }
+
+
+def test_health_block_names_the_required_group():
+    settings = Settings(
+        auth_user_pool_id=POOL_ID, auth_client_id=CLIENT_ID, auth_required_group="nimbus"
+    )
+    assert auth.health_block(settings)["required_group"] == "nimbus"
+
+
+def test_a_blank_required_group_means_none(monkeypatch):
+    monkeypatch.setenv("NIMBUS_AUTH_REQUIRED_GROUP", "  ")
+    assert Settings().auth_required_group is None
 
 
 @pytest.mark.parametrize(
@@ -154,7 +168,7 @@ def test_bearer_token_parsing(header: str, expected: str | None):
 
 async def test_auth_off_leaves_every_route_open(client):
     response = await client.get("/api/v1/health")
-    assert response.json()["auth"] == {"required": False}
+    assert response.json()["auth"] == {"required": False, "supports_required_group": True}
     # No bearer token and yet not a 401: the guardrails listing needs AWS
     # credentials it does not have, but the *gate* let it through.
     response = await client.get("/api/v1/runs")
@@ -171,6 +185,8 @@ async def test_health_stays_open_and_advertises_the_pool(client):
         "region": REGION,
         "user_pool_id": POOL_ID,
         "client_id": CLIENT_ID,
+        "required_group": None,
+        "supports_required_group": True,
     }
 
 
@@ -370,3 +386,67 @@ async def test_verified_claims_land_on_request_state(app, signer: _Signer):
     assert response.status_code == 200
     assert seen["sub"] == "user-123"
     assert seen["email"] == "person@example.com"
+
+
+# --------------------------------------------------------------------------- #
+# the required group: a shared pool authenticates, the group authorizes
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def group_required(auth_enabled, monkeypatch):
+    monkeypatch.setenv("NIMBUS_AUTH_REQUIRED_GROUP", "nimbus")
+
+
+@pytest.mark.usefixtures("group_required", "jwks")
+async def test_a_member_of_the_required_group_passes(client, signer: _Signer):
+    token = signer.token(**{"cognito:groups": ["rsc-free", "nimbus"]})
+
+    response = await client.get("/api/v1/runs", headers=_bearer(token))
+
+    assert response.status_code == 200
+
+
+@pytest.mark.usefixtures("group_required", "jwks")
+@pytest.mark.parametrize(
+    "groups",
+    [None, [], ["rsc-free"], ["rsc-pro", "nimbus-admins"], "nimbus"],
+    ids=["no-groups-claim", "empty", "other-group", "prefix-only", "string-not-list"],
+)
+async def test_a_valid_token_outside_the_group_is_403(client, signer: _Signer, groups):
+    token = signer.token(**{"cognito:groups": groups})
+
+    response = await client.get("/api/v1/runs", headers=_bearer(token))
+
+    assert response.status_code == 403
+    body = response.json()["error"]
+    assert body["code"] == "forbidden"
+    assert body["detail"] == {"required_group": "nimbus"}
+
+
+@pytest.mark.usefixtures("group_required", "jwks")
+async def test_an_access_token_carries_its_groups_too(client, signer: _Signer):
+    member = signer.token(
+        token_use="access", aud=None, client_id=CLIENT_ID, **{"cognito:groups": ["nimbus"]}
+    )
+    outsider = signer.token(token_use="access", aud=None, client_id=CLIENT_ID)
+
+    assert (await client.get("/api/v1/runs", headers=_bearer(member))).status_code == 200
+    assert (await client.get("/api/v1/runs", headers=_bearer(outsider))).status_code == 403
+
+
+@pytest.mark.usefixtures("group_required", "jwks")
+async def test_an_invalid_token_is_still_401_not_403(client, signer: _Signer):
+    token = signer.token(aud="another-client", **{"cognito:groups": ["nimbus"]})
+
+    response = await client.get("/api/v1/runs", headers=_bearer(token))
+
+    assert response.status_code == 401
+
+
+@pytest.mark.usefixtures("group_required")
+async def test_health_stays_open_and_names_the_group(client):
+    response = await client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    assert response.json()["auth"]["required_group"] == "nimbus"

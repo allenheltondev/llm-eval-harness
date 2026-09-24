@@ -7,7 +7,7 @@
  * evaluation is active, mirroring how `OutputPane` reads `runStore` directly.
  */
 
-import LoadingSpinner from '../../components/LoadingSpinner'
+import { LoadingSpinner } from '@readysetcloud/ui'
 import ProgressBar from '../../components/ProgressBar'
 import { selectProgressFraction, useEvalStore, type EvalPhase } from '../../stores'
 import type { EvalStreamEvent } from '../../api'
@@ -65,12 +65,21 @@ export default function EvalProgress() {
   const feed = buildFeed(events)
 
   return (
-    <section className="card" aria-labelledby="eval-progress-heading" data-testid="eval-progress">
+    <section
+      className="card p-4 sm:p-6"
+      aria-labelledby="eval-progress-heading"
+      data-testid="eval-progress"
+    >
       <div className="flex items-center justify-between mb-3">
         <h3 id="eval-progress-heading" className="text-base font-semibold text-gray-900">
           {PHASE_LABELS[status]}
         </h3>
-        {status === 'grading' && <LoadingSpinner size="sm" text="Grading…" inline />}
+        {status === 'grading' && (
+          <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <LoadingSpinner size="sm" />
+            Grading…
+          </span>
+        )}
       </div>
 
       <ProgressBar
@@ -115,7 +124,11 @@ export default function EvalProgress() {
         ))}
       </ul>
 
-      <button type="button" className="btn-secondary mt-4" onClick={() => void cancelEvaluation()}>
+      <button
+        type="button"
+        className="btn btn-secondary mt-4"
+        onClick={() => void cancelEvaluation()}
+      >
         Cancel
       </button>
     </section>

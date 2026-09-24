@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     #: The pool's app client id -- what the SPA signs in with, and the
     #: ``aud``/``client_id`` every accepted token must carry.
     auth_client_id: str | None = None
+    #: The Cognito group a signed-in user must belong to. With a pool that
+    #: several apps share -- and that anyone can sign up to -- a valid token
+    #: only proves who someone is; membership of this group is what grants
+    #: them this stack. Unset: every valid token is accepted.
+    auth_required_group: str | None = None
 
     @classmethod
     def settings_customise_sources(
@@ -164,7 +169,13 @@ class Settings(BaseSettings):
             self.db_path = default_db_path()
         return self
 
-    @field_validator("anthropic_api_key", "openai_api_key", "auth_user_pool_id", "auth_client_id")
+    @field_validator(
+        "anthropic_api_key",
+        "openai_api_key",
+        "auth_user_pool_id",
+        "auth_client_id",
+        "auth_required_group",
+    )
     @classmethod
     def _blank_key_is_unset(cls, value: str | None) -> str | None:
         """``FOO_API_KEY=`` in a shell profile means unset, not "empty key"."""

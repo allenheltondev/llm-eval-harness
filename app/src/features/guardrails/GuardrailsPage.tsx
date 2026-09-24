@@ -7,7 +7,8 @@
  */
 
 import { useEffect, useState } from 'react'
-import LoadingSpinner from '../../components/LoadingSpinner'
+import { Loading, StatusBadge } from '@readysetcloud/ui'
+import { statusTone } from '../../components/status'
 import { useGuardrailStore, type GuardrailStateData } from '../../stores'
 import type { GuardrailLifecycleStatus, GuardrailSummary } from '../../api'
 import GuardrailEditor from './GuardrailEditor'
@@ -27,20 +28,11 @@ const STATUS_LABELS: Record<GuardrailLifecycleStatus, string> = {
   DELETING: 'Deleting'
 }
 
-const STATUS_CLASSES: Record<GuardrailLifecycleStatus, string> = {
-  READY: 'bg-green-100 text-green-800',
-  CREATING: 'bg-amber-100 text-amber-800',
-  UPDATING: 'bg-amber-100 text-amber-800',
-  VERSIONING: 'bg-blue-100 text-blue-800',
-  FAILED: 'bg-red-100 text-red-800',
-  DELETING: 'bg-gray-200 text-gray-700'
-}
-
-function StatusBadge({ status }: { status: GuardrailLifecycleStatus }) {
+function LifecycleBadge({ status }: { status: GuardrailLifecycleStatus }) {
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_CLASSES[status]}`}>
+    <StatusBadge tone={statusTone(status)} role={undefined}>
       {STATUS_LABELS[status]}
-    </span>
+    </StatusBadge>
   )
 }
 
@@ -74,7 +66,7 @@ function GuardrailRow({
         <div className="text-xs text-gray-500 font-mono">{guardrail.id}</div>
       </td>
       <td className="py-2 pr-4">
-        <StatusBadge status={guardrail.status} />
+        <LifecycleBadge status={guardrail.status} />
       </td>
       <td className="py-2 pr-4 text-sm text-gray-700">{guardrail.version}</td>
       <td className="py-2 pr-4 text-sm text-gray-600">{formatDate(guardrail.createdAt)}</td>
@@ -147,12 +139,12 @@ function GuardrailList({
   onVersions: (guardrail: GuardrailSummary) => void
 }) {
   return (
-    <section className="card" aria-labelledby="guardrails-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="guardrails-heading">
       <div className="flex items-center justify-between mb-4">
         <h2 id="guardrails-heading" className="text-lg font-semibold text-gray-900">
           Guardrails
         </h2>
-        <button type="button" className="btn-primary" onClick={onNew}>
+        <button type="button" className="btn btn-primary" onClick={onNew}>
           New guardrail
         </button>
       </div>
@@ -163,7 +155,7 @@ function GuardrailList({
         </p>
       )}
 
-      {loading && guardrails.length === 0 && <LoadingSpinner text="Loading guardrails…" />}
+      {loading && guardrails.length === 0 && <Loading text="Loading guardrails…" />}
 
       {loaded && !loading && guardrails.length === 0 && !error && (
         <p className="text-sm text-gray-600" data-testid="guardrails-empty">

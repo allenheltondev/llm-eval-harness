@@ -543,10 +543,32 @@ async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: 
         )
     )
     _note(err, f"| signed in to {url} as {email}; commands now run there")
+    await _warn_if_not_granted(url, err)
     _note(err, "| pass --local to use this machine, or `nimbus logout` to stop")
     if args.json:
         _write(out, render.dumps({"url": url, "email": email}) + "\n")
     return EXIT_OK
+
+
+async def _warn_if_not_granted(url: str, err: TextIO) -> None:
+    """Say so now if the stack will refuse this account, not on its first command.
+
+    A shared user pool signs anyone in who has an account; the stack may still
+    require a group this account is not in. Best effort: anything other than a
+    clear refusal (the stack is slow, say) is left for the first real command.
+    """
+    login = remote.load_login()
+    if login is None:
+        return
+    try:
+        async with remote.http_client() as http:
+            probe = remote.RemoteApi(http, login, refresh_on_401=False)
+            await probe.get("/runs", {"limit": 1})
+    except remote.RemoteForbiddenError as exc:
+        _note(err, f"| but {url} refuses this account: {exc.message}")
+        _note(err, "| ask the stack's owner to grant you access (`make grant-access EMAIL=...`)")
+    except remote.RemoteError:
+        return
 
 
 async def logout(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:

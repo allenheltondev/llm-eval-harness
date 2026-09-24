@@ -692,13 +692,16 @@ export interface HealthResponse {
 }
 
 export type HealthAuth =
-  | { required: false }
+  | { required: false; supports_required_group?: boolean }
   | {
       required: true
       provider: 'cognito'
       region: string
       user_pool_id: string
       client_id: string
+      /** The Cognito group access takes; `null` when any signed-in user may use the stack. */
+      required_group?: string | null
+      supports_required_group?: boolean
     }
 
 /* -------------------------------------------------------------------------- */

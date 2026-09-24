@@ -53,7 +53,7 @@ export default function ModelPanel() {
   }
 
   return (
-    <section className="card" aria-labelledby="model-panel-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="model-panel-heading">
       <div className="flex items-center justify-between mb-3">
         <h2 id="model-panel-heading" className="text-base font-semibold text-gray-900">
           Model
@@ -70,7 +70,7 @@ export default function ModelPanel() {
       </label>
       <select
         id="model-select"
-        className="select-field"
+        className="input"
         value={modelId}
         onChange={event => handleSelect(event.target.value)}
       >
@@ -131,7 +131,7 @@ export default function ModelPanel() {
               <input
                 id="model-id-manual"
                 type="text"
-                className="input-field font-mono text-xs"
+                className="input font-mono text-xs"
                 placeholder="e.g. anthropic.claude-3-5-sonnet-20241022-v2:0"
                 value={modelId}
                 onChange={event => setModelId(event.target.value)}
@@ -146,7 +146,7 @@ export default function ModelPanel() {
               </label>
               <select
                 id="model-provider-manual"
-                className="select-field text-xs"
+                className="input text-xs"
                 value={provider}
                 onChange={event => setProvider(event.target.value as ModelSource)}
               >

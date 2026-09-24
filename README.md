@@ -272,9 +272,14 @@ make create-user EMAIL=you@example.com          # STACK_NAME=... for another sta
 
 Sign-in talks to `cognito-idp.<region>.amazonaws.com` straight from the browser (no Hosted UI,
 no redirect); the resulting ID token is sent as `Authorization: Bearer` and refreshed silently
-for as long as the refresh token lasts (30 days). Sign out from the header. This is the same
-pattern as [`readysetcloud/rsc-core`](https://github.com/readysetcloud/rsc-core)'s
-`@readysetcloud/ui/auth`, trimmed to what this app needs.
+for as long as the refresh token lasts (30 days). Sign out from the profile menu. Sign-in is
+[`readysetcloud/rsc-core`](https://github.com/readysetcloud/rsc-core)'s
+`@readysetcloud/ui/auth`, the same package every Ready, Set, Cloud app uses.
+
+The server can also require a Cognito **group** (`NIMBUS_AUTH_REQUIRED_GROUP`): a valid token
+without it gets `403`, and the web UI says which group to ask for. That is what lets a stack
+share a user pool with other apps -- where anyone may hold an account -- while only the people
+you grant can run evaluations on it.
 
 > **What the gate is, and is not.** The Lambda Function URL stays `AuthType: NONE` and CloudFront
 > stays open, because neither can be closed for a browser that POSTs (CloudFront OAC for
@@ -498,6 +503,13 @@ Copy `app/.env.example` to `app/.env.local` to override it.
 Set it to `/` for a same-origin build (what `make deploy` does behind CloudFront) — the API calls
 then go to relative `/api/v1/...` paths. Note that `/`, not `""`, is the value: a blank
 `VITE_API_URL` counts as unset and falls back to `http://localhost:8000`.
+
+The web UI is built on the Ready, Set, Cloud design system,
+[`@readysetcloud/ui`](https://www.npmjs.com/package/@readysetcloud/ui): its tokens and Tailwind
+preset (every color, light and dark), its components (buttons, cards, inputs, status badges,
+loading states), its `AppNav` rail with the RSC app launcher, and its sign-in flows. Colors are
+never defined in the app, and a component the package ships is used rather than rebuilt; the
+package's `AGENTS.md` (`app/node_modules/@readysetcloud/ui/AGENTS.md`) has the full contract.
 
 ## Repo layout
 

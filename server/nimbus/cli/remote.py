@@ -90,6 +90,12 @@ class NotSignedInError(RemoteError):
     code = "not_signed_in"
 
 
+class RemoteForbiddenError(RemoteError):
+    """The server answered 403: signed in, but this account is not granted the stack."""
+
+    code = "forbidden"
+
+
 class RemoteNotFoundError(RemoteError):
     """The server answered 404: the thing asked for is not there."""
 
@@ -453,9 +459,15 @@ class RemoteApi:
     from it rather than from a stale one.
     """
 
-    def __init__(self, http: httpx.AsyncClient, login: Login) -> None:
+    def __init__(
+        self, http: httpx.AsyncClient, login: Login, *, refresh_on_401: bool = True
+    ) -> None:
         self._http = http
         self.login = login
+        #: Off for a probe made with a token that was minted a moment ago: a
+        #: 401 then is not an expired token, and refreshing would only
+        #: replace the one that was just saved.
+        self._refresh_on_401 = refresh_on_401
 
     async def _refresh(self) -> None:
         if not self.login.refresh_token:
@@ -492,7 +504,7 @@ class RemoteApi:
             response = await self._http.send(
                 self._build(method, path, await self._headers(), body), stream=stream
             )
-            if response.status_code == 401 and self.login.auth is not None:
+            if response.status_code == 401 and self.login.auth is not None and self._refresh_on_401:
                 await response.aclose()
                 await self._refresh()
                 response = await self._http.send(
@@ -507,6 +519,8 @@ class RemoteApi:
             await response.aclose()
             if response.status_code == 401:
                 raise NotSignedInError(f"{self.login.url} refused the sign-in: {message}")
+            if response.status_code == 403:
+                raise RemoteForbiddenError(message)
             if response.status_code == 404:
                 raise RemoteNotFoundError(message)
             raise RemoteError(message)

@@ -45,7 +45,11 @@ export default function CompareView({ runIds, onClose }: CompareViewProps) {
   const highlight = diffHighlight(left, right)
 
   return (
-    <section className="card" aria-labelledby="compare-view-heading" data-testid="compare-view">
+    <section
+      className="card p-4 sm:p-6"
+      aria-labelledby="compare-view-heading"
+      data-testid="compare-view"
+    >
       <div className="flex items-center justify-between mb-4">
         <h2 id="compare-view-heading" className="text-base font-semibold text-gray-900">
           Compare runs

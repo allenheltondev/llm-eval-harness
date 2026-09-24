@@ -170,7 +170,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
   }
 
   return (
-    <section className="card" aria-labelledby="determinism-launcher-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="determinism-launcher-heading">
       <h2 id="determinism-launcher-heading" className="text-base font-semibold text-gray-900 mb-3">
         New determinism evaluation
       </h2>
@@ -220,7 +220,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
                   className={`px-3 py-1.5 cursor-pointer first:border-r first:border-gray-300 ${
                     effectiveExecution === option.value
                       ? 'bg-primary-600 text-white'
-                      : 'bg-white text-gray-700'
+                      : 'bg-surface text-gray-700'
                   } ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-primary-50'}`}
                 >
                   <input
@@ -253,7 +253,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
             type="number"
             min={N_MIN}
             max={N_MAX}
-            className="input-field"
+            className="input"
             value={n}
             onChange={event => {
               const raw = Number(event.target.value)
@@ -272,7 +272,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
           </label>
           <select
             id="grader-model-select"
-            className="select-field"
+            className="input"
             value={graderModelId}
             onChange={event => handleGraderModelChange(event.target.value)}
           >
@@ -295,7 +295,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
           </label>
           <textarea
             id="eval-rubric"
-            className="input-field font-mono text-sm"
+            className="input font-mono text-sm"
             rows={3}
             placeholder="How the judge should score consistency…"
             value={rubric}
@@ -327,7 +327,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
               </label>
               <textarea
                 id="grader-system-prompt"
-                className="input-field font-mono text-sm"
+                className="input font-mono text-sm"
                 rows={4}
                 placeholder="Override the judge's default system prompt…"
                 value={graderSystemPrompt}
@@ -339,7 +339,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
 
         <button
           type="button"
-          className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+          className="btn btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={!canRun || !graderReady || isEvaluating}
           onClick={() => void handleStart()}
         >

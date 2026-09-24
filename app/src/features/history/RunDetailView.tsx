@@ -11,7 +11,8 @@
 import { useEffect } from 'react'
 import { useHistoryStore } from '../../stores'
 import type { RunDetail, RunMetrics, ToolTranscriptEntry } from '../../api'
-import LoadingSpinner from '../../components/LoadingSpinner'
+import { Loading, StatusBadge } from '@readysetcloud/ui'
+import { statusTone } from '../../components/status'
 
 export interface RunDetailHighlight {
   model_id?: boolean
@@ -23,16 +24,6 @@ export interface RunDetailViewProps {
   runId: string
   highlight?: RunDetailHighlight
   className?: string
-}
-
-const STATUS_CLASSES: Record<string, string> = {
-  completed: 'bg-primary-100 text-primary-800',
-  error: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-200 text-gray-700'
-}
-
-function statusBadgeClass(status: string): string {
-  return STATUS_CLASSES[status] ?? 'bg-gray-100 text-gray-700'
 }
 
 function formatTs(ts: string): string {
@@ -79,7 +70,7 @@ function MetricStat({ label, value, highlighted }: MetricStatProps) {
 function ToolTranscriptRow({ entry }: { entry: ToolTranscriptEntry }) {
   return (
     <li
-      className="rounded-lg border border-gray-200 bg-white p-3"
+      className="rounded-lg border border-gray-200 bg-surface p-3"
       data-testid="run-detail-tool-row"
     >
       <div className="flex items-center justify-between gap-2 mb-2">
@@ -128,8 +119,8 @@ export default function RunDetailView({ runId, highlight, className = '' }: RunD
 
   if (!detail) {
     return (
-      <div className={`card ${className}`} data-testid="run-detail-view">
-        <LoadingSpinner text="Loading run…" />
+      <div className={`card p-4 sm:p-6 ${className}`} data-testid="run-detail-view">
+        <Loading text="Loading run…" />
         {error && (
           <p className="mt-3 text-xs text-red-600" role="alert">
             {error.message}
@@ -155,7 +146,7 @@ function RunDetailBody({
 
   return (
     <div
-      className={`card space-y-4 ${className}`}
+      className={`card p-4 sm:p-6 space-y-4 ${className}`}
       data-testid="run-detail-view"
       data-run-id={detail.id}
     >
@@ -177,15 +168,15 @@ function RunDetailBody({
             </p>
           )}
         </div>
-        <span
+        <StatusBadge
           data-testid="run-detail-status-badge"
           data-highlighted={highlight?.status ? 'true' : 'false'}
-          className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(detail.status)} ${
-            highlight?.status ? 'ring-2 ring-amber-400' : ''
-          }`}
+          tone={statusTone(detail.status)}
+          role={undefined}
+          className={highlight?.status ? 'ring-2 ring-warning-400' : undefined}
         >
           {detail.status}
-        </span>
+        </StatusBadge>
       </div>
 
       {detail.error != null && (

@@ -16,10 +16,13 @@ export async function configureWorkbench(
   await page.getByLabel('User prompt').fill(userPrompt)
 }
 
-/** Switches the active tab via the top nav's `role=tab` buttons. */
+/** Switches section through the AppNav rail's links. */
 export async function gotoTab(
   page: Page,
   name: 'Workbench' | 'Evals' | 'History' | 'Guardrails' | 'About'
 ): Promise<void> {
-  await page.getByRole('tab', { name }).click()
+  await page
+    .getByRole('navigation', { name: 'Primary navigation' })
+    .getByRole('link', { name })
+    .click()
 }

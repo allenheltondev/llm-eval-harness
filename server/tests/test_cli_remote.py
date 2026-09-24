@@ -24,6 +24,7 @@ import pytest
 from fastapi import Depends, FastAPI, Header, HTTPException
 from sqlmodel import Session
 
+from nimbus.auth import ForbiddenError
 from nimbus.cli import commands, remote
 from nimbus.cli.main import main
 from nimbus.errors import NotFoundError, register_exception_handlers
@@ -103,6 +104,9 @@ class Harness:
         self.cloud = False
         self.local = True
         self.valid_tokens: set[str] = set()
+        #: Valid tokens for accounts the stack has not granted (a shared pool
+        #: whose user is not in the required group): answered 403.
+        self.forbidden_tokens: set[str] = set()
         #: Replaces fields of the published auth block (a hostile server).
         self.auth_overrides: dict[str, Any] = {}
         self.requests: list[tuple[str, str, str | None]] = []
@@ -192,6 +196,8 @@ def app(harness, models) -> FastAPI:
         if not harness.auth_required:
             return
         token = (authorization or "").removeprefix("Bearer ")
+        if token in harness.forbidden_tokens:
+            raise ForbiddenError("This account has not been granted access to this Nimbus stack")
         if token not in harness.valid_tokens:
             raise HTTPException(status_code=401, detail="invalid token")
 
@@ -1357,3 +1363,63 @@ class TestGradingRunsFromThisMachine:
         assert result.code == 1
         assert "grading on this machine instead" in result.err
         assert result.err.rstrip().endswith("nimbus: Run 'nope' not found")
+
+
+class TestAnAccountTheStackHasNotGranted:
+    """A shared pool signs anyone in; the stack's required group decides access."""
+
+    def test_login_says_so_straight_away(self, harness, cognito):
+        harness.forbidden_tokens.add("id-1")
+
+        result = run_cli(
+            "login", "--url", URL, "--email", EMAIL, "--password-stdin", stdin=PASSWORD + "\n"
+        )
+
+        assert result.code == 0, result.err
+        assert f"| signed in to {URL} as {EMAIL}" in result.err
+        assert f"| but {URL} refuses this account" in result.err
+        assert "make grant-access" in result.err
+        assert remote.load_login().id_token == "id-1"  # kept: granting fixes it, not signing in
+
+    def test_login_for_a_granted_account_says_nothing_more(self, harness, cognito):
+        harness.valid_tokens.add("id-1")
+
+        result = run_cli(
+            "login", "--url", URL, "--email", EMAIL, "--password-stdin", stdin=PASSWORD + "\n"
+        )
+
+        assert "refuses this account" not in result.err
+
+    def test_login_does_not_refresh_on_a_401_probe(self, harness, cognito):
+        # The fake stack rejects the fresh token; the probe must not swap it.
+        result = run_cli(
+            "login", "--url", URL, "--email", EMAIL, "--password-stdin", stdin=PASSWORD + "\n"
+        )
+
+        assert result.code == 0, result.err
+        assert "refuses this account" not in result.err
+        assert "InitiateAuth:REFRESH_TOKEN_AUTH" not in cognito.operations()
+
+    def test_a_command_is_refused_with_the_stacks_reason(self, harness):
+        login = sign_in(harness)
+        harness.forbidden_tokens.add(login.id_token)
+
+        result = run_cli("runs")
+
+        assert result.code == 1
+        assert "has not been granted access to this Nimbus stack" in result.err
+
+    def test_doctor_says_how_to_get_access(self, harness, monkeypatch):
+        async def collect(self, settings, bedrock):
+            return CatalogResult(models=[], providers={}, cached=False)
+
+        monkeypatch.setattr(commands.ProviderCatalog, "collect", collect)
+        login = sign_in(harness)
+        harness.forbidden_tokens.add(login.id_token)
+
+        result = run_cli("doctor")
+
+        assert result.code == 1
+        assert "!!  stack" in result.out
+        assert "has not been granted access" in result.out
+        assert "-> ask the stack's owner to grant you access" in result.out

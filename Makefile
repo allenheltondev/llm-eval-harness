@@ -156,6 +156,7 @@ package-server:
 
 deploy-backend:
 	@set -e; \
+	DEPLOY_REGION=$(DEPLOY_REGION) ./scripts/check-deploy-prerequisites.sh $(STACK_NAME); \
 	resolve_output() { \
 		aws cloudformation describe-stacks --stack-name $(STACK_NAME) \
 			$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \

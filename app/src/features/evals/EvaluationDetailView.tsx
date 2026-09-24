@@ -11,6 +11,8 @@
  */
 
 import { useState } from 'react'
+import { Badge, StatusBadge } from '@readysetcloud/ui'
+import { statusTone } from '../../components/status'
 import type {
   EvaluationDetail,
   EvaluationResult,
@@ -28,15 +30,18 @@ export function sourceLabel(source: string | null | undefined): string | null {
   return SOURCE_LABELS[source] ?? source
 }
 
-const CASE_STATUS: Record<string, { label: string; className: string }> = {
-  passed: { label: 'Pass', className: 'bg-green-100 text-green-800' },
-  failed: { label: 'Fail', className: 'bg-red-100 text-red-800' },
-  error: { label: 'Error', className: 'bg-amber-100 text-amber-800' },
-  judge_error: { label: 'Not judged', className: 'bg-amber-100 text-amber-800' }
+const CASE_STATUS_LABELS: Record<string, string> = {
+  passed: 'Pass',
+  failed: 'Fail',
+  error: 'Error',
+  judge_error: 'Not judged'
 }
 
 function caseStatus(status: string) {
-  return CASE_STATUS[status] ?? { label: status, className: 'bg-gray-100 text-gray-700' }
+  // A case that errored did not fail its criteria -- it never got judged on
+  // them -- so it reads as needing attention, not as a failure.
+  const tone = status === 'error' ? 'warning' : statusTone(status)
+  return { label: CASE_STATUS_LABELS[status] ?? status, tone }
 }
 
 function formatScore(value: number | null | undefined): string {
@@ -62,7 +67,7 @@ function CopyLinkButton({ evaluationId }: { evaluationId: string }) {
   return (
     <button
       type="button"
-      className="btn-secondary py-1 px-2 text-xs"
+      className="btn btn-secondary py-1 px-2 text-xs"
       data-testid="eval-copy-link"
       onClick={() => {
         void navigator.clipboard.writeText(shareableLink(evaluationId)).then(() => setCopied(true))
@@ -232,11 +237,9 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
                     )}
                   </td>
                   <td className="py-2 pr-3">
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-xs font-medium ${status.className}`}
-                    >
+                    <StatusBadge tone={status.tone} role={undefined}>
                       {status.label}
-                    </span>
+                    </StatusBadge>
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs">{formatScore(result.score)}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-gray-600">
@@ -335,7 +338,7 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
     : successfulSlots(evaluation.run_ids, index => `Run ${index + 1}`)
   return (
     <section
-      className="card space-y-5"
+      className="card p-4 sm:p-6 space-y-5"
       aria-labelledby="eval-detail-heading"
       data-testid="eval-detail"
     >
@@ -345,12 +348,9 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
             {evaluation.config.suite?.name ?? `${evaluation.kind} evaluation`}
           </h2>
           {source && (
-            <span
-              className="px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-800"
-              data-testid="eval-detail-source"
-            >
+            <Badge variant="primary" data-testid="eval-detail-source">
               {source}
-            </span>
+            </Badge>
           )}
           <span className="font-mono text-xs text-gray-500">{evaluation.id}</span>
         </div>

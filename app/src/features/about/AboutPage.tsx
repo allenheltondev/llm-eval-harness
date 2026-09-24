@@ -63,7 +63,7 @@ const resources = {
 export default function AboutPage() {
   return (
     <div className="space-y-6 sm:space-y-8 max-w-5xl mx-auto" data-testid="about-page">
-      <section className="card" aria-labelledby="principles-heading">
+      <section className="card p-4 sm:p-6" aria-labelledby="principles-heading">
         <h2 id="principles-heading" className="text-lg sm:text-xl font-semibold text-gray-900 mb-4">
           6 Principles of AI Agent Building
         </h2>
@@ -100,7 +100,7 @@ export default function AboutPage() {
         </div>
       </section>
 
-      <section className="card" aria-labelledby="credits-heading">
+      <section className="card p-4 sm:p-6" aria-labelledby="credits-heading">
         <h2 id="credits-heading" className="sr-only">
           Credits
         </h2>
