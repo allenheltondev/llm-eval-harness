@@ -185,7 +185,16 @@ def check_auth_published(payload: dict[str, Any], results: Results) -> None:
     if missing:
         results.fail(name, f"auth block is missing {', '.join(missing)}")
         return
-    results.ok(name, f"pool {block['user_pool_id']}")
+    # The pool is the shared RSC one, which anyone can sign up to: without a
+    # required group, every account there could run evaluations on this stack.
+    if not block.get("required_group"):
+        results.fail(
+            name,
+            "auth.required_group is not set -- any account in the shared pool can "
+            "use this deployment.",
+        )
+        return
+    results.ok(name, f"pool {block['user_pool_id']}, group {block['required_group']}")
 
 
 def check_protected_route_rejects(base: str, results: Results) -> None:

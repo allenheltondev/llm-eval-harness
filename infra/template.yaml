@@ -129,12 +129,39 @@ Parameters:
       Set this only for a partition or private mirror where that account does
       not publish.
 
+  # --------------------------------------------------------------------------
+  # Sign-in: the Ready, Set, Cloud shared user pool (see docs/serverless-deploy.md "Auth")
+  # --------------------------------------------------------------------------
+  AuthUserPoolId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /readysetcloud/auth/user-pool-id
+    Description: >
+      SSM parameter holding the user pool the deployed server verifies tokens
+      against. The default is the Ready, Set, Cloud shared pool that
+      readysetcloud/rsc-core publishes in this account and region; anyone can
+      hold an account there, so access to this stack is the AccessGroupName
+      group, not the account.
+  AccessGroupName:
+    Type: String
+    Default: ''
+    AllowedPattern: '[\p{L}\p{M}\p{S}\p{N}\p{P}]{0,128}'
+    Description: >
+      Cognito group (created in that pool by this stack) whose members may use
+      it -- `make grant-access EMAIL=...` adds someone. Empty (the default)
+      names it after the stack, so every stack sharing the pool gets its own
+      group without anyone choosing one; `make deploy-backend
+      ACCESS_GROUP_NAME=...` sets it.
+
 Conditions:
   # The worker is opt-in. Everything below is skipped entirely until an artifact
   # key is supplied, so the rest of the stack deploys exactly as it did before.
   DeployEvalWorker: !Not [!Equals [!Ref EvalWorkerArtifactKey, '']]
   # So is the server + SPA hosting, on exactly the same pattern.
   DeployServer: !Not [!Equals [!Ref ServerArtifactKey, '']]
+  # Groups live in the shared pool, so their names are shared by every stack
+  # that uses it: without an explicit name, the stack's own (unique per account
+  # and region) is the group's.
+  HasAccessGroupName: !Not [!Equals [!Ref AccessGroupName, '']]
   # Only when BOTH halves are deployed does the server get a cloud eval lane.
   ServerHasEvalWorker: !And
     - !Condition DeployServer
@@ -365,8 +392,13 @@ Resources:
           # Both set => every route but /health demands a bearer token minted
           # by this pool for this client. This is THE gate: the Function URL
           # and CloudFront are both open doors (see the UserPool comment).
-          NIMBUS_AUTH_USER_POOL_ID: !Ref UserPool
-          NIMBUS_AUTH_CLIENT_ID: !Ref UserPoolClient
+          NIMBUS_AUTH_USER_POOL_ID: !Ref AuthUserPoolId
+          NIMBUS_AUTH_CLIENT_ID: !Ref AuthClient
+          # A shared pool authenticates anyone who signed up to any RSC app;
+          # this group is what authorizes them here (403 otherwise). The code
+          # this switches to must already enforce it: the deploy checks the
+          # live /health first (scripts/check-deploy-prerequisites.sh).
+          NIMBUS_AUTH_REQUIRED_GROUP: !Ref AccessGroup
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
@@ -484,19 +516,56 @@ Resources:
   # itself: nimbus.auth verifies `Authorization: Bearer <id token>` on
   # every route but /health, identically through both doors.
   #
-  # Same shape as readysetcloud/rsc-core: email usernames, USER_PASSWORD_AUTH
-  # (the SPA calls cognito-idp directly, no Hosted UI, no SDK), refresh tokens.
-  # Deliberate differences: no self sign-up (an account here can spend the AWS
-  # bill, so the operator creates users -- `make create-user`), and no OAuth /
-  # hosted domain (nothing uses it).
+  # The pool is readysetcloud/rsc-core's shared one (AuthUserPoolId): email
+  # usernames, USER_PASSWORD_AUTH (the SPA calls cognito-idp directly, no
+  # Hosted UI, no SDK), refresh tokens, and -- unlike the stack's old pool --
+  # open sign-up. An account there can spend this stack's AWS bill only once
+  # it is in AccessGroup (`make grant-access`); the server enforces that.
   #
   # Both resources are named explicitly, so the auto-name length landmine
   # (CloudFormation's {stack}-{logicalid}-{random} suffixes) does not apply.
   # ---------------------------------------------------------------------------
 
+  # This stack's app client on the shared pool, and the group that grants
+  # access. Same token settings as the stack's own client had; a client per
+  # app is how the shared pool is meant to be used (rsc-core ui/AGENTS.md).
+  AuthClient:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: DeployServer
+    Properties:
+      ClientName: !Sub ${AWS::StackName}-app
+      UserPoolId: !Ref AuthUserPoolId
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  AccessGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Condition: DeployServer
+    Properties:
+      GroupName: !If [HasAccessGroupName, !Ref AccessGroupName, !Ref AWS::StackName]
+      UserPoolId: !Ref AuthUserPoolId
+      Description: !Sub Members may use the ${AWS::StackName} Nimbus stack
+
+  # The stack's own pool, from before it moved to the shared one. The server
+  # no longer uses it. It is kept -- and retained if a later release removes
+  # it -- so the accounts in it are not deleted along with the resource; once
+  # everyone has an account in the shared pool it can go.
   UserPool:
     Type: AWS::Cognito::UserPool
     Condition: DeployServer
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       UserPoolName: !Sub ${AWS::StackName}-users
       UsernameAttributes:
@@ -526,6 +595,8 @@ Resources:
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Condition: DeployServer
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       ClientName: !Sub ${AWS::StackName}-app
       UserPoolId: !Ref UserPool
@@ -708,12 +779,20 @@ Outputs:
     Value: !GetAtt EvalWorkerFunction.Arn
   UserPoolId:
     Condition: DeployServer
-    Description: Cognito user pool the deployed server verifies bearer tokens against (`make create-user` reads this)
-    Value: !Ref UserPool
+    Description: Cognito user pool the deployed server verifies bearer tokens against -- the shared RSC pool (`make grant-access` reads this)
+    Value: !Ref AuthUserPoolId
   UserPoolClientId:
     Condition: DeployServer
-    Description: The pool's app client id -- the SPA signs in with it (published by GET /api/v1/health)
-    Value: !Ref UserPoolClient
+    Description: This stack's app client on that pool -- the SPA and CLI sign in with it (published by GET /api/v1/health)
+    Value: !Ref AuthClient
+  AccessGroupName:
+    Condition: DeployServer
+    Description: The Cognito group whose members may use this stack (`make grant-access` adds to it)
+    Value: !Ref AccessGroup
+  LegacyUserPoolId:
+    Condition: DeployServer
+    Description: The stack's own user pool from before the shared pool; unused, retained for its accounts
+    Value: !Ref UserPool
   ServerFunctionUrl:
     Condition: DeployServer
     Description: >
