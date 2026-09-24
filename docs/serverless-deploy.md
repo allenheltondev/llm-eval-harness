@@ -122,6 +122,27 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
   template injects NIMBUS_EVAL_TABLE / EVAL_FUNCTION_NAME / AUTH_* directly
   from `!Ref`/`!GetAtt`; there is no runtime discovery of anything.
 
+### The rename to Nimbus (one release of overlap)
+
+CloudFormation applies a function's configuration and its code in separate
+calls, and requests are served in between, so the deploy that renamed the code
+from `evalharness` to `nimbus` must not change anything the *old* code needs
+in the same update. For that release the template therefore:
+
+- sets every application setting under both names — `NIMBUS_*` for the new
+  code (which prefers it) and `EVALHARNESS_*`, with the same value, for the old.
+  This matters most for the auth pair: old code without
+  `EVALHARNESS_AUTH_USER_POOL_ID` / `EVALHARNESS_AUTH_CLIENT_ID` would serve
+  every route unauthenticated through the public Function URL;
+- keeps the worker's `Handler` at `evalharness.worker.lambda_app.handler`,
+  served by a shim (`server/compat/evalharness`) the worker zip carries next to
+  `nimbus`.
+
+`tests/test_infra_template.py` keeps the two variable sets identical. In the
+release after this one has reached every stage, drop the `EVALHARNESS_*`
+variables and the shim, and point the worker's `Handler` at
+`nimbus.worker.lambda_app.handler`.
+
 ## Out of scope (documented, not built)
 
 Custom domains, WAF, self sign-up / per-user data isolation (the pool gates
