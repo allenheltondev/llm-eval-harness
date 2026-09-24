@@ -7,7 +7,17 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Loading, StatusBadge } from '@readysetcloud/ui'
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  ErrorState,
+  Loading,
+  StatusBadge
+} from '@readysetcloud/ui'
+import { useNotify } from '../../components/notify'
 import { statusTone } from '../../components/status'
 import { useGuardrailStore, type GuardrailStateData } from '../../stores'
 import type { GuardrailLifecycleStatus, GuardrailSummary } from '../../api'
@@ -53,67 +63,54 @@ function GuardrailRow({
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const removeGuardrail = useGuardrailStore(state => state.removeGuardrail)
   const saving = useGuardrailStore(state => state.saving)
+  const notify = useNotify()
 
   async function handleDelete() {
     const removed = await removeGuardrail(guardrail.id)
-    if (removed) setConfirmingDelete(false)
+    if (removed) {
+      setConfirmingDelete(false)
+      notify(`Deleted ${guardrail.name}`, { variant: 'success' })
+    }
   }
 
   return (
-    <tr className="border-b border-gray-100 last:border-0">
+    <tr className="border-b border-border last:border-0">
       <td className="py-2 pr-4">
-        <div className="text-sm font-medium text-gray-900">{guardrail.name}</div>
-        <div className="text-xs text-gray-500 font-mono">{guardrail.id}</div>
+        <div className="text-sm font-medium text-foreground">{guardrail.name}</div>
+        <div className="text-xs text-muted-foreground font-mono">{guardrail.id}</div>
       </td>
       <td className="py-2 pr-4">
         <LifecycleBadge status={guardrail.status} />
       </td>
-      <td className="py-2 pr-4 text-sm text-gray-700">{guardrail.version}</td>
-      <td className="py-2 pr-4 text-sm text-gray-600">{formatDate(guardrail.createdAt)}</td>
+      <td className="py-2 pr-4 text-sm text-muted-foreground">{guardrail.version}</td>
+      <td className="py-2 pr-4 text-sm text-muted-foreground">{formatDate(guardrail.createdAt)}</td>
       <td className="py-2 pl-2">
         {confirmingDelete ? (
           <div className="flex items-center justify-end gap-2">
-            <span className="text-xs text-gray-600">Delete?</span>
-            <button
-              type="button"
-              className="text-xs font-medium text-red-700 hover:text-red-800 disabled:opacity-50"
-              disabled={saving}
-              onClick={() => void handleDelete()}
-            >
+            <span className="text-xs text-muted-foreground">Delete?</span>
+            <Button variant="error" size="sm" loading={saving} onClick={() => void handleDelete()}>
               Confirm
-            </button>
-            <button
-              type="button"
-              className="text-xs font-medium text-gray-600 hover:text-gray-800"
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               disabled={saving}
               onClick={() => setConfirmingDelete(false)}
             >
               Cancel
-            </button>
+            </Button>
           </div>
         ) : (
-          <div className="flex items-center justify-end gap-3">
-            <button
-              type="button"
-              className="text-xs font-medium text-primary-700 hover:text-primary-800"
-              onClick={onEdit}
-            >
+          <div className="flex items-center justify-end gap-1">
+            <Button variant="ghost" size="sm" onClick={onEdit}>
               Edit
-            </button>
-            <button
-              type="button"
-              className="text-xs font-medium text-primary-700 hover:text-primary-800"
-              onClick={onVersions}
-            >
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onVersions}>
               Versions
-            </button>
-            <button
-              type="button"
-              className="text-xs font-medium text-red-700 hover:text-red-800"
-              onClick={() => setConfirmingDelete(true)}
-            >
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmingDelete(true)}>
               Delete
-            </button>
+            </Button>
           </div>
         )}
       </td>
@@ -126,6 +123,7 @@ function GuardrailList({
   loading,
   loaded,
   error,
+  onRetry,
   onNew,
   onEdit,
   onVersions
@@ -134,61 +132,65 @@ function GuardrailList({
   loading: GuardrailStateData['loading']
   loaded: GuardrailStateData['loaded']
   error: GuardrailStateData['error']
+  onRetry: () => void
   onNew: () => void
   onEdit: (id: string) => void
   onVersions: (guardrail: GuardrailSummary) => void
 }) {
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="guardrails-heading">
-      <div className="flex items-center justify-between mb-4">
-        <h2 id="guardrails-heading" className="text-lg font-semibold text-gray-900">
+    <Card role="region" aria-labelledby="guardrails-heading">
+      <CardHeader className="flex items-center justify-between gap-3">
+        <h2 id="guardrails-heading" className="card-title">
           Guardrails
         </h2>
-        <button type="button" className="btn btn-primary" onClick={onNew}>
-          New guardrail
-        </button>
-      </div>
+        <Button onClick={onNew}>New guardrail</Button>
+      </CardHeader>
 
-      {error && (
-        <p className="mb-3 text-xs text-red-600" role="alert">
-          Could not load guardrails: {error.message}
-        </p>
-      )}
+      <CardBody>
+        {error && (
+          <ErrorState
+            className="mb-3"
+            heading="Could not load guardrails"
+            message={error.message}
+            action={{ label: 'Retry', onClick: onRetry }}
+          />
+        )}
 
-      {loading && guardrails.length === 0 && <Loading text="Loading guardrails…" />}
+        {loading && guardrails.length === 0 && <Loading text="Loading guardrails…" />}
 
-      {loaded && !loading && guardrails.length === 0 && !error && (
-        <p className="text-sm text-gray-600" data-testid="guardrails-empty">
-          No guardrails yet. Create one to get started.
-        </p>
-      )}
+        {loaded && !loading && guardrails.length === 0 && !error && (
+          <div data-testid="guardrails-empty">
+            <EmptyState title="No guardrails yet" description="Create one to get started." />
+          </div>
+        )}
 
-      {guardrails.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left" data-testid="guardrails-table">
-            <thead>
-              <tr className="border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                <th className="py-2 pr-4">Name</th>
-                <th className="py-2 pr-4">Status</th>
-                <th className="py-2 pr-4">Version</th>
-                <th className="py-2 pr-4">Created</th>
-                <th className="py-2 pl-2 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {guardrails.map(guardrail => (
-                <GuardrailRow
-                  key={guardrail.id}
-                  guardrail={guardrail}
-                  onEdit={() => onEdit(guardrail.id)}
-                  onVersions={() => onVersions(guardrail)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
+        {guardrails.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left" data-testid="guardrails-table">
+              <thead>
+                <tr className="border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  <th className="py-2 pr-4">Name</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Version</th>
+                  <th className="py-2 pr-4">Created</th>
+                  <th className="py-2 pl-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {guardrails.map(guardrail => (
+                  <GuardrailRow
+                    key={guardrail.id}
+                    guardrail={guardrail}
+                    onEdit={() => onEdit(guardrail.id)}
+                    onVersions={() => onVersions(guardrail)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   )
 }
 
@@ -228,6 +230,7 @@ export default function GuardrailsPage() {
         loading={loading}
         loaded={loaded}
         error={error}
+        onRetry={() => void loadGuardrails()}
         onNew={() => setView({ mode: 'editor', guardrailId: null })}
         onEdit={id => setView({ mode: 'editor', guardrailId: id })}
         onVersions={guardrail =>

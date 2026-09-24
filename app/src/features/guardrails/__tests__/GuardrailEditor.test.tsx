@@ -7,6 +7,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { ToastProvider } from '@readysetcloud/ui'
 import GuardrailEditor from '../GuardrailEditor'
 import { guardrailCacheKey, INITIAL_GUARDRAIL_STATE, useGuardrailStore } from '../../../stores'
 import type { GuardrailDetail } from '../../../api'
@@ -38,7 +39,10 @@ describe('GuardrailEditor validation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    expect(screen.getByTestId('form-error')).toHaveTextContent('Name is required.')
+    const nameInput = screen.getByLabelText(/Name/)
+    expect(nameInput).toHaveAttribute('aria-invalid', 'true')
+    expect(nameInput).toHaveAccessibleDescription('Name is required.')
+    expect(screen.getByRole('alert')).toHaveTextContent('Name is required.')
     expect(createGuardrail).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
   })
@@ -63,8 +67,16 @@ describe('GuardrailEditor content filters', () => {
 
     const hateRow = within(screen.getByTestId('filter-row-HATE'))
     fireEvent.click(hateRow.getByTestId('filter-enable-HATE'))
-    fireEvent.change(hateRow.getByLabelText('Input strength'), { target: { value: 'MEDIUM' } })
-    fireEvent.change(hateRow.getByLabelText('Output strength'), { target: { value: 'HIGH' } })
+    fireEvent.click(
+      within(hateRow.getByRole('group', { name: 'Hate input strength' })).getByRole('button', {
+        name: 'MEDIUM'
+      })
+    )
+    fireEvent.click(
+      within(hateRow.getByRole('group', { name: 'Hate output strength' })).getByRole('button', {
+        name: 'HIGH'
+      })
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -85,17 +97,31 @@ describe('GuardrailEditor content filters', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
-  it('disables the PROMPT_ATTACK output-strength select and forces it to NONE', () => {
+  it('keeps strength controls disabled until a filter is enabled', () => {
+    render(<GuardrailEditor guardrailId={null} onClose={vi.fn()} />)
+
+    const row = within(screen.getByTestId('filter-row-HATE'))
+    const input = within(row.getByRole('group', { name: 'Hate input strength' }))
+    expect(input.getByRole('button', { name: 'HIGH' })).toBeDisabled()
+
+    fireEvent.click(row.getByTestId('filter-enable-HATE'))
+    expect(input.getByRole('button', { name: 'HIGH' })).toBeEnabled()
+    expect(input.getByRole('button', { name: 'NONE' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('disables the PROMPT_ATTACK output-strength control and forces it to NONE', () => {
     render(<GuardrailEditor guardrailId={null} onClose={vi.fn()} />)
 
     const row = within(screen.getByTestId('filter-row-PROMPT_ATTACK'))
-    const outputSelect = row.getByLabelText('Output strength') as HTMLSelectElement
-    expect(outputSelect).toBeDisabled()
-    expect(outputSelect).toHaveValue('NONE')
+    const output = within(row.getByRole('group', { name: 'Prompt attack output strength' }))
+    const expectLockedToNone = () => {
+      for (const button of output.getAllByRole('button')) expect(button).toBeDisabled()
+      expect(output.getByRole('button', { name: 'NONE' })).toHaveAttribute('aria-pressed', 'true')
+    }
+    expectLockedToNone()
 
     fireEvent.click(row.getByTestId('filter-enable-PROMPT_ATTACK'))
-    expect(outputSelect).toBeDisabled()
-    expect(outputSelect).toHaveValue('NONE')
+    expectLockedToNone()
 
     fillName('attack-guardrail')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -132,7 +158,11 @@ describe('GuardrailEditor PII rows', () => {
 
     const row = within(screen.getByTestId('pii-row-0'))
     fireEvent.change(row.getByLabelText('Entity type'), { target: { value: 'EMAIL' } })
-    fireEvent.change(row.getByLabelText('Action'), { target: { value: 'ANONYMIZE' } })
+    fireEvent.click(
+      within(row.getByRole('group', { name: 'PII rule 1 action' })).getByRole('button', {
+        name: 'ANONYMIZE'
+      })
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -206,6 +236,26 @@ describe('GuardrailEditor denied topics', () => {
       expect.objectContaining({
         deniedTopics: [{ name: 'Topic', definition: 'Def', examples: [] }]
       })
+    )
+  })
+})
+
+describe('GuardrailEditor save success', () => {
+  it('confirms a create with a toast', async () => {
+    render(
+      <ToastProvider>
+        <GuardrailEditor guardrailId={null} onClose={vi.fn()} />
+      </ToastProvider>
+    )
+
+    fillName('toast-guardrail')
+    fireEvent.click(screen.getByTestId('filter-enable-HATE'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Notifications' })).toHaveTextContent(
+        'Guardrail created'
+      )
     )
   })
 })

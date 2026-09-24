@@ -5,6 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { ToastProvider } from '@readysetcloud/ui'
 import GuardrailsPage from '../GuardrailsPage'
 import { INITIAL_GUARDRAIL_STATE, useGuardrailStore } from '../../../stores'
 import type { GuardrailSummary } from '../../../api'
@@ -89,7 +90,42 @@ describe('GuardrailsPage', () => {
     })
     render(<GuardrailsPage />)
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Bedrock is unavailable.')
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Could not load guardrails')
+    expect(alert).toHaveTextContent('Bedrock is unavailable.')
+    expect(screen.queryByTestId('guardrails-empty')).not.toBeInTheDocument()
+  })
+
+  it('retries the load from the error state', () => {
+    useGuardrailStore.setState({
+      guardrails: [],
+      loaded: false,
+      loading: false,
+      error: { code: 'upstream_error', message: 'Bedrock is unavailable.' }
+    })
+    render(<GuardrailsPage />)
+    loadGuardrails.mockClear()
+
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }))
+    expect(loadGuardrails).toHaveBeenCalledTimes(1)
+  })
+
+  it('confirms a successful delete with a toast', async () => {
+    render(
+      <ToastProvider>
+        <GuardrailsPage />
+      </ToastProvider>
+    )
+
+    const row = screen.getByText('fraud-guardrail').closest('tr')!
+    fireEvent.click(within(row).getByRole('button', { name: 'Delete' }))
+    fireEvent.click(within(row).getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Notifications' })).toHaveTextContent(
+        'Deleted fraud-guardrail'
+      )
+    )
   })
 
   it('requires a confirm click before deleting a guardrail', async () => {

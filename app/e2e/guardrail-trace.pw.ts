@@ -12,7 +12,7 @@ test('Guardrails tab renders its empty/error state without crashing', async ({ p
   await page.goto('/')
   await gotoTab(page, 'Guardrails')
 
-  await expect(page.getByRole('heading', { name: 'Guardrails' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Guardrails', level: 2 })).toBeVisible()
   await expect(page.getByTestId('guardrails-page')).toBeVisible()
 
   const emptyState = page.getByTestId('guardrails-empty')
