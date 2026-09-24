@@ -14,23 +14,23 @@ from fastapi import FastAPI
 from sqlmodel import Session
 from strands.models.openai import OpenAIModel
 
-from evalharness.config import Settings
-from evalharness.engine.fake_model import FakeModel, Text
-from evalharness.engine.schemas import RunRequest
-from evalharness.errors import BadRequestError, register_exception_handlers
-from evalharness.evals import engine as evals_engine
-from evalharness.evals import grader
-from evalharness.evals.judge import (
+from nimbus.config import Settings
+from nimbus.engine.fake_model import FakeModel, Text
+from nimbus.engine.schemas import RunRequest
+from nimbus.errors import BadRequestError, register_exception_handlers
+from nimbus.evals import engine as evals_engine
+from nimbus.evals import grader
+from nimbus.evals.judge import (
     DEFAULT_JUDGE_MODEL_ID,
     FakeJudgeModel,
     build_judge_model,
     call_judge_factory,
 )
-from evalharness.evals.outcomes import RunOutcome
-from evalharness.evals.schemas import EvaluationRequest, GraderConfig
-from evalharness.routers import runs
-from evalharness.store import db, history
-from evalharness.worker import interfaces
+from nimbus.evals.outcomes import RunOutcome
+from nimbus.evals.schemas import EvaluationRequest, GraderConfig
+from nimbus.routers import runs
+from nimbus.store import db, history
+from nimbus.worker import interfaces
 
 
 def settings(**overrides) -> Settings:

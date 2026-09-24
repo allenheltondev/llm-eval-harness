@@ -116,7 +116,7 @@ export default function ModelPanel() {
           )}
           {/* Fallback affordance: the catalog degrades to empty rather than
               erroring when a provider listing fails (expired AWS session,
-              EVALHARNESS_FAKE_MODEL runs, no providers configured), so let a
+              NIMBUS_FAKE_MODEL runs, no providers configured), so let a
               model id be typed directly rather than blocking on the dropdown.
               A provider select sits next to it since a manually-typed id
               carries no `source`. */}

@@ -1,4 +1,4 @@
-"""Tests for the CLI's terminal rendering (evalharness.cli.render).
+"""Tests for the CLI's terminal rendering (nimbus.cli.render).
 
 Every function here is pure -- one event in, at most one line out -- so these
 assert on the exact strings rather than on a captured terminal. The strings are
@@ -7,8 +7,8 @@ the user interface, and a silently reworded progress line is a real change.
 
 from datetime import UTC, datetime
 
-from evalharness.cli import render
-from evalharness.engine.events import (
+from nimbus.cli import render
+from nimbus.engine.events import (
     ErrorEvent,
     GuardrailTraceEvent,
     MessageEvent,

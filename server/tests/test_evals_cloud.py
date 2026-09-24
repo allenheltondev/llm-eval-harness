@@ -2,7 +2,7 @@
 
 Nothing here reaches AWS. DynamoDB is :class:`tests.fake_table.FakeTable` -- an
 in-memory stand-in for a ``boto3`` resource ``Table`` that really does evaluate
-the ``Key(...)`` conditions :mod:`evalharness.evals.ddb_reader` builds, so the
+the ``Key(...)`` conditions :mod:`nimbus.evals.ddb_reader` builds, so the
 key schema and the query shapes are under test and not just mocked away. The one
 place the *real* AWS API shape matters, ``InvokeAgentRuntime``, is exercised
 through botocore's ``Stubber``, which validates parameters against the shipped
@@ -21,15 +21,15 @@ import pytest
 from botocore.stub import Stubber
 from fastapi import FastAPI
 
-from evalharness.config import Settings, get_settings
-from evalharness.errors import UpstreamError, register_exception_handlers
-from evalharness.evals import cloud
-from evalharness.evals import jobs as evals_jobs
-from evalharness.evals.ddb_reader import GSI1_PK, GSI1_SK, EvalTable
-from evalharness.routers import health as health_router
-from evalharness.routers import runs
-from evalharness.store import db, ddb_items
-from evalharness.store.history import EvaluationRecord
+from nimbus.config import Settings, get_settings
+from nimbus.errors import UpstreamError, register_exception_handlers
+from nimbus.evals import cloud
+from nimbus.evals import jobs as evals_jobs
+from nimbus.evals.ddb_reader import GSI1_PK, GSI1_SK, EvalTable
+from nimbus.routers import health as health_router
+from nimbus.routers import runs
+from nimbus.store import db, ddb_items
+from nimbus.store.history import EvaluationRecord
 from tests.fake_table import FakeTable
 
 FUNCTION_NAME = "llm-eval-harness-EvalWorkerFunction-ABC123"
@@ -804,7 +804,7 @@ def test_the_writer_factory_is_off_without_a_table():
 
 def test_the_writer_factory_builds_stores_for_this_servers_table():
     """The real factory, which every other test here substitutes."""
-    from evalharness.worker.ddb import DynamoEvalStore
+    from nimbus.worker.ddb import DynamoEvalStore
 
     settings = Settings(eval_table=TABLE_NAME, aws_region="eu-west-2")
     factory = cloud.get_eval_writer_factory(settings)
@@ -938,7 +938,7 @@ def test_the_largest_request_and_the_largest_suite_result_share_one_item():
     """The two big attributes of META, each at its cap, plus room for the rest
     (status, run ids, timestamps, attribute names). The result's cap is enforced
     in bytes by the engine, so this sum is a real bound, not a hope."""
-    from evalharness.evals.engine import MAX_RESULT_BYTES
+    from nimbus.evals.engine import MAX_RESULT_BYTES
 
     headroom = 20_000
     total = cloud.CLOUD_REQUEST_LIMIT_BYTES + MAX_RESULT_BYTES + headroom

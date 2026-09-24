@@ -227,7 +227,7 @@ jobs:
       - name: Write deployment summary
         run: |
           {
-            echo "## LLM Eval Harness staging deploy"
+            echo "## Nimbus staging deploy"
             echo
             echo "- **App URL:** ${{ steps.deploy.outputs.app_url }}"
             echo "- **Stack:** \`llm-eval-harness\`"

@@ -8,16 +8,16 @@ without touching AWS.
 
 import pytest
 
-from evalharness.config import Settings
-from evalharness.engine.fake_model import Error, Text
-from evalharness.evals import grader, metrics, rubrics
-from evalharness.evals.judge import (
+from nimbus.config import Settings
+from nimbus.engine.fake_model import Error, Text
+from nimbus.evals import grader, metrics, rubrics
+from nimbus.evals.judge import (
     STRUCTURED_OUTPUT_TOOL_NAME,
     FakeJudgeModel,
     build_judge_model,
 )
-from evalharness.evals.outcomes import RunOutcome
-from evalharness.evals.schemas import GraderConfig
+from nimbus.evals.outcomes import RunOutcome
+from nimbus.evals.schemas import GraderConfig
 
 
 def outcome(index: int, output: str, transcript: list | None = None) -> RunOutcome:

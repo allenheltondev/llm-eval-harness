@@ -13,16 +13,16 @@ import pytest
 import respx
 from fastapi import FastAPI
 
-from evalharness.awscat.catalog import ModelCatalog
-from evalharness.config import Settings
-from evalharness.errors import register_exception_handlers
-from evalharness.models_catalog import (
+from nimbus.awscat.catalog import ModelCatalog
+from nimbus.config import Settings
+from nimbus.errors import register_exception_handlers
+from nimbus.models_catalog import (
     ANTHROPIC_MODELS_URL,
     OPENAI_MODELS_URL,
     ProviderCatalog,
     is_openai_chat_model,
 )
-from evalharness.routers import health, models
+from nimbus.routers import health, models
 
 OLLAMA_BASE_URL = "http://ollama.test:11434"
 OLLAMA_TAGS_URL = f"{OLLAMA_BASE_URL}/api/tags"
@@ -81,7 +81,7 @@ def bedrock_client() -> MagicMock:
 
 @pytest.fixture
 def stub_bedrock(bedrock_client):
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=bedrock_client):
         yield bedrock_client
 
 
@@ -240,7 +240,7 @@ async def test_ollama_listing_uses_the_configured_base_url(
 
 
 async def test_ollama_base_url_is_stripped_of_a_trailing_slash():
-    from evalharness.models_catalog import fetch_ollama_models
+    from nimbus.models_catalog import fetch_ollama_models
 
     with respx.mock:
         route = respx.get(OLLAMA_TAGS_URL).mock(
@@ -474,7 +474,7 @@ async def models_client(models_app: FastAPI) -> AsyncIterator[httpx.AsyncClient]
 async def test_models_endpoint_returns_models_providers_and_cached(
     models_client, stub_bedrock, monkeypatch
 ):
-    monkeypatch.setenv("EVALHARNESS_ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("NIMBUS_ANTHROPIC_API_KEY", "sk-ant-test")
     mock_all_ok()
 
     response = await models_client.get("/api/v1/models")
@@ -501,7 +501,7 @@ async def test_bedrock_failure_degrades_like_every_other_provider(
         {"Error": {"Code": "ExpiredTokenException", "Message": "expired"}},
         "ListFoundationModels",
     )
-    monkeypatch.setenv("EVALHARNESS_ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("NIMBUS_ANTHROPIC_API_KEY", "sk-ant-test")
     respx.get(ANTHROPIC_MODELS_URL).mock(return_value=httpx.Response(200, json=ANTHROPIC_PAYLOAD))
 
     response = await models_client.get("/api/v1/models")
@@ -517,7 +517,7 @@ async def test_bedrock_failure_degrades_like_every_other_provider(
 
 @respx.mock
 async def test_health_mirrors_the_models_providers_block(models_client, stub_bedrock, monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_OLLAMA_BASE_URL", OLLAMA_BASE_URL)
+    monkeypatch.setenv("NIMBUS_OLLAMA_BASE_URL", OLLAMA_BASE_URL)
     mock_all_ok()
 
     from_models = (await models_client.get("/api/v1/models")).json()["providers"]

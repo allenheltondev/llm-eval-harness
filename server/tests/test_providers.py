@@ -1,12 +1,12 @@
-"""Tests for evalharness.providers: the per-provider credential/configured dispatch.
+"""Tests for nimbus.providers: the per-provider credential/configured dispatch.
 
 ``credential_for``/``is_configured`` are a plain ``match`` over the four
 providers -- real dispatch logic, not a boto wrapper -- and were previously
 only exercised indirectly (and incompletely) through the models catalog.
 """
 
-from evalharness.config import Settings
-from evalharness.providers import credential_for, is_configured
+from nimbus.config import Settings
+from nimbus.providers import credential_for, is_configured
 
 
 def test_credential_for_anthropic_reads_the_anthropic_api_key():
@@ -50,7 +50,7 @@ def test_is_configured_false_for_each_non_bedrock_provider_without_its_credentia
 
 
 def test_is_configured_bedrock_delegates_to_aws_credentials_status(monkeypatch):
-    import evalharness.providers as providers_mod
+    import nimbus.providers as providers_mod
 
     monkeypatch.setattr(providers_mod, "aws_credentials_status", lambda: "ok")
     assert is_configured("bedrock", Settings()) is True

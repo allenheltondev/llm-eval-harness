@@ -1,5 +1,5 @@
 /**
- * Wire types for the LLM Eval Harness FastAPI backend (`/api/v1`).
+ * Wire types for the Nimbus FastAPI backend (`/api/v1`).
  *
  * Every type here mirrors a server-side pydantic model or hand-written dict
  * response. Field *casing follows the wire*, which is not uniform across the
@@ -12,12 +12,12 @@
  *   Requests accept either casing (`populate_by_name=True`); we send camelCase.
  *
  * Source of truth:
- *   server/evalharness/engine/events.py     (run stream events)
- *   server/evalharness/engine/schemas.py    (RunRequest)
- *   server/evalharness/schemas/runs.py      (Page, RunSummary, RunDetail, EvaluationDetail)
- *   server/evalharness/guardrails/schemas.py
- *   server/evalharness/routers/*.py
- *   server/evalharness/errors.py            (error envelope)
+ *   server/nimbus/engine/events.py     (run stream events)
+ *   server/nimbus/engine/schemas.py    (RunRequest)
+ *   server/nimbus/schemas/runs.py      (Page, RunSummary, RunDetail, EvaluationDetail)
+ *   server/nimbus/guardrails/schemas.py
+ *   server/nimbus/routers/*.py
+ *   server/nimbus/errors.py            (error envelope)
  */
 
 /* -------------------------------------------------------------------------- */
@@ -663,7 +663,7 @@ export interface HealthResponse {
   }
   /**
    * Whether the server has an AgentCore runtime configured for the cloud eval
-   * lane (`EVALHARNESS_EVAL_RUNTIME_ARN`). A failed health check reads as
+   * lane (`NIMBUS_EVAL_RUNTIME_ARN`). A failed health check reads as
    * unconfigured.
    */
   cloud_evals: {
@@ -686,7 +686,7 @@ export interface HealthResponse {
    * route a deployed server leaves open precisely so this can be read
    * signed out.
    *
-   * contract: server/evalharness/auth.py `health_block`.
+   * contract: server/nimbus/auth.py `health_block`.
    */
   auth: HealthAuth
 }

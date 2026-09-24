@@ -151,7 +151,7 @@ export default function LoginPage({ notice = null }: LoginPageProps) {
     >
       <div className="w-full max-w-sm rounded-lg border border-secondary-200 bg-white p-6 shadow-md">
         <div className="mb-5">
-          <h1 className="text-lg font-bold text-primary-700 leading-tight">LLM Eval Harness</h1>
+          <h1 className="text-lg font-bold text-primary-700 leading-tight">Nimbus</h1>
           <p className="text-xs text-secondary-700">Sign in to continue</p>
         </div>
 

@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 /**
- * The client is a thin SPA over the LLM Eval Harness API: no AWS SDK, no Momento,
+ * The client is a thin SPA over the Nimbus API: no AWS SDK, no Momento,
  * no `process.env` shims. It reaches the server at `VITE_API_URL`
  * (default `http://localhost:8000`), which serves CORS itself — hence no dev
  * proxy here.

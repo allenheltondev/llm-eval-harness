@@ -1,4 +1,4 @@
-"""Bearer-token auth (evalharness.auth): the gate every non-health route sits behind.
+"""Bearer-token auth (nimbus.auth): the gate every non-health route sits behind.
 
 Tokens are minted here with a throwaway RSA key and the JWKS endpoint is
 served by respx, so every case is hermetic: no Cognito, no network.
@@ -18,8 +18,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, Request
 from jwt.algorithms import RSAAlgorithm
 
-from evalharness import auth
-from evalharness.config import Settings
+from nimbus import auth
+from nimbus.config import Settings
 
 REGION = "us-east-1"
 POOL_ID = "us-east-1_TestPool1"
@@ -71,9 +71,9 @@ def signer() -> _Signer:
 
 @pytest.fixture
 def auth_enabled(monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_AWS_REGION", REGION)
-    monkeypatch.setenv("EVALHARNESS_AUTH_USER_POOL_ID", POOL_ID)
-    monkeypatch.setenv("EVALHARNESS_AUTH_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("NIMBUS_AWS_REGION", REGION)
+    monkeypatch.setenv("NIMBUS_AUTH_USER_POOL_ID", POOL_ID)
+    monkeypatch.setenv("NIMBUS_AUTH_CLIENT_ID", CLIENT_ID)
 
 
 @pytest.fixture
@@ -100,8 +100,8 @@ def test_auth_off_unless_both_settings_present():
 
 
 def test_blank_auth_settings_mean_unset(monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_AUTH_USER_POOL_ID", "   ")
-    monkeypatch.setenv("EVALHARNESS_AUTH_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("NIMBUS_AUTH_USER_POOL_ID", "   ")
+    monkeypatch.setenv("NIMBUS_AUTH_CLIENT_ID", CLIENT_ID)
     assert auth.auth_enabled(Settings()) is False
 
 

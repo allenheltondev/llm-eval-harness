@@ -8,9 +8,9 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi import FastAPI
 
-from evalharness.awscat.catalog import ModelCatalog
-from evalharness.errors import register_exception_handlers
-from evalharness.routers import models
+from nimbus.awscat.catalog import ModelCatalog
+from nimbus.errors import register_exception_handlers
+from nimbus.routers import models
 
 # Test fixtures
 
@@ -122,7 +122,7 @@ def mock_bedrock_client() -> MagicMock:
 
 async def test_list_models_filters_embedding_only_models(client, mock_bedrock_client):
     """Embedding-only models should be filtered out."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -135,7 +135,7 @@ async def test_list_models_filters_embedding_only_models(client, mock_bedrock_cl
 
 async def test_list_models_filters_provisioned_only_models(client, mock_bedrock_client):
     """PROVISIONED-only models should be filtered out."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -150,7 +150,7 @@ async def test_list_models_filters_provisioned_only_models(client, mock_bedrock_
 
 async def test_list_models_response_shape(client, mock_bedrock_client):
     """Response should have correct structure."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -163,7 +163,7 @@ async def test_list_models_response_shape(client, mock_bedrock_client):
 
 async def test_list_models_model_structure(client, mock_bedrock_client):
     """Each model should have required keys."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -180,7 +180,7 @@ async def test_list_models_model_structure(client, mock_bedrock_client):
 
 async def test_list_models_foundation_model_mapping(client, mock_bedrock_client):
     """Foundation models should be mapped correctly."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -198,7 +198,7 @@ async def test_list_models_foundation_model_mapping(client, mock_bedrock_client)
 
 async def test_list_models_default_streaming_support(client, mock_bedrock_client):
     """Models without responseStreamingSupported should default to True."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -214,7 +214,7 @@ async def test_list_models_default_streaming_support(client, mock_bedrock_client
 
 async def test_list_models_inference_profile_mapping(client, mock_bedrock_client):
     """Inference profiles should be mapped correctly."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -233,7 +233,7 @@ async def test_list_models_inference_profile_mapping(client, mock_bedrock_client
 
 async def test_list_models_foundation_models_before_profiles(client, mock_bedrock_client):
     """Foundation models should come before inference profiles."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -255,7 +255,7 @@ async def test_list_models_foundation_models_before_profiles(client, mock_bedroc
 
 async def test_list_models_cache_not_hit_on_first_request(client, mock_bedrock_client):
     """First request should not be from cache."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -264,7 +264,7 @@ async def test_list_models_cache_not_hit_on_first_request(client, mock_bedrock_c
 
 async def test_list_models_cache_hit_on_second_request(client, mock_bedrock_client):
     """Second request should be from cache."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         # First request
         await client.get("/api/v1/models")
         # Second request
@@ -279,7 +279,7 @@ async def test_list_models_boto_client_called_once_across_two_requests(
 ):
     """Boto3 client should only be constructed once due to caching."""
     with patch(
-        "evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client
+        "nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client
     ) as mock_boto_client:
         # First request
         await client.get("/api/v1/models")
@@ -300,7 +300,7 @@ async def test_list_models_bedrock_error_degrades(client, mock_bedrock_client):
         "ListFoundationModels",
     )
 
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()
@@ -317,7 +317,7 @@ async def test_list_models_inference_profile_error_degrades(client, mock_bedrock
     )
     mock_bedrock_client.get_paginator.return_value = mock_paginator
 
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         assert response.json()["models"] == []
@@ -327,7 +327,7 @@ async def test_list_models_inference_profile_error_degrades(client, mock_bedrock
 
 async def test_list_models_full_integration(client, mock_bedrock_client):
     """Full integration test with realistic data."""
-    with patch("evalharness.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
+    with patch("nimbus.awscat.catalog.boto3.client", return_value=mock_bedrock_client):
         response = await client.get("/api/v1/models")
         assert response.status_code == 200
         body = response.json()

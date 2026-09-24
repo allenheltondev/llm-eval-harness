@@ -13,11 +13,11 @@ import pytest
 from fastapi import FastAPI
 from sqlmodel import Session
 
-from evalharness.config import get_settings
-from evalharness.engine.fake_model import Error, FakeModel, Text, ToolUseStep
-from evalharness.errors import register_exception_handlers
-from evalharness.routers import runs
-from evalharness.store import db, history
+from nimbus.config import get_settings
+from nimbus.engine.fake_model import Error, FakeModel, Text, ToolUseStep
+from nimbus.errors import register_exception_handlers
+from nimbus.routers import runs
+from nimbus.store import db, history
 
 FREEZE_INPUT = {
     "account_id": "A1234",

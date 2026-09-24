@@ -1,4 +1,4 @@
-# LLM Eval Harness Server
+# Nimbus Server
 
 FastAPI execution/eval engine for the harness, built on the
 [Strands Agents SDK](https://strandsagents.com/). Executes runs against Bedrock, Anthropic, OpenAI
@@ -10,33 +10,33 @@ in SQLite (DynamoDB when deployed).
 
 ```bash
 uv sync --dev
-uv run uvicorn evalharness.main:app --reload --port 8000
+uv run uvicorn nimbus.main:app --reload --port 8000
 ```
 
 Or, for zero network calls (scripted model + judge; test infrastructure, not a usage mode):
 
 ```bash
-EVALHARNESS_FAKE_MODEL=1 uv run uvicorn evalharness.main:app --reload --port 8000
+NIMBUS_FAKE_MODEL=1 uv run uvicorn nimbus.main:app --reload --port 8000
 ```
 
 AWS credentials come from the standard credential chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, an
 instance/task role, etc.).
 
-| Env var                          | Default                       | Description                          |
-| --------------------------------- | ------------------------------ | ------------------------------------ |
-| `EVALHARNESS_AWS_REGION`          | `us-east-1`                    | AWS region for SDK calls             |
-| `EVALHARNESS_DB_PATH`             | `./data/evalharness.db`        | SQLite database path                 |
-| `EVALHARNESS_CORS_ORIGINS`        | `["http://localhost:3000"]`    | Allowed CORS origins (JSON list)     |
-| `EVALHARNESS_FAKE_MODEL`          | `false`                        | Use a fake model instead of live LLM |
-| `EVALHARNESS_ANTHROPIC_API_KEY`   | `None`                         | Anthropic API key (falls back to `ANTHROPIC_API_KEY`) |
-| `EVALHARNESS_OPENAI_API_KEY`      | `None`                         | OpenAI API key (falls back to `OPENAI_API_KEY`) |
-| `EVALHARNESS_OLLAMA_BASE_URL`     | `None`                         | Ollama server base URL, e.g. `http://localhost:11434` (falls back to `OLLAMA_HOST`) |
-| `EVALHARNESS_EVAL_RUNTIME_ARN`    | `None`                         | AgentCore Runtime ARN for the cloud evaluation lane (stack output `EvalWorkerRuntimeArn`) |
-| `EVALHARNESS_EVAL_TABLE`          | `None`                         | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
-| `EVALHARNESS_HISTORY_BACKEND`     | `auto`                         | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda) |
-| `EVALHARNESS_LOCAL_EVALS`         | `auto`                         | `on` \| `off` \| `auto` (off inside Lambda) |
-| `EVALHARNESS_AUTH_USER_POOL_ID`   | `None`                         | Cognito pool to verify bearer tokens against; with the client id, gates every route but `/health` |
-| `EVALHARNESS_AUTH_CLIENT_ID`      | `None`                         | The pool's app client id |
+| Env var                    | Default                            | Description |
+| -------------------------- | ---------------------------------- | ----------- |
+| `NIMBUS_AWS_REGION`        | `us-east-1`                        | AWS region for SDK calls |
+| `NIMBUS_DB_PATH`           | `~/.local/share/nimbus/history.db` | SQLite database path |
+| `NIMBUS_CORS_ORIGINS`      | `["http://localhost:3000"]`        | Allowed CORS origins (JSON list) |
+| `NIMBUS_FAKE_MODEL`        | `false`                            | Use a fake model instead of live LLM |
+| `NIMBUS_ANTHROPIC_API_KEY` | `None`                             | Anthropic API key (falls back to `ANTHROPIC_API_KEY`) |
+| `NIMBUS_OPENAI_API_KEY`    | `None`                             | OpenAI API key (falls back to `OPENAI_API_KEY`) |
+| `NIMBUS_OLLAMA_BASE_URL`   | `None`                             | Ollama server base URL, e.g. `http://localhost:11434` (falls back to `OLLAMA_HOST`) |
+| `NIMBUS_EVAL_RUNTIME_ARN`  | `None`                             | AgentCore Runtime ARN for the cloud evaluation lane (stack output `EvalWorkerRuntimeArn`) |
+| `NIMBUS_EVAL_TABLE`        | `None`                             | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
+| `NIMBUS_HISTORY_BACKEND`   | `auto`                             | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda) |
+| `NIMBUS_LOCAL_EVALS`       | `auto`                             | `on` \| `off` \| `auto` (off inside Lambda) |
+| `NIMBUS_AUTH_USER_POOL_ID` | `None`                             | Cognito pool to verify bearer tokens against; with the client id, gates every route but `/health` |
+| `NIMBUS_AUTH_CLIENT_ID`    | `None`                             | The pool's app client id |
 
 ## Model providers
 
@@ -51,19 +51,19 @@ A provider is "configured" when its credential resolves: the standard AWS chain 
 Bedrock, an API key for Anthropic/OpenAI, a base URL for Ollama. Selecting an
 unconfigured provider is a `400 provider_not_configured`. Guardrails are Bedrock-only
 — pairing one with another provider is a `400 guardrail_requires_bedrock`.
-`EVALHARNESS_FAKE_MODEL` short-circuits all of this, provider included.
+`NIMBUS_FAKE_MODEL` short-circuits all of this, provider included.
 
 ## Toolsets
 
 A run may name a toolset (`"toolset": "fraud-detection"`) — a list of Strands `@tool`
-callables registered in `evalharness/tools/registry.py`. `GET /tools` lists them; an
+callables registered in `nimbus/tools/registry.py`. `GET /tools` lists them; an
 unknown name is a `400 unknown_toolset`. Add a module next to `fraud_detection.py`
 and register it to add your own.
 
 ## Endpoints
 
 All routes are mounted under `/api/v1`. Every route except `/health` requires a
-bearer token when a Cognito pool is configured (`evalharness/auth.py`).
+bearer token when a Cognito pool is configured (`nimbus/auth.py`).
 
 | Router | Routes |
 | --- | --- |
@@ -76,6 +76,6 @@ bearer token when a Cognito pool is configured (`evalharness/auth.py`).
 ## Testing & linting
 
 ```bash
-uv run pytest --cov=evalharness   # fail_under in pyproject.toml is a ratchet
+uv run pytest --cov=nimbus        # fail_under in pyproject.toml is a ratchet
 uv run ruff check .
 ```

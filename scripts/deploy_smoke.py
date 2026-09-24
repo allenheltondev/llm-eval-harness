@@ -8,7 +8,7 @@ calls and spends nothing** -- every check below is an anonymous HTTP request
 against the public front door. That is what makes it safe to run on every
 deploy, and why it is a separate script rather than a flag on the other one.
 
-It exists because of a specific, real failure: ``evalharness serve`` shipped
+It exists because of a specific, real failure: ``nimbus serve`` shipped
 completely broken -- it died with ``asyncio.run() cannot be called from a
 running event loop`` -- and passed every check in the pipeline, twice. Unit
 tests, coverage and mutation testing all measure code *as imported*. Nothing

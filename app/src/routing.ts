@@ -5,7 +5,7 @@
  * "open this thing" link. The routes live in the URL fragment (`#/evals/<id>`)
  * so they work unchanged behind any static host: the server never sees the
  * fragment, so there is no rewrite rule to configure. The CLI prints exactly
- * these links (`evalharness eval --remote`), which is the reason they exist.
+ * these links (`nimbus eval` on a signed-in stack), which is the reason they exist.
  *
  *   #/workbench  #/evals  #/history  #/guardrails  #/about
  *   #/evals/<evaluation id>

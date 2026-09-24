@@ -1,5 +1,5 @@
 /**
- * Base fetch wrapper for the LLM Eval Harness API.
+ * Base fetch wrapper for the Nimbus API.
  *
  * JSON in, JSON out; every non-2xx becomes an `ApiError` built from the
  * server's error envelope (falling back to the raw body / status text), and
@@ -9,7 +9,7 @@
 
 import { ApiError, StreamAbortedError, isAbortError } from './errors'
 
-/** Routers are mounted under this prefix (see server/evalharness/main.py). */
+/** Routers are mounted under this prefix (see server/nimbus/main.py). */
 export const API_PREFIX = '/api/v1'
 
 const DEFAULT_BASE_URL = 'http://localhost:8000'

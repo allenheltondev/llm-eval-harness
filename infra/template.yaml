@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  LLM Eval Harness -- DynamoDB history/eval-state table, the Lambda eval worker,
+  Nimbus -- DynamoDB history/eval-state table, the Lambda eval worker,
   the FastAPI server on Lambda (Web Adapter + Function URL), SPA hosting on S3 + CloudFront,
   and a Cognito user pool that gates the deployed app.
 
@@ -104,7 +104,7 @@ Parameters:
     Type: String
     Default: '[]'
     Description: >
-      JSON array for EVALHARNESS_CORS_ORIGINS. Default is the empty list: the
+      JSON array for NIMBUS_CORS_ORIGINS. Default is the empty list: the
       SPA and the API share one CloudFront origin, so the browser never makes a
       cross-origin request and no Access-Control-Allow-Origin is needed. An
       empty list is therefore the tightest correct value -- it also means a page
@@ -211,6 +211,12 @@ Resources:
       CodeUri:
         Bucket: !Ref ArtifactBucket
         Key: !Ref EvalWorkerArtifactKey
+      # Still the pre-rename path, served by server/compat/evalharness (a shim
+      # onto nimbus.worker.lambda_app): CloudFormation applies configuration
+      # and code in separate calls with invocations in between, so changing
+      # the handler in the deploy that renames the code would leave a window
+      # where it names a module the running code does not have. Point it at
+      # nimbus.worker.lambda_app.handler in the release after this one.
       Handler: evalharness.worker.lambda_app.handler
       Runtime: python3.12
       Architectures:
@@ -221,7 +227,7 @@ Resources:
       # this workload is mostly waiting on Bedrock, so the size is about having
       # enough headroom for the concurrent HTTP work rather than compute.
       MemorySize: !Ref EvalWorkerMemorySize
-      # Lambda's hard ceiling. evalharness.worker.lambda_app stops the
+      # Lambda's hard ceiling. nimbus.worker.lambda_app stops the
       # evaluation cooperatively before this, at a run boundary, so a job that
       # runs long settles as `deadline_exceeded` with its finished runs intact
       # instead of being killed mid-write and left reading `running` forever.
@@ -247,22 +253,22 @@ Resources:
         Variables:
           # Worker-owned (docs/cloud-evals.md "Configuration").
           TABLE_NAME: !Ref EvalTable
-          # Consumed by evalharness.config.Settings (EVALHARNESS_ prefix), which
+          # Consumed by nimbus.config.Settings (NIMBUS_ prefix), which
           # evals.engine.default_deps() builds from the environment because the
           # worker has no FastAPI request to hang dependencies off.
-          EVALHARNESS_AWS_REGION: !Ref AWS::Region
+          NIMBUS_AWS_REGION: !Ref AWS::Region
           # /var/task is read-only; /tmp is not. The run engine's SQLite
           # scratch is per invocation (lambda_app.scratch_database, under
-          # /tmp/evalharness-worker/, wiped at the start and end of each one),
+          # /tmp/nimbus-worker/, wiped at the start and end of each one),
           # so this is only the fallback for anything touching the engine
           # outside that scope -- it must still be writable.
-          EVALHARNESS_DB_PATH: /tmp/evalharness-worker.db
+          NIMBUS_DB_PATH: /tmp/nimbus-worker.db
           # Setting the path is NOT enough to select SQLite, and getting this
           # wrong costs the whole evaluation. `history_backend` defaults to
           # `auto`, and `auto` resolves by looking for AWS_LAMBDA_FUNCTION_NAME
           # -- which Lambda sets, and AgentCore did not. So the same env that
           # resolved to SQLite on the old host resolves to DynamoDB here, and
-          # since the worker deliberately has no EVALHARNESS_EVAL_TABLE,
+          # since the worker deliberately has no NIMBUS_EVAL_TABLE,
           # get_history_repo() raises HistoryBackendMisconfiguredError before
           # the first run starts. Pin it.
           #
@@ -271,9 +277,18 @@ Resources:
           # row into a RUN# item, which is what makes it durable and readable
           # from another machine. The worker's own DynamoDB writes go through
           # that store, not through the history repo.
-          EVALHARNESS_HISTORY_BACKEND: sqlite
+          NIMBUS_HISTORY_BACKEND: sqlite
           # Read by worker.lambda_app.build_store for the evaluation and run
           # items it writes -- the same rule the server applies to its own.
+          NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
+          # -- pre-rename names, for one release ------------------------------ #
+          # CloudFormation can apply this environment before the new code, so
+          # the code still running (which reads EVALHARNESS_*) must keep finding
+          # its settings. Identical values; the new code prefers NIMBUS_*.
+          # tests/test_infra_template.py keeps the two sets in step.
+          EVALHARNESS_AWS_REGION: !Ref AWS::Region
+          EVALHARNESS_DB_PATH: /tmp/nimbus-worker.db
+          EVALHARNESS_HISTORY_BACKEND: sqlite
           EVALHARNESS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
       Policies:
         - Version: 2012-10-17
@@ -343,13 +358,41 @@ Resources:
           # start pay for a provider probe first.
           #
           # -- application --------------------------------------------------- #
-          EVALHARNESS_AWS_REGION: !Ref AWS::Region
+          NIMBUS_AWS_REGION: !Ref AWS::Region
           # /var/task is read-only. The run engine still opens a SQLite file for
           # scratch even when history lives in DynamoDB, so give it /tmp.
-          EVALHARNESS_DB_PATH: /tmp/evalharness.db
+          NIMBUS_DB_PATH: /tmp/nimbus.db
           # Deployed shape (docs/serverless-deploy.md): DynamoDB history, cloud
           # lane only. Both are explicit rather than left to `auto` so the
           # behaviour does not silently depend on Lambda env-var detection.
+          NIMBUS_HISTORY_BACKEND: dynamodb
+          NIMBUS_LOCAL_EVALS: 'off'
+          NIMBUS_EVAL_TABLE: !Ref EvalTable
+          NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
+          NIMBUS_EVAL_FUNCTION_NAME: !If
+            - ServerHasEvalWorker
+            - !Ref EvalWorkerFunction
+            - !Ref AWS::NoValue
+          # Empty by default: SPA and API share one CloudFront origin, so
+          # nothing the browser does is cross-origin. See the parameter.
+          NIMBUS_CORS_ORIGINS: !Ref ServerCorsOrigins
+          # -- authentication (nimbus.auth) --------------------------------- #
+          # Both set => every route but /health demands a bearer token minted
+          # by this pool for this client. This is THE gate: the Function URL
+          # and CloudFront are both open doors (see the UserPool comment).
+          NIMBUS_AUTH_USER_POOL_ID: !Ref UserPool
+          NIMBUS_AUTH_CLIENT_ID: !Ref UserPoolClient
+          # -- pre-rename names, for one release ------------------------------ #
+          # CloudFormation updates configuration and code in separate calls,
+          # and requests are served in between. If this environment lands
+          # first, the code still running reads EVALHARNESS_* -- and without
+          # the auth pair it would serve every route unauthenticated through
+          # a public Function URL. So every setting is also given under its
+          # old name, with the same value, until the release after this one;
+          # the new code prefers NIMBUS_*. tests/test_infra_template.py keeps
+          # the two sets in step.
+          EVALHARNESS_AWS_REGION: !Ref AWS::Region
+          EVALHARNESS_DB_PATH: /tmp/nimbus.db
           EVALHARNESS_HISTORY_BACKEND: dynamodb
           EVALHARNESS_LOCAL_EVALS: 'off'
           EVALHARNESS_EVAL_TABLE: !Ref EvalTable
@@ -358,13 +401,7 @@ Resources:
             - ServerHasEvalWorker
             - !Ref EvalWorkerFunction
             - !Ref AWS::NoValue
-          # Empty by default: SPA and API share one CloudFront origin, so
-          # nothing the browser does is cross-origin. See the parameter.
           EVALHARNESS_CORS_ORIGINS: !Ref ServerCorsOrigins
-          # -- authentication (evalharness.auth) ---------------------------- #
-          # Both set => every route but /health demands a bearer token minted
-          # by this pool for this client. This is THE gate: the Function URL
-          # and CloudFront are both open doors (see the UserPool comment).
           EVALHARNESS_AUTH_USER_POOL_ID: !Ref UserPool
           EVALHARNESS_AUTH_CLIENT_ID: !Ref UserPoolClient
       Policies:
@@ -381,13 +418,13 @@ Resources:
               Resource:
                 - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
                 - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
-            # GET /api/v1/models -- evalharness.awscat.catalog.
+            # GET /api/v1/models -- nimbus.awscat.catalog.
             - Effect: Allow
               Action:
                 - bedrock:ListFoundationModels
                 - bedrock:ListInferenceProfiles
               Resource: '*'
-            # The guardrails router is full CRUD (evalharness/guardrails/service.py),
+            # The guardrails router is full CRUD (nimbus/guardrails/service.py),
             # unlike the worker, which only applies them.
             - Effect: Allow
               Action:
@@ -481,7 +518,7 @@ Resources:
   # neither can be closed for a browser that POSTs (CloudFront OAC for
   # function URLs needs the viewer to send an x-amz-content-sha256 body hash
   # -- docs/serverless-deploy-infra.md "Auth"). So the gate is the application
-  # itself: evalharness.auth verifies `Authorization: Bearer <id token>` on
+  # itself: nimbus.auth verifies `Authorization: Bearer <id token>` on
   # every route but /health, identically through both doors.
   #
   # Same shape as readysetcloud/rsc-core: email usernames, USER_PASSWORD_AUTH
@@ -632,7 +669,7 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: !Sub LLM Eval Harness (${AWS::StackName}) -- SPA + API
+        Comment: !Sub Nimbus (${AWS::StackName}) -- SPA + API
         HttpVersion: http2and3
         DefaultRootObject: index.html
         Origins:
@@ -688,7 +725,7 @@ Resources:
 
 Outputs:
   TableName:
-    Description: DynamoDB table holding run/evaluation history and cloud-eval state (EVALHARNESS_EVAL_TABLE)
+    Description: DynamoDB table holding run/evaluation history and cloud-eval state (NIMBUS_EVAL_TABLE)
     Value: !Ref EvalTable
   ArtifactBucket:
     Description: >
@@ -699,8 +736,8 @@ Outputs:
     Condition: DeployEvalWorker
     Description: >
       Worker Lambda for the cloud evaluation lane. Set this as
-      EVALHARNESS_EVAL_FUNCTION_NAME on the FastAPI server (with
-      EVALHARNESS_EVAL_TABLE=TableName) to enable the cloud lane.
+      NIMBUS_EVAL_FUNCTION_NAME on the FastAPI server (with
+      NIMBUS_EVAL_TABLE=TableName) to enable the cloud lane.
     Value: !Ref EvalWorkerFunction
   EvalWorkerFunctionArn:
     Condition: DeployEvalWorker

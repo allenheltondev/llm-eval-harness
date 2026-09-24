@@ -8,7 +8,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-/** localStorage key. */
+/** localStorage key. Named before the rename to Nimbus, and kept so saved state survives it. */
 export const SETTINGS_STORAGE_KEY = 'evalharness.settings'
 
 export type ThemePreference = 'light' | 'dark' | 'system'

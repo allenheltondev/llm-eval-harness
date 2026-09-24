@@ -72,7 +72,7 @@ describe('AppShell', () => {
   it('renders the header title and exactly the five tabs, with no Scenarios tab', () => {
     render(<AppShell />)
 
-    expect(screen.getByRole('heading', { name: 'LLM Eval Harness' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Nimbus' })).toBeInTheDocument()
 
     const tabs = screen.getAllByRole('tab')
     expect(tabs.map(tab => tab.textContent)).toEqual([

@@ -4,9 +4,9 @@
 #
 # The zip must already contain every dependency -- nothing is installed at
 # deploy time -- and the function is arm64, so this builds a staging tree of
-# aarch64-manylinux wheels, drops the `evalharness` package next to them, and
+# aarch64-manylinux wheels, drops the `nimbus` package next to them, and
 # zips it under a content-hashed key. No root-level entry module: the template
-# names `evalharness.worker.lambda_app.handler` directly.
+# names `nimbus.worker.lambda_app.handler` directly.
 #
 # The key is content-hashed on purpose. For an S3-sourced function the key IS
 # the property CloudFormation watches, so a static key means CFN sees no change
@@ -50,7 +50,7 @@ rm -rf "${STAGING}"
 mkdir -p "${STAGING}" "${BUILD_DIR}"
 
 # 1. Pin the dependency set from the server's lockfile. `--no-emit-project`
-#    leaves `evalharness` itself out: it is pure Python and gets copied in
+#    leaves `nimbus` itself out: it is pure Python and gets copied in
 #    below, so there is no wheel build to cross-compile.
 log "Exporting locked runtime dependencies"
 uv export \
@@ -76,8 +76,11 @@ uv pip install \
   --requirement "${BUILD_DIR}/requirements.txt"
 
 # 3. The application itself.
-log "Staging the evalharness package"
-cp -R "${SERVER}/evalharness" "${STAGING}/evalharness"
+log "Staging the nimbus package"
+cp -R "${SERVER}/nimbus" "${STAGING}/nimbus"
+# The pre-rename handler path, so the Handler does not change in the deploy
+# that renames the code (server/compat/evalharness/__init__.py says why).
+cp -R "${SERVER}/compat/evalharness" "${STAGING}/evalharness"
 
 # 4. Strip build noise so the hash reflects source, not incidental state.
 find "${STAGING}" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true

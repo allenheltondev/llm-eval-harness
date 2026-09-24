@@ -1,6 +1,6 @@
 """A minimal in-memory stand-in for the ``boto3`` ``dynamodb`` client.
 
-Covers exactly the surface :mod:`evalharness.worker.ddb` uses -- ``put_item``,
+Covers exactly the surface :mod:`nimbus.worker.ddb` uses -- ``put_item``,
 ``update_item`` (``SET``, then optionally ``REMOVE``), ``get_item``, and ``query`` by ``pk`` +
 ``begins_with(sk, ...)`` -- and nothing else. Deliberately hand-rolled rather
 than reached for via ``moto``: the writer's job is to produce a specific set of
@@ -22,7 +22,7 @@ from typing import Any
 class ConditionalCheckFailedException(Exception):
     """Look-alike for botocore's error of the same name.
 
-    ``evalharness.worker.ddb`` matches on ``response.Error.Code`` (with a class
+    ``nimbus.worker.ddb`` matches on ``response.Error.Code`` (with a class
     name fallback), so carrying the code is enough for it to be recognised.
     """
 

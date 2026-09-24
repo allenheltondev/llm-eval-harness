@@ -1,7 +1,7 @@
 """One set of repository scenarios, run against **both** history backends.
 
-``evalharness.store.history`` (SQLite) is the spec and
-``evalharness.store.ddb_history`` (DynamoDB) is the second implementation of it,
+``nimbus.store.history`` (SQLite) is the spec and
+``nimbus.store.ddb_history`` (DynamoDB) is the second implementation of it,
 so the only honest way to test the second is to run the first one's scenarios
 against it: every test in the "contract" section below is parametrized over the
 ``repo`` fixture and executes twice, once per backend.
@@ -27,17 +27,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from evalharness.config import Settings
-from evalharness.engine import runner
-from evalharness.engine.fake_model import FakeModel, Text
-from evalharness.engine.schemas import RunRequest
-from evalharness.errors import BadRequestError, NotFoundError
-from evalharness.evals import engine as evals_engine
-from evalharness.evals.judge import FakeJudgeModel
-from evalharness.evals.schemas import EvaluationRequest
-from evalharness.store import db, ddb_items
-from evalharness.store.ddb_history import DynamoHistoryRepo
-from evalharness.store.repo import SqliteHistoryRepo
+from nimbus.config import Settings
+from nimbus.engine import runner
+from nimbus.engine.fake_model import FakeModel, Text
+from nimbus.engine.schemas import RunRequest
+from nimbus.errors import BadRequestError, NotFoundError
+from nimbus.evals import engine as evals_engine
+from nimbus.evals.judge import FakeJudgeModel
+from nimbus.evals.schemas import EvaluationRequest
+from nimbus.store import db, ddb_items
+from nimbus.store.ddb_history import DynamoHistoryRepo
+from nimbus.store.repo import SqliteHistoryRepo
 from tests.fake_table import FakeTable
 
 BASE_TS = datetime(2026, 8, 12, 9, 0, 0, tzinfo=UTC)
@@ -480,7 +480,7 @@ def test_an_evaluation_lands_in_the_contract_item_shape(ddb_repo, table):
 
 def test_a_run_the_worker_wrote_reads_back_through_the_repository(ddb_repo, table):
     """The whole point of reusing the shapes: one reader for both writers."""
-    from evalharness.worker.ddb import DynamoEvalStore, unwrap
+    from nimbus.worker.ddb import DynamoEvalStore, unwrap
 
     class _Client:
         def put_item(self, TableName, Item, **kwargs):  # noqa: N803 - boto3 spelling
@@ -706,20 +706,20 @@ def test_saving_an_item_from_the_ninety_day_era_stops_it_expiring(table, ddb_rep
 def test_retention_is_configured_per_stack_and_never_negative(monkeypatch):
     from pydantic import ValidationError
 
-    from evalharness.config import Settings
+    from nimbus.config import Settings
 
     assert Settings().history_retention_days == 0
-    monkeypatch.setenv("EVALHARNESS_HISTORY_RETENTION_DAYS", "365")
+    monkeypatch.setenv("NIMBUS_HISTORY_RETENTION_DAYS", "365")
     assert Settings().history_retention_days == 365
-    monkeypatch.setenv("EVALHARNESS_HISTORY_RETENTION_DAYS", "-1")
+    monkeypatch.setenv("NIMBUS_HISTORY_RETENTION_DAYS", "-1")
     with pytest.raises(ValidationError):
         Settings()
 
 
 def test_the_built_repository_applies_the_configured_retention(table, monkeypatch):
-    from evalharness.config import Settings
-    from evalharness.evals import ddb_reader
-    from evalharness.store import repo as store_repo
+    from nimbus.config import Settings
+    from nimbus.evals import ddb_reader
+    from nimbus.store import repo as store_repo
 
     monkeypatch.setattr(ddb_reader, "build_table", lambda name, region: table)
     settings = Settings(history_backend="dynamodb", eval_table="t", history_retention_days=7)

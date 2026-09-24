@@ -1,4 +1,4 @@
-"""Tests for the run engine (evalharness.engine.runner).
+"""Tests for the run engine (nimbus.engine.runner).
 
 Everything runs against the scripted ``FakeModel`` driven through a *real*
 ``strands.Agent`` with the real ported tools -- no AWS calls anywhere.
@@ -13,9 +13,9 @@ from botocore.exceptions import ClientError
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
-from evalharness.config import Settings
-from evalharness.engine import runner
-from evalharness.engine.events import (
+from nimbus.config import Settings
+from nimbus.engine import runner
+from nimbus.engine.events import (
     ErrorEvent,
     MetricsEvent,
     RunCompleteEvent,
@@ -25,7 +25,7 @@ from evalharness.engine.events import (
     ToolResultEvent,
     ToolUseStartEvent,
 )
-from evalharness.engine.fake_model import (
+from nimbus.engine.fake_model import (
     Error,
     FakeModel,
     GuardrailTrace,
@@ -33,10 +33,10 @@ from evalharness.engine.fake_model import (
     Text,
     ToolUseStep,
 )
-from evalharness.engine.model_factory import build_model, classify_error
-from evalharness.engine.schemas import RunRequest
-from evalharness.errors import BadRequestError
-from evalharness.store import db, history
+from nimbus.engine.model_factory import build_model, classify_error
+from nimbus.engine.schemas import RunRequest
+from nimbus.errors import BadRequestError
+from nimbus.store import db, history
 
 FREEZE_INPUT = {
     "account_id": "A1234",
@@ -526,7 +526,7 @@ async def test_a_custom_session_factory_is_used_for_persistence(initialized_db, 
 
 
 # --------------------------------------------------------------------------- #
-# Tool-result content-block unwrapping (evalharness.engine.runner._tool_output
+# Tool-result content-block unwrapping (nimbus.engine.runner._tool_output
 # / _tool_error / _stringify): the mapping from a Strands ToolResult's content
 # blocks onto the flat value the transcript actually stores.
 # --------------------------------------------------------------------------- #

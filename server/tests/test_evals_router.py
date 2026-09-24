@@ -17,13 +17,13 @@ from fastapi import FastAPI
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
-from evalharness.engine.fake_model import Error, FakeModel, Text, ToolUseStep
-from evalharness.errors import register_exception_handlers
-from evalharness.evals import engine as evals_engine
-from evalharness.evals import jobs as evals_jobs
-from evalharness.evals.judge import FakeJudgeModel, get_judge_factory
-from evalharness.routers import runs
-from evalharness.store import db, history
+from nimbus.engine.fake_model import Error, FakeModel, Text, ToolUseStep
+from nimbus.errors import register_exception_handlers
+from nimbus.evals import engine as evals_engine
+from nimbus.evals import jobs as evals_jobs
+from nimbus.evals.judge import FakeJudgeModel, get_judge_factory
+from nimbus.routers import runs
+from nimbus.store import db, history
 
 STABLE_ANSWER = "Order B456 is delayed; escalate to the carrier."
 
@@ -228,7 +228,7 @@ async def test_an_unknown_source_is_rejected(client):
 
 
 def test_an_evaluation_stored_before_sources_existed_has_none():
-    from evalharness.schemas.runs import EvaluationDetail
+    from nimbus.schemas.runs import EvaluationDetail
 
     detail = EvaluationDetail(
         id="e", ts="2026-01-01T00:00:00Z", kind="grade", status="completed",

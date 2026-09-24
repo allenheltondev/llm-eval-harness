@@ -13,15 +13,15 @@ from strands.models.bedrock import BedrockModel
 from strands.models.ollama import OllamaModel
 from strands.models.openai import OpenAIModel
 
-from evalharness.config import Settings
-from evalharness.engine.fake_model import FakeModel
-from evalharness.engine.model_factory import (
+from nimbus.config import Settings
+from nimbus.engine.fake_model import FakeModel
+from nimbus.engine.model_factory import (
     ANTHROPIC_DEFAULT_MAX_TOKENS,
     build_model,
     classify_error,
 )
-from evalharness.engine.schemas import RunRequest
-from evalharness.errors import BadRequestError
+from nimbus.engine.schemas import RunRequest
+from nimbus.errors import BadRequestError
 
 INFERENCE = {"temperature": 0.25, "top_p": 0.9, "max_tokens": 512}
 
@@ -170,7 +170,7 @@ def test_provider_not_configured_keeps_its_code_in_the_run_stream():
 
 @pytest.mark.parametrize("provider", ["bedrock", "anthropic", "openai", "ollama"])
 def test_fake_model_short_circuits_every_provider(provider):
-    """EVALHARNESS_FAKE_MODEL wins even for a provider with no credentials."""
+    """NIMBUS_FAKE_MODEL wins even for a provider with no credentials."""
     model = build_model(make_request(provider=provider), settings(fake_model=True))
     assert isinstance(model, FakeModel)
     assert model.get_config()["model_id"] == "some-model"
