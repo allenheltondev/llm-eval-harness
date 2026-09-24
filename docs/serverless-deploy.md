@@ -75,15 +75,28 @@ function URLs needs a viewer-computed body hash; `serverless-deploy-infra.md`
 URL origin, path `/api/*`) so the browser sees one origin — no CORS in
 production, and `VITE_API_URL` stays relative.
 
-The shape follows `readysetcloud/rsc-core` (Cognito user pool + app client in
-the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
+Sign-in is the Ready, Set, Cloud shared pool that `readysetcloud/rsc-core`
+owns (the browser calling `cognito-idp` directly, no Hosted UI); each app
+brings its own client:
 
-- **Template** (`infra/template.yaml`, condition `DeployServer`): `UserPool`
-  (email usernames, admin-only user creation, `${AWS::StackName}-users`) and
-  `UserPoolClient` (`USER_PASSWORD_AUTH` + `REFRESH_TOKEN_AUTH`, no secret,
-  1h id/access tokens, 30-day refresh). Outputs `UserPoolId`,
-  `UserPoolClientId`. The server function gets
-  `NIMBUS_AUTH_USER_POOL_ID` / `NIMBUS_AUTH_CLIENT_ID`.
+- **Template** (`infra/template.yaml`, condition `DeployServer`): parameter
+  `AuthUserPoolId` resolves the shared pool from SSM
+  (`/readysetcloud/auth/user-pool-id`, so the stack deploys in the account
+  and region rsc-core does). On it the stack creates `AuthClient`
+  (`${AWS::StackName}-app`, `USER_PASSWORD_AUTH` + `REFRESH_TOKEN_AUTH`, no
+  secret, 1h id/access tokens, 30-day refresh) and `AccessGroup` (parameter
+  `AccessGroupName`, default `nimbus`). Outputs `UserPoolId`,
+  `UserPoolClientId`, `AccessGroupName`. The server function gets
+  `NIMBUS_AUTH_USER_POOL_ID` / `NIMBUS_AUTH_CLIENT_ID` /
+  `NIMBUS_AUTH_REQUIRED_GROUP`. The stack's earlier own pool
+  (`UserPool` / `UserPoolClient`, output `LegacyUserPoolId`) is unused and
+  `DeletionPolicy: Retain`, so its accounts survive; it can be removed once
+  everyone has an RSC account.
+- **Deploy order**: pointing a server whose code ignored the group at a
+  pool anyone can sign up to would open it for as long as CloudFormation
+  takes between the configuration and the code update. So
+  `scripts/check-deploy-prerequisites.sh` reads the live `/health` first and
+  refuses the deploy unless it says `supports_required_group: true`.
 - **Server** (`nimbus/auth.py`): with both settings present, every router
   except `/health` carries a `require_auth` dependency. It accepts
   `Authorization: Bearer <jwt>` where the JWT is an ID token (`aud` = client)
@@ -115,8 +128,11 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
   sign-in flows until a session exists. A `401` from the API drops the
   session and returns to sign-in with a notice; a `403` shows a no-access
   screen naming the account and the group to ask for.
-- **Users**: `make create-user EMAIL=...` (`admin-create-user` against the
-  stack's `UserPoolId` output). Cognito emails a temporary password.
+- **Users**: anyone can create an RSC account; `make grant-access EMAIL=...`
+  (`admin-add-user-to-group` with the stack's `UserPoolId` and
+  `AccessGroupName` outputs) is what lets them in, `make revoke-access`
+  undoes it. `make create-user EMAIL=...` invites someone with no account
+  (Cognito emails a temporary password) and grants them in one step.
 
 ## Deploy flow
 

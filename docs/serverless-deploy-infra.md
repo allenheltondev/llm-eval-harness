@@ -28,8 +28,10 @@ account:
   RESPONSE_STREAM`. This is what makes the shape a fact rather than a hope.
 - `/workspace/readysetcloud/rsc-core/template.yaml` — a working CloudFront
   distribution in front of a non-S3 origin, and the source of the two managed
-  policy ids used below. Its `CognitoUserPool` / `CognitoUserPoolClient` are
-  the model for this stack's `UserPool` / `UserPoolClient`. Its published
+  policy ids used below. Its `CognitoUserPool` is the shared pool this
+  stack signs in against (published in SSM as
+  `/readysetcloud/auth/user-pool-id`); its `CognitoUserPoolClient` is the
+  model for this stack's `AuthClient`. Its published
   `@readysetcloud/ui/auth` is what the SPA signs in with -- the
   `cognito-idp` calls, the session document and the refresh/revoke
   behaviour are the package's, not designed here.
@@ -259,7 +261,8 @@ CloudFormation or API Gateway.
 |---|---|---|
 | `NIMBUS_EVAL_TABLE` | `!Ref EvalTable` | History backend and cloud-eval state |
 | `NIMBUS_EVAL_FUNCTION_NAME` | `!Ref EvalWorkerFunction`, or absent when the worker is not deployed | The cloud evaluation lane |
-| `NIMBUS_AUTH_USER_POOL_ID` / `NIMBUS_AUTH_CLIENT_ID` | `!Ref UserPool` / `!Ref UserPoolClient` | The bearer-token gate ("Auth" below) |
+| `NIMBUS_AUTH_USER_POOL_ID` / `NIMBUS_AUTH_CLIENT_ID` | `!Ref AuthUserPoolId` / `!Ref AuthClient` | The bearer-token gate ("Auth" below) |
+| `NIMBUS_AUTH_REQUIRED_GROUP` | `!Ref AccessGroup` | Who, of the shared pool's accounts, may use this stack |
 | `NIMBUS_DB_PATH` | `/tmp/nimbus.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
 | `NIMBUS_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
 | `NIMBUS_LOCAL_EVALS` | `off` | Same reasoning |
@@ -377,8 +380,9 @@ covers the entire API surface including the NDJSON streams **[repo]**.
 Stated plainly, because it is the thing most likely to be misremembered.
 
 **The gate is the application.** With `NIMBUS_AUTH_USER_POOL_ID` and
-`NIMBUS_AUTH_CLIENT_ID` set — the template injects both from its own
-`UserPool` / `UserPoolClient` — `nimbus.auth.require_auth` sits on every
+`NIMBUS_AUTH_CLIENT_ID` set — the template injects both: the shared RSC
+pool (`AuthUserPoolId`) and this stack's `AuthClient` on it —
+`nimbus.auth.require_auth` sits on every
 router except `/health`. A request without `Authorization: Bearer <jwt>`, or
 with a token the pool did not sign for this client, gets `401
 {"error": {"code": "unauthorized"}}` before its body is even parsed
@@ -465,9 +469,10 @@ only under `AWS_IAM`, where it carries the SigV4 signature) **[docs]**.
 `USER_PASSWORD_AUTH`, keeps `{idToken, refreshToken, expiresAt}` locally,
 refreshes with `REFRESH_TOKEN_AUTH` and revokes on sign-out **[rsc]**.
 No OAuth flows, no `UserPoolDomain`, no redirect round-trip, no SDK in the
-bundle. Two deliberate deviations from rsc-core: the pool is
-`AllowAdminCreateUserOnly` (an account here spends the AWS bill, so the
-operator invites users with `make create-user`), and there is no
+bundle. The pool *is* rsc-core's, and its sign-up is open, so an account
+proves only who someone is: an account spends this stack's AWS bill only
+once it is in `AccessGroup` (`NIMBUS_AUTH_REQUIRED_GROUP`; `403 forbidden`
+otherwise), which the operator grants with `make grant-access`. There is no
 cross-subdomain cookie bridge (one origin).
 
 **Verification, exactly.** RS256 against the pool's JWKS
@@ -698,11 +703,13 @@ the measurement.
   with a 5 s timeout from inside the Lambda over the public internet — there
   is no VPC, so this is a plain outbound HTTPS call, but it is one more thing
   the first authenticated request after a cold start pays for.
-- **Cognito `admin-create-user` email delivery.** The pool uses Cognito's
-  default email sender (50 messages/day/account, no SES). Enough for
-  inviting a handful of users; not enough for anything else, and the reason
-  `make create-user` says "a temporary password is on its way" rather than
-  printing one.
+- **Cognito `admin-create-user` email delivery.** Invitations go through
+  whatever sender the shared pool is configured with (rsc-core's, not this
+  stack's) -- the reason `make create-user` says "a temporary password is on
+  its way" rather than printing one.
+- **Group membership is read from the token.** `cognito:groups` is fixed
+  when the ID token is minted, so a grant or revoke takes effect at the
+  holder's next sign-in or token refresh (at most an hour), not instantly.
 - **The SPA's direct call to `cognito-idp.<region>.amazonaws.com`.** Cognito's
   user-pool API is CORS-enabled for browsers by design (it is how rsc-core's
   consumers work today **[rsc]**), but this deployment has not made that

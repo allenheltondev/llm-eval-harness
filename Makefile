@@ -1,6 +1,6 @@
 .PHONY: dev dev-server dev-app lint lint-app lint-server test test-app test-server \
 	install install-app install-server validate-template e2e smoke \
-	package-eval-worker package-server deploy-backend deploy-frontend deploy create-user \
+	package-eval-worker package-server deploy-backend deploy-frontend deploy create-user grant-access revoke-access \
 	destroy
 
 # CloudFormation stack the infra/ SAM template deploys into. Overriding this is
@@ -219,33 +219,74 @@ deploy: deploy-backend deploy-frontend
 # --------------------------------------------------------------------------- #
 # users
 #
-# The deployed app's Cognito pool is invitation-only (infra/template.yaml
-# `UserPool`). This invites one user: Cognito emails them a temporary password
-# and the app's sign-in screen walks them through choosing a real one.
-#   make create-user EMAIL=you@example.com [STACK_NAME=llm-eval-harness-staging]
+# The deployed app signs in against the Ready, Set, Cloud shared pool
+# (infra/template.yaml `AuthUserPoolId`), where anyone can create an account.
+# An account is not access: the server also requires the stack's group
+# (`AccessGroupName` output). These add and remove people from it.
+#   make grant-access EMAIL=you@example.com [STACK_NAME=llm-eval-harness-staging]
+#   make revoke-access EMAIL=you@example.com
+#   make create-user EMAIL=you@example.com   # no RSC account yet: invite, then grant
 # --------------------------------------------------------------------------- #
 
+# Resolves POOL_ID and GROUP from the stack's outputs, or stops with why.
+define resolve_access
+	resolve_output() { \
+		aws cloudformation describe-stacks --stack-name $(STACK_NAME) \
+			$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
+			--query "Stacks[0].Outputs[?OutputKey=='$$1'].OutputValue" \
+			--output text 2>/dev/null || true; \
+	}; \
+	if [ -z "$(EMAIL)" ]; then \
+		echo "$@: EMAIL is required, e.g. make $@ EMAIL=you@example.com" >&2; \
+		exit 1; \
+	fi; \
+	POOL_ID=$$(resolve_output UserPoolId); \
+	GROUP=$$(resolve_output AccessGroupName); \
+	if [ -z "$$GROUP" ] || [ "$$GROUP" = "None" ]; then \
+		echo "$@: stack '$(STACK_NAME)' has no AccessGroupName output -- is the server deployed (make deploy)?" >&2; \
+		exit 1; \
+	fi
+endef
+
+grant-access:
+	@set -e; \
+	$(resolve_access); \
+	if ! OUT=$$(aws cognito-idp admin-add-user-to-group \
+		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
+		--user-pool-id "$$POOL_ID" --username "$(EMAIL)" --group-name "$$GROUP" 2>&1); then \
+		case "$$OUT" in \
+			*UserNotFoundException*) \
+				echo "grant-access: $(EMAIL) has no Ready, Set, Cloud account yet -- they can create one on the sign-in screen, or run make create-user EMAIL=$(EMAIL)" >&2 ;; \
+			*) echo "grant-access: $$OUT" >&2 ;; \
+		esac; \
+		exit 1; \
+	fi; \
+	echo "grant-access: $(EMAIL) may now use $(STACK_NAME) (group $$GROUP in pool $$POOL_ID); if they are signed in already, they sign out and back in"
+
+revoke-access:
+	@set -e; \
+	$(resolve_access); \
+	aws cognito-idp admin-remove-user-from-group \
+		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
+		--user-pool-id "$$POOL_ID" --username "$(EMAIL)" --group-name "$$GROUP"; \
+	echo "revoke-access: $(EMAIL) removed from $$GROUP; tokens already issued keep working until they expire (up to an hour)"
+
+# For someone with no Ready, Set, Cloud account: Cognito emails them a
+# temporary password (the sign-in screen walks them through choosing a real
+# one), and they are granted this stack in the same step.
 create-user:
 	@set -e; \
-	if [ -z "$(EMAIL)" ]; then \
-		echo "create-user: EMAIL is required, e.g. make create-user EMAIL=you@example.com" >&2; \
-		exit 1; \
-	fi; \
-	POOL_ID=$$(aws cloudformation describe-stacks --stack-name $(STACK_NAME) \
-		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
-		--query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
-		--output text 2>/dev/null || true); \
-	if [ -z "$$POOL_ID" ] || [ "$$POOL_ID" = "None" ]; then \
-		echo "create-user: stack '$(STACK_NAME)' has no UserPoolId output -- is the server deployed (make deploy)?" >&2; \
-		exit 1; \
-	fi; \
+	$(resolve_access); \
 	aws cognito-idp admin-create-user \
 		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
 		--user-pool-id "$$POOL_ID" \
 		--username "$(EMAIL)" \
 		--user-attributes Name=email,Value="$(EMAIL)" Name=email_verified,Value=true \
 		--desired-delivery-mediums EMAIL >/dev/null; \
-	echo "create-user: invited $(EMAIL) to pool $$POOL_ID -- a temporary password is on its way by email"
+	aws cognito-idp admin-add-user-to-group \
+		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),) \
+		--user-pool-id "$$POOL_ID" --username "$(EMAIL)" --group-name "$$GROUP"; \
+	echo "create-user: invited $(EMAIL) to pool $$POOL_ID and granted $(STACK_NAME) -- a temporary password is on its way by email"
 
 # Tear the stack down. Guarded behind CONFIRM= because it deletes the history
 # table, the user pool and both buckets -- everything the deployment has.

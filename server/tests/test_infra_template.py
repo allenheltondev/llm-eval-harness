@@ -153,3 +153,32 @@ def test_the_worker_handler_is_the_nimbus_worker(resources: dict) -> None:
         == "nimbus.worker.lambda_app.handler"
     )
 
+
+def test_the_server_verifies_tokens_from_the_shared_pool(template: dict, resources: dict) -> None:
+    """Sign-in is the Ready, Set, Cloud pool that rsc-core publishes in SSM."""
+    parameter = template["Parameters"]["AuthUserPoolId"]
+    assert parameter["Type"] == "AWS::SSM::Parameter::Value<String>"
+    assert parameter["Default"] == "/readysetcloud/auth/user-pool-id"
+
+    env = _env(resources, "ServerFunction")
+    assert env["NIMBUS_AUTH_USER_POOL_ID"] == {"Fn::Ref": "AuthUserPoolId"}
+    assert env["NIMBUS_AUTH_CLIENT_ID"] == {"Fn::Ref": "AuthClient"}
+    assert resources["AuthClient"]["Properties"]["UserPoolId"] == {"Fn::Ref": "AuthUserPoolId"}
+
+
+def test_an_account_in_the_shared_pool_is_not_access_without_the_group(resources: dict) -> None:
+    """Anyone can sign up to the shared pool; the group is what grants this stack."""
+    env = _env(resources, "ServerFunction")
+    assert env["NIMBUS_AUTH_REQUIRED_GROUP"] == {"Fn::Ref": "AccessGroup"}
+
+    group = resources["AccessGroup"]
+    assert group["Type"] == "AWS::Cognito::UserPoolGroup"
+    assert group["Properties"]["UserPoolId"] == {"Fn::Ref": "AuthUserPoolId"}
+
+
+@pytest.mark.parametrize("logical_id", ["UserPool", "UserPoolClient"])
+def test_the_stacks_own_pool_is_retained_with_its_accounts(
+    resources: dict, logical_id: str
+) -> None:
+    assert resources[logical_id]["DeletionPolicy"] == "Retain"
+    assert resources[logical_id]["UpdateReplacePolicy"] == "Retain"

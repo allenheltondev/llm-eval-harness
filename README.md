@@ -256,19 +256,26 @@ https://d1234abcd.cloudfront.net/api/v1/...  → the server
 
 ### Sign-in (Cognito)
 
-The deployed app requires sign-in. The stack creates a **Cognito user pool** and app client, the
-server verifies a bearer token from that pool on every route except `/api/v1/health`, and the SPA
+The deployed app requires sign-in with a **Ready, Set, Cloud account**: the stack creates its own
+app client and access group on the shared RSC Cognito pool (which `readysetcloud/rsc-core`
+publishes in SSM, in the same account and region), the server verifies a bearer token from that
+pool on every route except `/api/v1/health`, and the SPA
 shows a sign-in screen until it has one. Nothing is baked into the build: the SPA learns from
 `/health` whether sign-in is required and which pool to use, so the same `app/dist` works
 locally (no pool, no gate) and deployed (pool, gate).
 
-The pool is **invitation-only** — there is no sign-up form, because an account here can spend
-your model budget. Create each user from the CLI; Cognito emails them a temporary password and
-the app walks them through choosing a real one on first sign-in:
+Anyone can create an RSC account (the sign-in screen offers it), but **an account is not
+access**: an account can spend your model budget only once it is in the stack's group. Grant and
+revoke from the CLI:
 
 ```bash
-make create-user EMAIL=you@example.com          # STACK_NAME=... for another stack
+make grant-access EMAIL=you@example.com         # STACK_NAME=... for another stack
+make revoke-access EMAIL=you@example.com
+make create-user EMAIL=you@example.com          # no RSC account yet: invite by email, and grant
 ```
+
+Someone signed in but not granted sees a no-access screen naming the group; after a grant they
+sign out and back in, since the group travels in the token.
 
 Sign-in talks to `cognito-idp.<region>.amazonaws.com` straight from the browser (no Hosted UI,
 no redirect); the resulting ID token is sent as `Authorization: Bearer` and refreshed silently
@@ -276,10 +283,10 @@ for as long as the refresh token lasts (30 days). Sign out from the profile menu
 [`readysetcloud/rsc-core`](https://github.com/readysetcloud/rsc-core)'s
 `@readysetcloud/ui/auth`, the same package every Ready, Set, Cloud app uses.
 
-The server can also require a Cognito **group** (`NIMBUS_AUTH_REQUIRED_GROUP`): a valid token
-without it gets `403`, and the web UI says which group to ask for. That is what lets a stack
-share a user pool with other apps -- where anyone may hold an account -- while only the people
-you grant can run evaluations on it.
+That group is `NIMBUS_AUTH_REQUIRED_GROUP` on the server (the template's `AccessGroupName`
+parameter, default `nimbus`; two stacks sharing the pool need different names): a valid token
+without it gets `403`. The stack's own pool from before the shared one is kept, unused, as
+`LegacyUserPoolId` -- retained so its accounts are not deleted with it.
 
 > **What the gate is, and is not.** The Lambda Function URL stays `AuthType: NONE` and CloudFront
 > stays open, because neither can be closed for a browser that POSTs (CloudFront OAC for
@@ -349,8 +356,12 @@ Attach a deploy policy that grants CloudFormation, S3 (the SAM-managed bucket, t
 bucket **and** the SPA bucket, including `s3:DeleteObject` for the `--delete` sync), Lambda, IAM
 (role creation and `iam:PassRole`), DynamoDB, CloudFront (distributions, origin access controls,
 functions, and `cloudfront:CreateInvalidation`, which cannot be resource-scoped), Cognito user
-pools. `make create-user` additionally needs
-`cognito-idp:AdminCreateUser` on the pool, for whoever runs it.
+pools and, on the shared RSC pool (`arn:aws:cognito-idp:<region>:<account>:userpool/<shared pool id>`),
+`cognito-idp:CreateUserPoolClient`, `UpdateUserPoolClient`, `DeleteUserPoolClient`,
+`DescribeUserPoolClient`, `CreateGroup`, `UpdateGroup`, `DeleteGroup` and `GetGroup`, plus
+`ssm:GetParameters` on `/readysetcloud/auth/user-pool-id` (the template resolves the pool from it).
+`make grant-access` / `revoke-access` / `create-user` need `cognito-idp:AdminAddUserToGroup`,
+`AdminRemoveUserFromGroup` and `AdminCreateUser` on that pool, for whoever runs them.
 
 Three grants are easy to miss because nothing else in a typical SAM stack needs them, and **all
 three have already broken a real deploy**:
@@ -451,7 +462,8 @@ Use a different `STACK_NAME=` to target a non-default stack, exactly as with `ma
 | `make deploy-frontend` | Build the SPA against the deployed stack, sync it to S3, invalidate CloudFront |
 | `make deploy` | [Full serverless deploy](#deploy-to-aws-serverless): `deploy-backend` then `deploy-frontend` |
 | `make destroy CONFIRM=<stack>` | [Tear the stack down](#tearing-the-stack-down): empty both buckets (every object version), then `delete-stack` and wait |
-| `make create-user EMAIL=...` | Invites a user to the deployed stack's Cognito pool ([Sign-in](#sign-in-cognito)); Cognito emails them a temporary password |
+| `make grant-access EMAIL=...` | Lets an existing Ready, Set, Cloud account use the deployed stack ([Sign-in](#sign-in-cognito)); `revoke-access` takes it away |
+| `make create-user EMAIL=...` | Invites someone with no RSC account (Cognito emails a temporary password) and grants them the stack |
 
 `make dev` runs both processes as background jobs of one recipe with a `trap ... EXIT INT TERM`
 so `Ctrl-C` (or any exit) tears down both — no orphaned `uvicorn`/`vite` process left behind. If

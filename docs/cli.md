@@ -250,8 +250,8 @@ page in the web UI is printed when it starts and again when it finishes
 ### Signing in
 
 `login` reads the stack's user pool from its `/health` and signs in with the
-same email and password as the web UI (the pool is invitation-only; `make
-create-user` invites someone). The password is read without echo, or from
+same email and password as the web UI (a Ready, Set, Cloud account; the
+stack's owner grants it with `make grant-access`). The password is read without echo, or from
 stdin with `--password-stdin` for scripts, and is never stored. An invited
 user's first sign-in asks for a permanent password, which needs a terminal.
 `--url` is remembered, so a later `login` only asks for the password.
