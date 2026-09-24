@@ -85,7 +85,9 @@ brings its own client:
   and region rsc-core does). On it the stack creates `AuthClient`
   (`${AWS::StackName}-app`, `USER_PASSWORD_AUTH` + `REFRESH_TOKEN_AUTH`, no
   secret, 1h id/access tokens, 30-day refresh) and `AccessGroup` (parameter
-  `AccessGroupName`, default `nimbus`). Outputs `UserPoolId`,
+  `AccessGroupName`, `make deploy-backend ACCESS_GROUP_NAME=...`; empty by
+  default, which names the group after the stack -- group names are shared
+  by every stack on the pool, stack names are unique per account and region). Outputs `UserPoolId`,
   `UserPoolClientId`, `AccessGroupName`. The server function gets
   `NIMBUS_AUTH_USER_POOL_ID` / `NIMBUS_AUTH_CLIENT_ID` /
   `NIMBUS_AUTH_REQUIRED_GROUP`. The stack's earlier own pool

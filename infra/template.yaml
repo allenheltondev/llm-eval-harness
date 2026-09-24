@@ -143,12 +143,14 @@ Parameters:
       group, not the account.
   AccessGroupName:
     Type: String
-    Default: nimbus
-    AllowedPattern: '[\p{L}\p{M}\p{S}\p{N}\p{P}]{1,128}'
+    Default: ''
+    AllowedPattern: '[\p{L}\p{M}\p{S}\p{N}\p{P}]{0,128}'
     Description: >
       Cognito group (created in that pool by this stack) whose members may use
-      it -- `make grant-access EMAIL=...` adds someone. Two stacks sharing one
-      pool need different names.
+      it -- `make grant-access EMAIL=...` adds someone. Empty (the default)
+      names it after the stack, so every stack sharing the pool gets its own
+      group without anyone choosing one; `make deploy-backend
+      ACCESS_GROUP_NAME=...` sets it.
 
 Conditions:
   # The worker is opt-in. Everything below is skipped entirely until an artifact
@@ -156,6 +158,10 @@ Conditions:
   DeployEvalWorker: !Not [!Equals [!Ref EvalWorkerArtifactKey, '']]
   # So is the server + SPA hosting, on exactly the same pattern.
   DeployServer: !Not [!Equals [!Ref ServerArtifactKey, '']]
+  # Groups live in the shared pool, so their names are shared by every stack
+  # that uses it: without an explicit name, the stack's own (unique per account
+  # and region) is the group's.
+  HasAccessGroupName: !Not [!Equals [!Ref AccessGroupName, '']]
   # Only when BOTH halves are deployed does the server get a cloud eval lane.
   ServerHasEvalWorker: !And
     - !Condition DeployServer
@@ -547,7 +553,7 @@ Resources:
     Type: AWS::Cognito::UserPoolGroup
     Condition: DeployServer
     Properties:
-      GroupName: !Ref AccessGroupName
+      GroupName: !If [HasAccessGroupName, !Ref AccessGroupName, !Ref AWS::StackName]
       UserPoolId: !Ref AuthUserPoolId
       Description: !Sub Members may use the ${AWS::StackName} Nimbus stack
 

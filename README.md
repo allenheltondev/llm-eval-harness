@@ -283,9 +283,9 @@ for as long as the refresh token lasts (30 days). Sign out from the profile menu
 [`readysetcloud/rsc-core`](https://github.com/readysetcloud/rsc-core)'s
 `@readysetcloud/ui/auth`, the same package every Ready, Set, Cloud app uses.
 
-That group is `NIMBUS_AUTH_REQUIRED_GROUP` on the server (the template's `AccessGroupName`
-parameter, default `nimbus`; two stacks sharing the pool need different names): a valid token
-without it gets `403`. The stack's own pool from before the shared one is kept, unused, as
+That group is `NIMBUS_AUTH_REQUIRED_GROUP` on the server: a valid token without it gets `403`.
+It is named after the stack (`llm-eval-harness` for the default `STACK_NAME`), so every stack
+sharing the pool gets its own; `make deploy-backend ACCESS_GROUP_NAME=...` names it yourself. The stack's own pool from before the shared one is kept, unused, as
 `LegacyUserPoolId` -- retained so its accounts are not deleted with it.
 
 > **What the gate is, and is not.** The Lambda Function URL stays `AuthType: NONE` and CloudFront

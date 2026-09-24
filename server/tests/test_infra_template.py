@@ -182,3 +182,20 @@ def test_the_stacks_own_pool_is_retained_with_its_accounts(
 ) -> None:
     assert resources[logical_id]["DeletionPolicy"] == "Retain"
     assert resources[logical_id]["UpdateReplacePolicy"] == "Retain"
+
+
+def test_the_access_group_is_named_after_the_stack_unless_told_otherwise(
+    template: dict, resources: dict
+) -> None:
+    """Group names are shared by every stack on the pool; stack names are unique."""
+    assert template["Parameters"]["AccessGroupName"]["Default"] == ""
+    assert template["Conditions"]["HasAccessGroupName"] == {
+        "Fn::Not": [{"Fn::Equals": [{"Fn::Ref": "AccessGroupName"}, ""]}]
+    }
+    assert resources["AccessGroup"]["Properties"]["GroupName"] == {
+        "Fn::If": [
+            "HasAccessGroupName",
+            {"Fn::Ref": "AccessGroupName"},
+            {"Fn::Ref": "AWS::StackName"},
+        ]
+    }

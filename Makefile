@@ -145,6 +145,7 @@ smoke:
 # Optional overrides:
 #   SERVER_MEMORY=2048 make deploy-backend      # bigger Lambda (faster cold start)
 #   HISTORY_RETENTION_DAYS=365 make deploy-backend  # expire history after a year (default: keep forever)
+#   make deploy-backend ACCESS_GROUP_NAME=nimbus-team  # access group on the shared pool (default: the stack name)
 #   DEPLOY_API_URL=https://... make deploy-frontend   # SPA pointed elsewhere
 # --------------------------------------------------------------------------- #
 
@@ -184,7 +185,8 @@ deploy-backend:
 		"ServerArtifactKey=$$SERVER_KEY" \
 		"EvalWorkerArtifactKey=$$WORKER_KEY" \
 		$${SERVER_MEMORY:+"ServerMemorySize=$$SERVER_MEMORY"} \
-		$${HISTORY_RETENTION_DAYS:+"HistoryRetentionDays=$$HISTORY_RETENTION_DAYS"} ); \
+		$${HISTORY_RETENTION_DAYS:+"HistoryRetentionDays=$$HISTORY_RETENTION_DAYS"} \
+		$(if $(ACCESS_GROUP_NAME),"AccessGroupName=$(ACCESS_GROUP_NAME)",) ); \
 	echo; \
 	echo "Backend deployed to stack $(STACK_NAME):"; \
 	echo "  AppUrl:                        $$(resolve_output AppUrl)"; \

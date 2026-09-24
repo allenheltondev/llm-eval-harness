@@ -229,3 +229,22 @@ def test_deploy_backend_runs_the_check_first():
     assert first_command.startswith(
         "DEPLOY_REGION=$(DEPLOY_REGION) ./scripts/check-deploy-prerequisites.sh"
     )
+
+
+def _deploy_overrides(*make_args: str) -> str:
+    """The `sam deploy` line `make deploy-backend` would run, without running it."""
+    result = subprocess.run(
+        ["make", "-n", "-C", str(SCRIPT.parent.parent), "deploy-backend", *make_args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def test_deploy_backend_passes_an_access_group_name_when_given():
+    assert '"AccessGroupName=nimbus-team"' in _deploy_overrides("ACCESS_GROUP_NAME=nimbus-team")
+
+
+def test_deploy_backend_leaves_the_access_group_to_the_template_by_default():
+    assert "AccessGroupName" not in _deploy_overrides()
