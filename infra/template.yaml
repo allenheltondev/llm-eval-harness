@@ -211,11 +211,6 @@ Resources:
       CodeUri:
         Bucket: !Ref ArtifactBucket
         Key: !Ref EvalWorkerArtifactKey
-      # The worker zip still carries the pre-rename evalharness.worker.lambda_app
-      # shim for this one deploy: CloudFormation applies configuration and code
-      # in separate calls, so if the new code lands before this handler, the
-      # old handler name must still resolve. Drop the shim in the next release
-      # (docs/serverless-deploy.md).
       Handler: nimbus.worker.lambda_app.handler
       Runtime: python3.12
       Architectures:

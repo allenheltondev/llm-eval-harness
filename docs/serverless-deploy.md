@@ -122,29 +122,26 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
   template injects NIMBUS_EVAL_TABLE / EVAL_FUNCTION_NAME / AUTH_* directly
   from `!Ref`/`!GetAtt`; there is no runtime discovery of anything.
 
-### The rename to Nimbus (the overlap, and what is left of it)
+### The rename to Nimbus
 
 CloudFormation applies a function's configuration and its code in separate
 calls, and requests are served in between, so no single deploy may change
 something the code on the other side of that gap still needs. The rename from
-`evalharness` to `nimbus` was therefore spread over releases:
+`evalharness` to `nimbus` was therefore spread over three releases:
 
-1. **The rename** (shipped): every application setting was given under both
-   names, `NIMBUS_*` and `EVALHARNESS_*` with the same value, so old code never
-   lost its settings — above all the auth pair, without which it would have
-   served every route unauthenticated through the public Function URL. The
-   worker's `Handler` stayed `evalharness.worker.lambda_app.handler`, served by
-   a shim (`server/compat/evalharness`) in the worker zip.
-2. **This release**: the `EVALHARNESS_*` variables are gone (the running code
-   already prefers `NIMBUS_*`, so either order is safe) and the worker's
-   `Handler` is `nimbus.worker.lambda_app.handler`. The shim is still in the zip:
-   if the new code lands before the new handler, the old handler name must
-   still resolve.
-3. **Next release**: delete `server/compat/`, its line in
-   `scripts/package-eval-worker.sh`, and its test in
-   `tests/test_infra_template.py`.
+1. every application setting was given under both names, `NIMBUS_*` and
+   `EVALHARNESS_*` with the same value, so old code never lost its settings —
+   above all the auth pair, without which it would have served every route
+   unauthenticated through the public Function URL — and the worker's `Handler`
+   kept its old name, served by a shim in the worker zip;
+2. the `EVALHARNESS_*` variables were dropped and the `Handler` moved to
+   `nimbus.worker.lambda_app.handler`, with the shim still shipped in case the
+   new code landed before the new handler;
+3. the shim was deleted.
 
-The CLI and a local server keep reading `EVALHARNESS_*` as a fallback on
+The same pattern applies to any future rename of a setting or a handler: add
+the new name alongside the old, switch over, then remove the old — one deploy
+each. The CLI and a local server still read `EVALHARNESS_*` as a fallback on
 people's own machines; that is unrelated to the deployed stack.
 
 ## Out of scope (documented, not built)
