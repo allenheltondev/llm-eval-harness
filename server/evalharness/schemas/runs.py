@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 
 class Page[T](BaseModel):
@@ -70,3 +70,15 @@ class EvaluationDetail(BaseModel):
     #: carries no such column, so a local row takes the default; cloud rows
     #: set it explicitly. See ``docs/cloud-evals.md``.
     execution: Literal["local", "cloud"] = "local"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def source(self) -> str | None:
+        """Where the evaluation was started (``cli``/``ui``/``api``), from its config.
+
+        Read from the stored config rather than kept as a column, so both lanes
+        and both history backends carry it with no schema change. ``None`` for
+        evaluations recorded before the field existed.
+        """
+        value = self.config.get("source")
+        return value if isinstance(value, str) else None

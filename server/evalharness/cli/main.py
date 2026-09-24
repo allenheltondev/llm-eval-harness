@@ -59,6 +59,9 @@ COMMANDS: dict[str, Command] = {
     "runs": commands.runs,
     "show": commands.show,
     "serve": commands.serve,
+    "login": commands.login,
+    "logout": commands.logout,
+    "whoami": commands.whoami,
 }
 
 
@@ -207,6 +210,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="which SDK runs the judge (default: bedrock)",
     )
     evaluate.add_argument("--grader-system", help="override the judge's system prompt")
+    evaluate.add_argument(
+        "--remote",
+        action="store_true",
+        help=(
+            "run it on the server you signed in to with `evalharness login`, so it is "
+            "stored there and shows in that server's web UI"
+        ),
+    )
+    evaluate.add_argument(
+        "--detach",
+        action="store_true",
+        help="with --remote: submit, print the evaluation's id and link, and return",
+    )
 
     subparsers.add_parser(
         "models", parents=[output], help="list available models across every provider"
@@ -223,6 +239,26 @@ def build_parser() -> argparse.ArgumentParser:
         "show", parents=[output], help="print one stored run or evaluation as JSON"
     )
     show.add_argument("id", help="a run id or an evaluation id")
+
+    login = subparsers.add_parser(
+        "login",
+        parents=[output],
+        help="sign in to a deployed harness for `eval --remote`",
+        description=(
+            "Sign in to a harness (the URL of its web UI) and save the login for "
+            "`eval --remote`. The password is read without echo, or from stdin with "
+            "--password-stdin; it is never stored."
+        ),
+    )
+    login.add_argument("--url", help="the harness's URL (default: the one you last signed in to)")
+    login.add_argument("--email", help="your email (prompted for when omitted)")
+    login.add_argument(
+        "--password-stdin", action="store_true", help="read the password from stdin"
+    )
+    subparsers.add_parser("logout", parents=[output], help="forget the saved login")
+    subparsers.add_parser(
+        "whoami", parents=[output], help="show which harness `eval --remote` uses, and as whom"
+    )
 
     serve = subparsers.add_parser("serve", parents=[output], help="start the HTTP API and UI")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
@@ -363,8 +399,23 @@ def _check_required(args: argparse.Namespace) -> None:
         )
 
 
+def _check_remote(args: argparse.Namespace) -> None:
+    """``--remote`` and ``--detach`` only make sense together, and not with ``--db``."""
+    if args.command != "eval":
+        return
+    if args.detach and not args.remote:
+        raise UsageError("--detach only applies to --remote: a local evaluation runs here")
+    if args.remote and args.db is not None:
+        raise UsageError("--remote runs on the server and is stored there; --db is local only")
+
+
 def prepare(args: argparse.Namespace, stdin: TextIO) -> None:
     """Resolve and validate everything argparse could not decide on its own."""
+    if args.command == "login":
+        # Prompts (email, password) read from here; the command runs later.
+        args.stdin = stdin
+        return
+    _check_remote(args)
     _check_required(args)
     if args.command == "eval" and args.suite is not None:
         _prepare_suite(args)

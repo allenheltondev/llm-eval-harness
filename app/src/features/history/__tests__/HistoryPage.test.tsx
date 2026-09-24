@@ -259,6 +259,33 @@ describe('HistoryPage: row click detail panel', () => {
     fireEvent.click(rows[0])
     expect(screen.queryByTestId('run-detail-view')).not.toBeInTheDocument()
   })
+
+  it('opens a linked run on arrival, even one not on the loaded page', () => {
+    render(<HistoryPage runId="run-from-an-evaluation" />)
+
+    // Not in the store's page, so the panel opens and fetches it by id.
+    expect(screen.getByTestId('run-detail-view')).toBeInTheDocument()
+    expect(getRunDetail).toHaveBeenCalledWith('run-from-an-evaluation')
+  })
+
+  it('reports the open run, and its closing, so the address bar can follow', () => {
+    const onSelectRun = vi.fn()
+    render(<HistoryPage onSelectRun={onSelectRun} />)
+    const rows = screen.getAllByTestId('history-row')
+
+    fireEvent.click(rows[0])
+    fireEvent.click(rows[0])
+
+    expect(onSelectRun.mock.calls).toEqual([['r1'], [null]])
+  })
+
+  it('follows a new run link while already on the page', () => {
+    const { rerender } = render(<HistoryPage runId={null} />)
+
+    rerender(<HistoryPage runId="r2" />)
+
+    expect(screen.getByTestId('run-detail-view')).toHaveAttribute('data-run-id', 'r2')
+  })
 })
 
 describe('HistoryPage: compare', () => {

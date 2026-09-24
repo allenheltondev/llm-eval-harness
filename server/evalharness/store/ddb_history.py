@@ -83,8 +83,9 @@ class DynamoHistoryRepo:
             :mod:`evalharness.store.ddb_items` builds exactly those.
     """
 
-    def __init__(self, table: Any) -> None:
+    def __init__(self, table: Any, *, retention_days: int = ddb_items.KEEP_FOREVER) -> None:
         self._table = table
+        self._retention_days = retention_days
 
     # -- plumbing ---------------------------------------------------------- #
 
@@ -114,7 +115,8 @@ class DynamoHistoryRepo:
         return items, next_cursor
 
     def _put(self, item: dict[str, Any]) -> None:
-        self._table.put_item(Item=item)
+        """Every write is a whole ``META`` item, so retention is applied here, once."""
+        self._table.put_item(Item=ddb_items.apply_retention(item, self._retention_days))
 
     # -- runs -------------------------------------------------------------- #
 

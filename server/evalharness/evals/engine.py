@@ -40,7 +40,8 @@ A repeat whose in-band error is throttle-classified (``model_throttled``, from
 :data:`RETRY_BACKOFF_SECONDS` between attempts -- a module-level tuple so tests
 can shorten it. Retries keep the repeat's index; only the successful attempt's
 run id is kept. Anything still failing after the last attempt is reported as
-``run_failed``, excluded from grading, listed in ``result.failed_runs``, and the
+``run_failed``, excluded from grading, listed in ``result.failed_runs`` (with its
+``run_id`` when the run got far enough to be recorded, else ``None``), and the
 other repeats carry on.
 
 Statuses
@@ -471,7 +472,7 @@ def _build_result(
         "metrics": metrics,
         "run_ids": [outcome.run_id for outcome in successes],
         "failed_runs": [
-            {"index": outcome.index, "error": outcome.error}
+            {"index": outcome.index, "run_id": outcome.run_id, "error": outcome.error}
             for outcome in outcomes
             if not outcome.succeeded
         ],
@@ -565,6 +566,11 @@ def _suite_case_result(
     only the answers that came back would let one good answer in ten attempts
     pass -- exactly the flakiness repeats exist to expose.
 
+    ``repeats`` is the same list with each repeat's run attached --
+    ``{"run_id", "ran", "score"}`` in run order -- so a failed repeat keeps its
+    place (and its run, when one was recorded) instead of the successful ones
+    being renumbered. ``run_ids`` stays the successful runs only.
+
     ``status`` is ``passed`` / ``failed`` when every repeat has a score,
     ``error`` when no repeat produced an answer at all, and ``judge_error`` when
     any answer went unjudged: that evidence is missing, and it is neither a pass
@@ -578,6 +584,14 @@ def _suite_case_result(
     entry: dict[str, Any] = {
         "id": case_id,
         "run_ids": [outcome.run_id for outcome in succeeded],
+        "repeats": [
+            {
+                "run_id": outcome.run_id,
+                "ran": outcome.succeeded,
+                "score": None if score is None else round(score, 4),
+            }
+            for outcome, score in zip(ordered, scores, strict=True)
+        ],
         "runs": {"total": len(runs), "succeeded": len(succeeded)},
         "passed": False,
         "score": None,
@@ -678,7 +692,12 @@ def _build_suite_result(
         },
         "run_ids": [outcome.run_id for outcome in outcomes if outcome.succeeded],
         "failed_runs": [
-            {"index": outcome.index, "case_id": outcome.case_id, "error": outcome.error}
+            {
+                "index": outcome.index,
+                "case_id": outcome.case_id,
+                "run_id": outcome.run_id,
+                "error": outcome.error,
+            }
             for outcome in outcomes
             if not outcome.succeeded
         ],

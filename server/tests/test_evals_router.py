@@ -203,6 +203,42 @@ async def test_determinism_runs_n_times_and_completes(client, models, judge_mode
     assert len(judge_model.calls) == 4
 
 
+async def test_an_evaluation_records_where_it_was_started(client):
+    accepted = await client.post("/api/v1/evaluations", json=determinism_body(source="ui"))
+
+    assert accepted.json()["source"] == "ui"
+    finished = await wait_for_terminal(client, accepted.json()["id"])
+    assert finished["source"] == "ui"
+    assert finished["config"]["source"] == "ui"
+    listed = (await client.get("/api/v1/evaluations")).json()["items"]
+    assert [row["source"] for row in listed] == ["ui"]
+
+
+async def test_a_caller_that_does_not_say_is_the_api(client):
+    accepted = await client.post("/api/v1/evaluations", json=determinism_body())
+
+    assert accepted.json()["source"] == "api"
+    await wait_for_terminal(client, accepted.json()["id"])
+
+
+async def test_an_unknown_source_is_rejected(client):
+    response = await client.post("/api/v1/evaluations", json=determinism_body(source="cron"))
+
+    assert response.status_code == 422
+
+
+def test_an_evaluation_stored_before_sources_existed_has_none():
+    from evalharness.schemas.runs import EvaluationDetail
+
+    detail = EvaluationDetail(
+        id="e", ts="2026-01-01T00:00:00Z", kind="grade", status="completed",
+        config={"kind": "grade"}, run_ids=[],
+    )
+
+    assert detail.source is None
+    assert detail.model_dump()["source"] is None
+
+
 async def test_n_is_clamped_into_the_supported_range(client):
     accepted = await client.post("/api/v1/evaluations", json=determinism_body(n=99))
     finished = await wait_for_terminal(client, accepted.json()["id"])
@@ -305,6 +341,11 @@ async def test_a_permanently_failed_run_is_excluded_but_the_eval_completes(clien
     assert len(failed) == 1
     assert failed[0]["error"]["code"] == "internal_error"
     assert "kaboom" in failed[0]["error"]["message"]
+    # The failed run was recorded, so the result links to it.
+    assert failed[0]["run_id"] is not None
+    assert failed[0]["run_id"] not in finished["run_ids"]
+    stored = await client.get(f"/api/v1/runs/{failed[0]['run_id']}")
+    assert stored.status_code == 200
     # Only the surviving run was graded.
     assert finished["result"]["metrics"]["runs_analyzed"] == 1
 
@@ -527,6 +568,7 @@ async def test_a_stored_run_that_failed_is_excluded_from_grading(client):
     assert finished["status"] == "completed"
     assert finished["result"]["run_ids"] == [run_ids[0]]
     assert [failed["index"] for failed in finished["result"]["failed_runs"]] == [1]
+    assert [failed["run_id"] for failed in finished["result"]["failed_runs"]] == [run_ids[1]]
 
 
 # --------------------------------------------------------------------------- #

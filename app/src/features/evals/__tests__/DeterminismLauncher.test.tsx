@@ -164,7 +164,9 @@ describe('DeterminismLauncher', () => {
         system_prompt: 'You are a strict judge.'
       },
       rubric: 'Penalize inconsistent tool use.',
-      execution: 'local'
+      execution: 'local',
+      // Recorded with the evaluation so its history can say where it started.
+      source: 'ui'
     })
   })
 

@@ -14,11 +14,15 @@ directly, so the whole surface is testable with two ``StringIO``s.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
+import getpass
+import time
 from contextlib import aclosing
 from typing import Any, TextIO
 
 from evalharness.awscat.catalog import ModelCatalog
-from evalharness.cli import render
+from evalharness.cli import remote, render
 from evalharness.config import Settings
 from evalharness.engine.events import (
     ErrorEvent,
@@ -184,6 +188,7 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
             "suite": spec,
             "rubric": args.rubric if args.rubric is not None else rubric,
             "grader": grader,
+            "source": "cli",
         }
     )
 
@@ -211,6 +216,7 @@ def build_eval_request(args: argparse.Namespace) -> EvaluationRequest:
             run_ids=list(args.run),
             rubric=args.rubric,
             grader=grader,
+            source="cli",
         )
     return EvaluationRequest(
         kind="determinism",
@@ -218,6 +224,7 @@ def build_eval_request(args: argparse.Namespace) -> EvaluationRequest:
         n=args.n if args.n is not None else DEFAULT_DETERMINISM_RUNS,
         rubric=args.rubric,
         grader=grader,
+        source="cli",
     )
 
 
@@ -282,6 +289,8 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
     means cancel this evaluation rather than "stop watching it".
     """
     request = build_eval_request(args)
+    if getattr(args, "remote", False):
+        return await evaluate_remote(args, request, out, err)
     repo = get_history_repo(settings)
 
     if request.kind == "grade":
@@ -326,6 +335,200 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
         _write(out, render.dumps(terminal) + "\n")
 
     return _EXIT_FOR_STATUS.get(str(terminal.get("status")), EXIT_FAILED)
+
+
+# --------------------------------------------------------------------------- #
+# eval --remote, login, logout, whoami
+# --------------------------------------------------------------------------- #
+
+
+def _choose_lane(health: dict[str, Any], url: str) -> str:
+    """The lane the server's own UI would pick: the cloud one when it has it.
+
+    A deployed server has no local lane at all; a laptop's ``serve`` usually
+    has no cloud lane. Asked rather than assumed, so ``--remote`` works against
+    either without a flag.
+    """
+    if (health.get("cloud_evals") or {}).get("configured"):
+        return "cloud"
+    if (health.get("local_evals") or {}).get("available", True):
+        return "local"
+    raise remote.RemoteError(f"{url} has no evaluation lane configured")
+
+
+async def evaluate_remote(
+    args: argparse.Namespace, request: EvaluationRequest, out: TextIO, err: TextIO
+) -> int:
+    """Run the evaluation on the signed-in server and follow it from here.
+
+    The server owns it -- it runs there, is stored there, and is listed in that
+    server's UI -- and this command renders its event stream exactly as it
+    renders a local one. Ctrl-C cancels it on the server, as it would locally;
+    ``--detach`` submits and returns instead of following.
+    """
+    login = remote.load_login()
+    if login is None or not login.signed_in:
+        raise remote.NotSignedInError(
+            "not signed in to a harness: run `evalharness login --url https://<your-stack>`"
+        )
+
+    async with remote.http_client() as http:
+        api = remote.RemoteApi(http, login)
+        execution = _choose_lane(await api.health(), login.url)
+        body = request.model_copy(update={"execution": execution}).model_dump(mode="json")
+        created = await api.submit(body)
+        evaluation_id = created["id"]
+        link = remote.evaluation_link(login.url, evaluation_id)
+        _note(err, f"| evaluation {evaluation_id} submitted to {login.url} ({execution} lane)")
+        _note(err, f"| {link}")
+
+        if args.detach:
+            _write(out, render.dumps({"evaluation_id": evaluation_id, "url": link}) + "\n")
+            return EXIT_OK
+
+        try:
+            async for entry in api.events(evaluation_id):
+                if args.json:
+                    _write(out, to_json_line(entry))
+                else:
+                    _note(err, render.eval_progress_line(entry))
+        except asyncio.CancelledError:
+            # Ctrl-C: the evaluation is the server's, so stopping here would
+            # leave it running with nobody watching. Cancel it there too.
+            _note(err, f"| cancelling {evaluation_id} on the server")
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(api.cancel(evaluation_id), timeout=10)
+            raise
+
+        final = await api.evaluation(evaluation_id)
+
+    terminal = {
+        "evaluation_id": evaluation_id,
+        "status": final.get("status"),
+        "result": final.get("result"),
+        "error": final.get("error"),
+        "run_ids": final.get("run_ids") or [],
+        "url": link,
+    }
+    if not args.json:
+        for line in render.eval_result_lines(terminal["result"]):
+            _write(err, line + "\n")
+        _write(out, render.dumps(terminal) + "\n")
+        _note(err, f"| {link}")
+    return _EXIT_FOR_STATUS.get(str(terminal["status"]), EXIT_FAILED)
+
+
+def _prompt(err: TextIO, stdin: TextIO, label: str) -> str:
+    _write(err, label)
+    err.flush()
+    return stdin.readline().strip()
+
+
+async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """Sign in to a harness and save the login for ``eval --remote``.
+
+    The password comes from the terminal without echo, or from stdin with
+    ``--password-stdin`` (for scripts); it is sent to the user pool and never
+    stored. An invited user's first sign-in sets their permanent password here.
+    """
+    stdin: TextIO = args.stdin
+    previous = remote.load_login()
+    raw_url = args.url or (previous.url if previous else None)
+    if not raw_url:
+        raise remote.RemoteError("which server? pass --url https://<your-stack>")
+    url = remote.normalize_url(raw_url)
+
+    async with remote.http_client() as http:
+        health = await remote.discover(http, url)
+        auth = health.get("auth") or {}
+        if not auth.get("required"):
+            remote.save_login(remote.Login(url=url))
+            _note(err, f"| {url} does not require sign-in; saved it for `eval --remote`")
+            if args.json:
+                _write(out, render.dumps({"url": url, "email": None}) + "\n")
+            return EXIT_OK
+
+        # Before anything is asked for: a pool this server made up gets no password.
+        pool = remote.checked_pool(auth, url)
+        email = args.email or (previous.email if previous and previous.url == url else None)
+        if not email:
+            if not stdin.isatty():
+                raise remote.RemoteError("pass --email when not signing in from a terminal")
+            email = _prompt(err, stdin, "Email: ")
+        if args.password_stdin:
+            password = stdin.readline().rstrip("\n")
+        elif stdin.isatty():
+            password = getpass.getpass("Password: ", stream=err)
+        else:
+            raise remote.RemoteError("pass --password-stdin to read the password from stdin")
+        if not email or not password:
+            raise remote.RemoteError("an email and a password are required")
+
+        cognito = remote.Cognito(http, pool["region"], pool["client_id"])
+        outcome = await cognito.sign_in(email, password)
+        if isinstance(outcome, remote.NewPasswordRequired):
+            if not stdin.isatty():
+                raise remote.RemoteError(
+                    "this account must set a new password first: sign in once from a "
+                    "terminal (or the web UI) to choose one"
+                )
+            _note(err, "| this is your first sign-in: choose a new password")
+            new_password = getpass.getpass("New password: ", stream=err)
+            if new_password != getpass.getpass("Repeat new password: ", stream=err):
+                raise remote.RemoteError("the two passwords did not match")
+            outcome = await cognito.set_new_password(email, new_password, outcome.session)
+
+    remote.save_login(
+        remote.Login(
+            url=url,
+            auth=pool,
+            email=email,
+            id_token=outcome.id_token,
+            refresh_token=outcome.refresh_token,
+            expires_at=outcome.expires_at,
+        )
+    )
+    _note(err, f"| signed in to {url} as {email}")
+    if args.json:
+        _write(out, render.dumps({"url": url, "email": email}) + "\n")
+    return EXIT_OK
+
+
+async def logout(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """Forget the saved login, revoking its refresh token first (best effort)."""
+    saved = remote.load_login()
+    if saved is None:
+        _note(err, "| not signed in")
+        return EXIT_OK
+    if saved.auth is not None and saved.refresh_token:
+        # Best effort: an unreachable pool must not stop someone signing out
+        # of this machine, which is what the file deletion does.
+        with contextlib.suppress(remote.RemoteError):
+            async with remote.http_client() as http:
+                await remote.cognito_for(http, saved).revoke(saved.refresh_token)
+    remote.clear_login()
+    _note(err, f"| signed out of {saved.url}")
+    return EXIT_OK
+
+
+async def whoami(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """Which server ``eval --remote`` talks to, and as whom. Offline."""
+    saved = remote.load_login()
+    if saved is None:
+        raise remote.NotSignedInError("not signed in: run `evalharness login --url https://...`")
+    remaining = None if saved.expires_at is None else int(saved.expires_at - time.time())
+    if args.json:
+        _write(
+            out,
+            render.dumps({"url": saved.url, "email": saved.email, "expires_in": remaining}) + "\n",
+        )
+        return EXIT_OK
+    who = saved.email or "(no sign-in required)"
+    _write(out, f"{who} @ {saved.url}\n")
+    if remaining is not None:
+        state = f"valid for {remaining // 60} more minutes" if remaining > 0 else "expired"
+        _note(err, f"| token {state}; it is refreshed automatically")
+    return EXIT_OK
 
 
 # --------------------------------------------------------------------------- #

@@ -337,7 +337,12 @@ export interface EvaluationDetail {
   error: unknown | null
   /** Which lane this evaluation ran in (docs/cloud-evals.md "Request"). */
   execution: EvaluationExecution
+  /** Where it was started, from its stored config; `null` on older rows. */
+  source?: EvaluationSource | string | null
 }
+
+/** Which front door started an evaluation. */
+export type EvaluationSource = 'cli' | 'ui' | 'api'
 
 /** The `config` JSON persisted on an evaluation row (`stored_config`). */
 export interface EvaluationStoredConfig {
@@ -347,7 +352,46 @@ export interface EvaluationStoredConfig {
   run_config: RunRequest | null
   rubric: string | null
   grader: { model_id: string; system_prompt: string | null; provider?: ModelSource }
+  /** Where it was started (absent on rows recorded before sources existed). */
+  source?: EvaluationSource
+  /** `kind: 'suite'` only — the whole suite, exactly as it was run. */
+  suite?: StoredSuite
   [key: string]: unknown
+}
+
+/** A test suite as stored on its evaluation (`docs/suites.md`). */
+export interface StoredSuite {
+  name: string | null
+  run_config: RunRequest
+  cases: Array<{
+    id: string
+    input: string
+    expected?: string | null
+    criteria?: string | null
+  }>
+  repeats: number
+  pass_threshold: number
+}
+
+/** How one suite case came out (`evals/engine.py::_suite_case_result`). */
+export interface SuiteCaseResult {
+  id: string
+  status: 'passed' | 'failed' | 'error' | 'judge_error' | string
+  passed: boolean
+  /** Mean over every repeat, 0 – 1; `null` unless every repeat was scored. */
+  score: number | null
+  /** One per repeat, in run order: `0` for a repeat that failed to run, `null` if unjudged. */
+  scores: Array<number | null>
+  reasoning: string | null
+  error: Record<string, unknown> | null
+  /** The successful runs only. */
+  run_ids: string[]
+  /**
+   * One per repeat, in run order (aligned with `scores`): its run, if one was
+   * recorded, and whether it answered. Absent on results stored before it existed.
+   */
+  repeats?: Array<{ run_id: string | null; ran: boolean; score: number | null }>
+  runs: { total: number; succeeded: number }
 }
 
 /** Local determinism metrics merged with the judge's metrics (`evals/metrics.py`). */
@@ -379,7 +423,20 @@ export interface EvaluationResult {
   metrics: EvaluationMetrics
   /** Ids of the runs that completed successfully. */
   run_ids: string[]
-  failed_runs: Array<{ index: number; error: Record<string, unknown> | null }>
+  failed_runs: Array<{
+    index: number
+    /** The failed run, when it got far enough to be recorded (absent on older results). */
+    run_id?: string | null
+    error: Record<string, unknown> | null
+    /** Suites only: the case the failed run belonged to. */
+    case_id?: string
+  }>
+  /** Suites only: one entry per case, in suite order. */
+  cases?: SuiteCaseResult[]
+  /** Suites only. */
+  suite?: { name: string | null; repeats: number; pass_threshold: number }
+  /** Set when judge prose was shortened to fit the stored result. */
+  truncated?: boolean
   /** Present only when the judge itself failed (local metrics still stand). */
   judge_error?: string
 }
@@ -447,6 +504,8 @@ export interface EvaluationRequest {
    * contract: docs/cloud-evals.md "Request".
    */
   execution?: EvaluationExecution
+  /** Which front door started it; stored with the evaluation. Defaults to `'api'`. */
+  source?: EvaluationSource
 }
 
 /* -------------------------------------------------------------------------- */

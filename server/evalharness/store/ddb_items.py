@@ -57,11 +57,17 @@ GSI1_SK = "GSI1SK"
 EVAL_PARTITION = "EVAL"
 RUN_PARTITION = "RUN"
 
-#: TTL horizon for every item written through this module (the contract's 90
-#: days), on the ``expiresAt`` attribute the table's TTL is configured for.
+#: TTL horizon for the items that are *not* history: an evaluation's progress
+#: events (a replay log nobody needs once it has settled) and its cancel flag.
+#: On the ``expiresAt`` attribute the table's TTL is configured for.
 TTL_DAYS = 90
 TTL_SECONDS = TTL_DAYS * 24 * 60 * 60
 TTL_ATTRIBUTE = "expiresAt"
+
+#: History -- evaluations and runs -- is kept for ``history_retention_days``
+#: (``EVALHARNESS_HISTORY_RETENTION_DAYS``, the ``HistoryRetentionDays`` stack
+#: parameter). ``0``, the default, keeps it forever: no ``expiresAt`` at all.
+KEEP_FOREVER = 0
 
 TERMINAL_STATUSES = frozenset({"completed", "error", "cancelled"})
 
@@ -102,8 +108,37 @@ def event_sk(seq: int) -> str:
 
 
 def expires_at(now: float | None = None) -> int:
-    """The ``expiresAt`` (epoch seconds) every item carries for TTL."""
+    """The ``expiresAt`` (epoch seconds) of a progress event or cancel flag."""
     return int((now if now is not None else time.time()) + TTL_SECONDS)
+
+
+def history_expiry(retention_days: int, now: float | None = None) -> int | None:
+    """The ``expiresAt`` of a history item, or ``None`` to keep it forever."""
+    if retention_days <= KEEP_FOREVER:
+        return None
+    return int((now if now is not None else time.time()) + retention_days * 24 * 60 * 60)
+
+
+def event_expiry(retention_days: int, now: float | None = None) -> int:
+    """Events expire with the usual horizon -- or with their evaluation, if sooner."""
+    days = TTL_DAYS if retention_days <= KEEP_FOREVER else min(TTL_DAYS, retention_days)
+    return int((now if now is not None else time.time()) + days * 24 * 60 * 60)
+
+
+def apply_retention(
+    item: dict[str, Any], retention_days: int, now: float | None = None
+) -> dict[str, Any]:
+    """Set (or clear) a history item's ``expiresAt`` for this retention, in place.
+
+    Clearing is what lets an item written under the old 90-day rule stop
+    expiring the next time it is saved.
+    """
+    expiry = history_expiry(retention_days, now)
+    if expiry is None:
+        item.pop(TTL_ATTRIBUTE, None)
+    else:
+        item[TTL_ATTRIBUTE] = expiry
+    return item
 
 
 def is_terminal(status: str | None) -> bool:
@@ -243,8 +278,9 @@ def run_item(
         "evaluation_id": text(evaluation_id),
         GSI1_PK: RUN_PARTITION,
         GSI1_SK: ts,
-        TTL_ATTRIBUTE: expires_at() if ttl is None else ttl,
     }
+    if ttl is not None:
+        item[TTL_ATTRIBUTE] = ttl
     for field in RUN_TEXT_FIELDS:
         item[field] = text(ts if field == "ts" else data.get(field))
     for field in RUN_JSON_FIELDS:
@@ -303,11 +339,12 @@ def evaluation_item(
         "sk": META_SK,
         GSI1_PK: EVAL_PARTITION,
         GSI1_SK: ts,
-        TTL_ATTRIBUTE: expires_at() if ttl is None else ttl,
         "config": json.dumps(data.get("config") or {}, default=str),
         "run_ids": json.dumps(list(data.get("run_ids") or []), default=str),
         "seq_count": seq_count,
     }
+    if ttl is not None:
+        item[TTL_ATTRIBUTE] = ttl
     for field in EVAL_TEXT_FIELDS:
         item[field] = text(ts if field == "ts" else data.get(field))
     for field in EVAL_JSON_FIELDS:

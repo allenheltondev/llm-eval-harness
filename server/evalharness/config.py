@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     #: ``auto`` means "off inside Lambda, on everywhere else" -- a deployed
     #: server has no durable place to run a multi-minute job.
     local_evals: Literal["auto", "on", "off"] = "auto"
+    #: How long deployed history (evaluations and their runs, in DynamoDB) is
+    #: kept, in days. ``0`` keeps it forever. Set per stack by the
+    #: ``HistoryRetentionDays`` template parameter; SQLite history is never
+    #: expired by the harness.
+    history_retention_days: int = Field(default=0, ge=0)
 
     # -- authentication (evalharness.auth) ---------------------------------- #
     #: Cognito user pool the deployed server verifies bearer tokens against.

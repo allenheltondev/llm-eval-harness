@@ -101,6 +101,8 @@ evalharness eval --run <id> --run <id>           # grade runs you already have
 evalharness runs                                 # history, newest first
 evalharness show <id>                            # one run or evaluation, as JSON
 evalharness serve                                # the HTTP API the web UI talks to
+evalharness login --url https://<your-stack>     # then, on the deployed stack:
+evalharness eval --remote --suite cases.yaml     #   runs there, shows in its web UI
 ```
 
 Two conventions worth knowing up front:
@@ -190,6 +192,24 @@ EVALHARNESS_EVAL_TABLE=llm-eval-harness-EvalTable-...         # stack output Tab
 The UI disables the cloud option until `GET /health` reports `cloud_evals.configured`. Full design
 and item shapes: `docs/cloud-evals.md`; infrastructure notes and first-deploy verification list:
 `docs/cloud-evals-infra.md`.
+
+### History: from the CLI, in the UI, kept
+
+Every evaluation is recorded with where it was started — the web UI, the CLI, or another API
+client — and the Evals tab labels it. `evalharness login` then `evalharness eval --remote …` runs an
+evaluation on the deployed stack from your terminal, so it lands in that stack's history and its
+UI like any other ([docs/cli.md](docs/cli.md#running-on-a-deployed-harness)).
+
+Opening an evaluation shows everything recorded about it: the grade and metrics, a suite's
+per-case table (verdict, score for each repeat, the judge's reasoning, the case itself), the
+configuration it ran with, and a link to every run. Each evaluation has its own address
+(`/#/evals/<id>`, and `/#/runs/<id>` for a run), which is what the CLI prints and what **Copy
+link** gives you.
+
+Deployed history is **kept forever** by default. To expire it, deploy with
+`HISTORY_RETENTION_DAYS=365 make deploy-backend` (the `HistoryRetentionDays` stack parameter);
+evaluations and their runs then expire that many days after they were written. Progress events —
+a replay log, not history — always expire after 90 days.
 
 ## Guardrails
 

@@ -879,6 +879,31 @@ class TestSuiteOverrides:
         assert "needs an explicit grader.model_id" in result.err
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["eval", "-m", "m1", "-p", "hi"],
+        ["eval", "--run", "run-1"],
+    ],
+)
+def test_every_cli_evaluation_says_it_came_from_the_cli(argv):
+    from evalharness.cli.main import build_parser, prepare
+
+    args = build_parser().parse_args(argv)
+    prepare(args, _Stdin("", tty=True))
+
+    assert commands.build_eval_request(args).source == "cli"
+
+
+def test_a_cli_suite_says_it_came_from_the_cli(suite_file):
+    from evalharness.cli.main import build_parser, prepare
+
+    args = build_parser().parse_args(["eval", "--suite", suite_file()])
+    prepare(args, _Stdin("", tty=True))
+
+    assert commands.build_eval_request(args).source == "cli"
+
+
 def test_the_documented_example_suite_is_valid(cli):
     """docs/examples/support-suite.yaml is what people will copy; it must work."""
     example = next(

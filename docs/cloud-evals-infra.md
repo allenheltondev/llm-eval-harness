@@ -52,8 +52,9 @@ configured at exactly that. An evaluation can legitimately want longer: up to
 25 repeats at a concurrency of 3, plus grading, plus throttle backoff.
 
 Being killed at the ceiling is the worst available outcome. The execution
-environment disappears mid-write, and the evaluation sits at `running` until
-its 90-day TTL with nothing to tell the reader it is never coming back.
+environment disappears mid-write, and the evaluation sits at `running` --
+forever, with history kept by default -- with nothing to tell the reader it is
+never coming back.
 
 So the worker stops itself first. `evalharness.worker.lambda_app.Deadline`
 reads the invocation's own `get_remaining_time_in_millis()` and, with

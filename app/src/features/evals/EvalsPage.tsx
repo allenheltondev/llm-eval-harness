@@ -10,11 +10,13 @@
  * status right after a cancel.
  */
 
-import { useEffect, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import DeterminismLauncher from './DeterminismLauncher'
 import EvalProgress from './EvalProgress'
 import EvalResultView from './EvalResultView'
+import EvaluationDetailView, { sourceLabel } from './EvaluationDetailView'
 import { useEvalStore } from '../../stores'
+import { api } from '../../api'
 import type { EvaluationDetail, EvaluationExecution, EvaluationStatus } from '../../api'
 
 const STATUS_LABELS: Record<string, string> = {
@@ -56,7 +58,17 @@ function formatTs(ts: string): string {
   return Number.isNaN(date.getTime()) ? ts : date.toLocaleString()
 }
 
-export default function EvalsPage() {
+interface EvalsPageProps {
+  /** An evaluation to open on arrival — the `#/evals/<id>` link the CLI prints. */
+  evaluationId?: string | null
+  /** Told when the open evaluation changes, so the address bar can follow. */
+  onSelectEvaluation?: (evaluationId: string | null) => void
+}
+
+export default function EvalsPage({
+  evaluationId = null,
+  onSelectEvaluation
+}: EvalsPageProps = {}) {
   const evaluations = useEvalStore(state => state.evaluations)
   const listLoading = useEvalStore(state => state.listLoading)
   const listError = useEvalStore(state => state.listError)
@@ -71,21 +83,64 @@ export default function EvalsPage() {
   const followEvaluation = useEvalStore(state => state.followEvaluation)
   const cancelEvaluation = useEvalStore(state => state.cancelEvaluation)
 
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedIdState] = useState<string | null>(evaluationId)
   const [cloudFilter, setCloudFilter] = useState(false)
+  // An evaluation opened by link need not be on the loaded page of the list
+  // (an older one, or one from the other lane), so it is fetched on its own.
+  const [linked, setLinked] = useState<EvaluationDetail | null>(null)
+  const [linkedError, setLinkedError] = useState<string | null>(null)
+  const filterInitialized = useRef(false)
+
+  function setSelectedId(id: string | null) {
+    setSelectedIdState(id)
+    onSelectEvaluation?.(id)
+  }
 
   useEffect(() => {
     void loadEvaluations(cloudFilter ? { execution: 'cloud' } : {})
     // Switching the filter drops the previous selection: a cursor (and the
     // rows it paged in) is only valid for the filter set it was issued under.
-    setSelectedId(null)
+    // The first run is the page mounting, not a switch, and must keep a
+    // selection that arrived by link.
+    if (filterInitialized.current) setSelectedId(null)
+    filterInitialized.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudFilter, loadEvaluations])
+
+  // A link followed while already on this tab (or the back button).
+  useEffect(() => {
+    setSelectedIdState(evaluationId)
+  }, [evaluationId])
+
+  const listed = evaluations.find(row => row.id === selectedId) ?? null
+
+  useEffect(() => {
+    setLinkedError(null)
+    if (selectedId === null || listed !== null) {
+      setLinked(null)
+      return
+    }
+    if (linked?.id === selectedId) return
+    let cancelled = false
+    api.evaluations
+      .get(selectedId)
+      .then(detail => {
+        if (!cancelled) setLinked(detail)
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLinked(null)
+          setLinkedError(error instanceof Error ? error.message : String(error))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, listed === null])
 
   function handleSelectRow(row: EvaluationDetail) {
     setSelectedId(row.id)
-    if (isCancellable(row.status) && row.id !== activeEvaluationId) {
-      void followEvaluation(row.id)
-    }
   }
 
   async function handleCancelRow(row: EvaluationDetail, event: MouseEvent) {
@@ -95,7 +150,19 @@ export default function EvalsPage() {
     await refreshEvaluation(row.id)
   }
 
-  const selectedRow = evaluations.find(row => row.id === selectedId) ?? null
+  const selectedRow = listed ?? (linked?.id === selectedId ? linked : null)
+  const selectedStatus = selectedRow?.status ?? null
+
+  // An evaluation still in flight is followed live, however it was selected --
+  // a clicked row, or a link (the CLI prints one as it starts) that may only
+  // resolve once the row has been fetched. The active id is read at the time,
+  // not depended on: following sets it, and a newly launched evaluation
+  // replacing it must not pull the selection's stream back.
+  useEffect(() => {
+    if (selectedId === null || selectedStatus === null || !isCancellable(selectedStatus)) return
+    if (useEvalStore.getState().activeEvaluationId === selectedId) return
+    void followEvaluation(selectedId)
+  }, [selectedId, selectedStatus, followEvaluation])
   const isSelectedActive = selectedId !== null && selectedId === activeEvaluationId
   const showLiveProgress =
     isSelectedActive &&
@@ -126,7 +193,13 @@ export default function EvalsPage() {
             <EvalResultView result={resultToShow} />
           )}
 
-          {selectedId !== null && !showLiveProgress && !resultToShow && (
+          {selectedId !== null && linkedError && !selectedRow && (
+            <p className="text-sm text-red-600" role="alert" data-testid="eval-link-error">
+              Could not load evaluation {selectedId}: {linkedError}
+            </p>
+          )}
+
+          {selectedId !== null && !showLiveProgress && !resultToShow && !linkedError && (
             <p className="text-sm text-gray-500" data-testid="eval-no-result">
               {isSelectedActive && activeStatus === 'error'
                 ? 'The evaluation failed before it produced a result.'
@@ -137,6 +210,8 @@ export default function EvalsPage() {
           )}
         </section>
       </div>
+
+      {selectedRow && <EvaluationDetailView evaluation={selectedRow} result={resultToShow} />}
 
       <section className="card" aria-labelledby="eval-list-heading">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -198,6 +273,14 @@ export default function EvalsPage() {
                     >
                       {row.execution}
                     </span>
+                    {sourceLabel(row.source) && (
+                      <span
+                        className="px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-800"
+                        data-testid={`eval-source-${row.id}`}
+                      >
+                        {sourceLabel(row.source)}
+                      </span>
+                    )}
                     <span
                       className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClasses(row.status)}`}
                     >

@@ -159,7 +159,8 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
       run_config: toRunRequest(useRunConfigStore.getState()),
       n,
       grader,
-      execution: effectiveExecution
+      execution: effectiveExecution,
+      source: 'ui'
     }
     if (rubric.trim() !== '') request.rubric = rubric
 

@@ -366,6 +366,7 @@ def build_eval_writer_factory(settings: Settings) -> EvalWriterFactory:
             table_name=settings.eval_table or "",
             evaluation_id=evaluation_id,
             region_name=settings.aws_region,
+            retention_days=settings.history_retention_days,
         )
 
     return build

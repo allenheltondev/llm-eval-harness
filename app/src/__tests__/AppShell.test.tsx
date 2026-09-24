@@ -9,13 +9,21 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 
 const toolsMock = vi.fn()
+const getEvaluationMock = vi.fn()
 
 vi.mock('../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, api: { ...actual.api, tools: toolsMock } }
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      tools: toolsMock,
+      evaluations: { ...actual.api.evaluations, get: getEvaluationMock }
+    }
+  }
 })
 
 const { default: AppShell, TABS } = await import('../AppShell')
@@ -40,6 +48,10 @@ const PAGE_TEST_IDS: Record<string, string> = {
 }
 
 beforeEach(() => {
+  // The route is the URL fragment, which outlives a test in jsdom.
+  window.history.replaceState(null, '', '/')
+  getEvaluationMock.mockReset()
+  getEvaluationMock.mockReturnValue(new Promise(() => {}))
   localStorage.clear()
   toolsMock.mockReset()
   toolsMock.mockResolvedValue({ toolsets: [] })
@@ -114,5 +126,40 @@ describe('AppShell', () => {
     expect(screen.queryByTestId('robot-graphic')).not.toBeInTheDocument()
     expect(screen.queryByTestId('floating-chad')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Bring back Chad' })).not.toBeInTheDocument()
+  })
+
+  it('opens the page a link names', () => {
+    window.history.replaceState(null, '', '/#/evals/eval-1')
+    render(<AppShell />)
+
+    expect(screen.getByTestId('evals-page')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Evals' })).toHaveAttribute('aria-selected', 'true')
+    expect(getEvaluationMock).toHaveBeenCalledWith('eval-1')
+  })
+
+  it('opens History for a run link', () => {
+    window.history.replaceState(null, '', '/#/runs/run-9')
+    render(<AppShell />)
+
+    expect(screen.getByTestId('history-page')).toBeInTheDocument()
+  })
+
+  it('writes the tab into the address bar', () => {
+    render(<AppShell />)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Guardrails' }))
+
+    expect(window.location.hash).toBe('#/guardrails')
+  })
+
+  it('follows the address bar (back button, pasted link)', () => {
+    render(<AppShell />)
+
+    act(() => {
+      window.history.replaceState(null, '', '/#/about')
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+
+    expect(screen.getByTestId('about-page')).toBeInTheDocument()
   })
 })

@@ -207,7 +207,9 @@ class DynamoEvalStore:
             ``region_name`` when omitted, so constructing a store in a test does
             not require credentials.
         region_name: Region for the lazily-created client.
-        ttl_days: TTL horizon, overridable for tests.
+        ttl_days: TTL horizon of progress events and the cancel flag.
+        retention_days: How long the evaluation and its runs are kept; ``0``
+            (the default) keeps them forever. See ``ddb_items.history_expiry``.
         clock: ``() -> float`` epoch-seconds source, overridable for tests.
     """
 
@@ -219,6 +221,7 @@ class DynamoEvalStore:
         client: Any | None = None,
         region_name: str | None = None,
         ttl_days: int = TTL_DAYS,
+        retention_days: int = ddb_items.KEEP_FOREVER,
         clock: Any = time.time,
     ) -> None:
         if not table_name:
@@ -227,7 +230,8 @@ class DynamoEvalStore:
         self.evaluation_id = evaluation_id
         self._client = client
         self._region_name = region_name
-        self._ttl_seconds = ttl_days * 24 * 60 * 60
+        self._ttl_days = ttl_days
+        self._retention_days = retention_days
         self._clock = clock
 
         self._pk = eval_pk(evaluation_id)
@@ -300,7 +304,15 @@ class DynamoEvalStore:
         return status == "cancelled" and self._stop_reason is not None
 
     def _expires_at(self) -> int:
-        return int(self._clock()) + self._ttl_seconds
+        """Progress events and the cancel flag: never outlive the evaluation."""
+        days = self._ttl_days
+        if self._retention_days > ddb_items.KEEP_FOREVER:
+            days = min(days, self._retention_days)
+        return int(self._clock()) + days * 24 * 60 * 60
+
+    def _history_expiry(self) -> int | None:
+        """The evaluation's own item and its runs: ``None`` is kept forever."""
+        return ddb_items.history_expiry(self._retention_days, int(self._clock()))
 
     def _meta_key(self) -> dict[str, Any]:
         return {"pk": {"S": self._pk}, "sk": {"S": META_SK}}
@@ -329,8 +341,10 @@ class DynamoEvalStore:
             "seq_count": _av(0),
             "GSI1PK": {"S": GSI1_EVAL_PK},
             "GSI1SK": {"S": self._ts},
-            TTL_ATTRIBUTE: _av(self._expires_at()),
         }
+        expiry = self._history_expiry()
+        if expiry is not None:
+            item[TTL_ATTRIBUTE] = _av(expiry)
         try:
             self.client.put_item(
                 TableName=self.table_name,
@@ -515,25 +529,36 @@ class DynamoEvalStore:
         run_ids = pending.get("run_ids")
         effective_run_ids = self._saved_runs if run_ids is None else [str(r) for r in run_ids]
 
+        values: dict[str, Any] = {
+            ":status": {"S": status},
+            ":result": _json(result),
+            ":error": _json(error),
+            ":run_ids": {"S": json.dumps(effective_run_ids)},
+            ":seq_count": _av(self._seq),
+        }
+        expression = (
+            "SET #status = :status, #result = :result, #error = :error, "
+            "run_ids = :run_ids, seq_count = :seq_count"
+        )
+        # Retention is re-applied as the row settles: that is what stops a row
+        # begun under an older rule (the 90-day TTL every item once carried)
+        # from expiring once this stack keeps history for longer.
+        expiry = self._history_expiry()
+        if expiry is None:
+            expression += f" REMOVE {TTL_ATTRIBUTE}"
+        else:
+            expression += f", {TTL_ATTRIBUTE} = :expires_at"
+            values[":expires_at"] = _av(expiry)
         self.client.update_item(
             TableName=self.table_name,
             Key=self._meta_key(),
-            UpdateExpression=(
-                "SET #status = :status, #result = :result, #error = :error, "
-                "run_ids = :run_ids, seq_count = :seq_count"
-            ),
+            UpdateExpression=expression,
             ExpressionAttributeNames={
                 "#status": "status",
                 "#result": "result",
                 "#error": "error",
             },
-            ExpressionAttributeValues={
-                ":status": {"S": status},
-                ":result": _json(result),
-                ":error": _json(error),
-                ":run_ids": {"S": json.dumps(effective_run_ids)},
-                ":seq_count": _av(self._seq),
-            },
+            ExpressionAttributeValues=values,
         )
         self._pending_terminal = None
         self._finalizing = False
@@ -701,7 +726,9 @@ class DynamoEvalStore:
         ``GET /runs/{id}`` can fall back to this item and
         ``GET /runs?execution=cloud`` can list them by ``ts`` desc.
         """
-        item = ddb_items.run_item(run, evaluation_id=self.evaluation_id, ttl=self._expires_at())
+        item = ddb_items.run_item(
+            run, evaluation_id=self.evaluation_id, ttl=self._history_expiry()
+        )
         self.client.put_item(TableName=self.table_name, Item=_serialize(item))
         run_id = str(run["id"])
         if run_id not in self._saved_runs:

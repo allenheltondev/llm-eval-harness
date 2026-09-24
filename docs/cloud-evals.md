@@ -26,9 +26,23 @@ and the server is not configured for the cloud lane, respond 400
 
 `EvaluationDetail` gains `"execution": "local" | "cloud"`.
 
+Both lanes also accept `"source": "cli" | "ui" | "api"` (default `"api"`): which
+front door started the evaluation. It is stored in the evaluation's `config`
+and read back as `EvaluationDetail.source` (`null` for rows stored before the
+field existed). Nothing branches on it; the web UI labels its history with it.
+
 ## DynamoDB item shapes (existing table: pk/sk + GSI1)
 
-All items carry `expiresAt` (epoch seconds, now + 90 days) for TTL.
+TTL (`expiresAt`, epoch seconds) depends on what the item is:
+
+- **History** — evaluation `META` and run items — is kept for the stack's
+  `HistoryRetentionDays` (`EVALHARNESS_HISTORY_RETENTION_DAYS`). `0`, the
+  default, keeps it forever: no `expiresAt` at all. An evaluation's `META` is
+  re-stamped when it settles, so a row begun under an older rule takes the
+  current one.
+- **Progress events and the cancel flag** — a replay log and a signal, useless
+  once the evaluation has settled — expire after 90 days, or with their
+  evaluation if its retention is shorter.
 
 | Item | pk | sk | attributes |
 |---|---|---|---|

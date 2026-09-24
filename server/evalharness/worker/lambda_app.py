@@ -68,6 +68,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
 
+from evalharness.config import Settings
 from evalharness.store import db
 from evalharness.worker import interfaces
 from evalharness.worker.ddb import DynamoEvalStore
@@ -212,6 +213,8 @@ def build_store(evaluation_id: str) -> DynamoEvalStore:
         table_name=os.environ.get("TABLE_NAME", ""),
         evaluation_id=evaluation_id,
         region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
+        # Settings validates it (a non-negative int) exactly as the server does.
+        retention_days=Settings().history_retention_days,
     )
 
 

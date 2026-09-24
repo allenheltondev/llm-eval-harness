@@ -22,6 +22,7 @@ The two documented divergences are asserted as such rather than smoothed over:
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -449,7 +450,8 @@ def test_a_run_lands_in_the_contract_item_shape(ddb_repo, table):
     for field in ("guardrail_trace", "error"):
         assert field in item and item[field] is None
     assert item["evaluation_id"] is None
-    assert item[ddb_items.TTL_ATTRIBUTE] > 0
+    # History is kept forever by default: no TTL attribute at all.
+    assert ddb_items.TTL_ATTRIBUTE not in item
     assert record.id == "run-abc"
 
 
@@ -473,7 +475,7 @@ def test_an_evaluation_lands_in_the_contract_item_shape(ddb_repo, table):
     assert item["result"] is None
     assert item["error"] is None
     assert item["seq_count"] == 0
-    assert item[ddb_items.TTL_ATTRIBUTE] > 0
+    assert ddb_items.TTL_ATTRIBUTE not in item
 
 
 def test_a_run_the_worker_wrote_reads_back_through_the_repository(ddb_repo, table):
@@ -670,3 +672,60 @@ def test_items_refuse_a_record_with_no_id():
 def test_items_refuse_something_that_is_neither_mapping_nor_dataclass():
     with pytest.raises(TypeError, match="mapping or a dataclass"):
         ddb_items.run_item("not a record")
+
+
+# --------------------------------------------------------------------------- #
+# Retention (HistoryRetentionDays)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_retention_limit_expires_runs_and_evaluations_that_many_days_on(table):
+    repo = DynamoHistoryRepo(table, retention_days=30)
+    before = time.time()
+
+    repo.create_run(model_id="m", system_prompt="", user_prompt="hi", id="run-r")
+    repo.create_evaluation(kind="grade", run_ids=["run-r"], id="eval-r")
+
+    for pk in ("RUN#run-r", "EVAL#eval-r"):
+        expiry = table.get_item(Key={"pk": pk, "sk": "META"})["Item"][ddb_items.TTL_ATTRIBUTE]
+        assert before + 30 * 86400 - 1 <= expiry <= time.time() + 30 * 86400 + 1
+
+
+def test_saving_an_item_from_the_ninety_day_era_stops_it_expiring(table, ddb_repo):
+    """Items once all carried a 90-day TTL; the next write under keep-forever drops it."""
+    ddb_repo.create_evaluation(kind="grade", run_ids=[], id="eval-old")
+    key = {"pk": "EVAL#eval-old", "sk": "META"}
+    legacy = {**table.get_item(Key=key)["Item"], ddb_items.TTL_ATTRIBUTE: 1_000}
+    table.put_item(Item=legacy)
+
+    ddb_repo.update_evaluation("eval-old", status="completed")
+
+    assert ddb_items.TTL_ATTRIBUTE not in table.get_item(Key=key)["Item"]
+
+
+def test_retention_is_configured_per_stack_and_never_negative(monkeypatch):
+    from pydantic import ValidationError
+
+    from evalharness.config import Settings
+
+    assert Settings().history_retention_days == 0
+    monkeypatch.setenv("EVALHARNESS_HISTORY_RETENTION_DAYS", "365")
+    assert Settings().history_retention_days == 365
+    monkeypatch.setenv("EVALHARNESS_HISTORY_RETENTION_DAYS", "-1")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_the_built_repository_applies_the_configured_retention(table, monkeypatch):
+    from evalharness.config import Settings
+    from evalharness.evals import ddb_reader
+    from evalharness.store import repo as store_repo
+
+    monkeypatch.setattr(ddb_reader, "build_table", lambda name, region: table)
+    settings = Settings(history_backend="dynamodb", eval_table="t", history_retention_days=7)
+
+    built = store_repo.build_history_repo(settings)
+    built.create_evaluation(kind="grade", run_ids=[], id="eval-7")
+
+    item = table.get_item(Key={"pk": "EVAL#eval-7", "sk": "META"})["Item"]
+    assert item[ddb_items.TTL_ATTRIBUTE] > time.time() + 6 * 86400

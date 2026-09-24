@@ -10,6 +10,7 @@ service model.
 """
 
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -303,6 +304,16 @@ async def test_submitting_a_cloud_evaluation_invokes_the_runtime(client, invoker
     assert payload["request"]["run_config"]["user_prompt"] == "Assess order B456"
     assert payload["request"]["run_config"]["stream"] is False
     assert payload["request"]["grader"]["model_id"] == "amazon.nova-pro-v1:0"
+
+
+async def test_a_cloud_evaluation_keeps_where_it_was_started(client, invoker):
+    accepted = await client.post("/api/v1/evaluations", json=determinism_body(source="cli"))
+
+    assert accepted.json()["source"] == "cli"
+    _, payload = invoker.calls[0]
+    # The worker stores the request as the row's config (see the round-trip
+    # test), which is where the listing reads `source` from.
+    assert payload["request"]["source"] == "cli"
 
 
 async def test_a_cloud_submission_writes_nothing_to_the_local_history(client, invoker):
@@ -803,6 +814,16 @@ def test_the_writer_factory_builds_stores_for_this_servers_table():
     assert isinstance(store, DynamoEvalStore)
     assert store.table_name == TABLE_NAME
     assert store.evaluation_id == "abc123"
+
+
+def test_the_writer_factory_applies_this_servers_history_retention():
+    settings = Settings(eval_table=TABLE_NAME, history_retention_days=30)
+
+    store = cloud.get_eval_writer_factory(settings)("abc123")
+
+    # The pending row the server writes follows the same rule as the worker's.
+    expiry = store._history_expiry()
+    assert expiry is not None and expiry > time.time() + 29 * 86400
 
 
 async def test_a_row_that_cannot_be_settled_does_not_mask_the_invoke_error(

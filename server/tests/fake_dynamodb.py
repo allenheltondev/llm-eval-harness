@@ -1,7 +1,7 @@
 """A minimal in-memory stand-in for the ``boto3`` ``dynamodb`` client.
 
 Covers exactly the surface :mod:`evalharness.worker.ddb` uses -- ``put_item``,
-``update_item`` (``SET`` only), ``get_item``, and ``query`` by ``pk`` +
+``update_item`` (``SET``, then optionally ``REMOVE``), ``get_item``, and ``query`` by ``pk`` +
 ``begins_with(sk, ...)`` -- and nothing else. Deliberately hand-rolled rather
 than reached for via ``moto``: the writer's job is to produce a specific set of
 AttributeValue dicts, so tests that assert on the *stored items* are testing the
@@ -121,13 +121,16 @@ class FakeDynamoDBClient:
             raise ConditionalCheckFailedException()
 
         if not expression.upper().startswith("SET "):
-            raise NotImplementedError(f"only SET is modelled: {expression!r}")
+            raise NotImplementedError(f"only SET (+ REMOVE) is modelled: {expression!r}")
+        assignments, _, removals = expression[4:].partition(" REMOVE ")
 
         updated = dict(existing)
-        for assignment in expression[4:].split(","):
+        for assignment in assignments.split(","):
             target, _, source = assignment.partition("=")
             attribute = names.get(target.strip(), target.strip())
             updated[attribute] = values[source.strip()]
+        for removal in filter(None, (part.strip() for part in removals.split(","))):
+            updated.pop(names.get(removal, removal), None)
         self.items[key] = updated
         lost = self.lose_response_on.pop("update_item", None)
         if lost is not None:

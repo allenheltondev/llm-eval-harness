@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 
 import pytest
 
@@ -523,6 +524,17 @@ async def test_build_store_reads_the_runtime_environment(monkeypatch):
 
     assert store.table_name == "some-table"
     assert store.evaluation_id == EVAL_ID
+    assert store._history_expiry() is None  # kept forever unless the stack says otherwise
+
+
+async def test_build_store_applies_the_stacks_history_retention(monkeypatch):
+    monkeypatch.setenv("TABLE_NAME", "some-table")
+    monkeypatch.setenv("EVALHARNESS_HISTORY_RETENTION_DAYS", "14")
+
+    store = lambda_app.build_store(EVAL_ID)
+
+    expiry = store._history_expiry()
+    assert expiry is not None and expiry > time.time() + 13 * 86400
 
 
 async def test_build_store_refuses_an_unconfigured_runtime(monkeypatch):

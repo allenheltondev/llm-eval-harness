@@ -54,7 +54,8 @@ stack's `EvalTable`, REUSING the cloud-eval item shapes verbatim
 `EVAL#{id}/META` with `GSI1PK="EVAL"`. One deliberate consequence: deployed-server
 runs and cloud-lane worker runs land in the same partitions and read back
 through one code path. Filters (model_id/status/since) apply
-post-page like the existing cloud listing. TTL: same 90-day `expiresAt`.
+post-page like the existing cloud listing. TTL: history is kept for
+`HistoryRetentionDays` (default `0`, forever) — see docs/cloud-evals.md.
 
 Evaluations in the deployed server are cloud-lane only:
 - `POST /evaluations` with `execution: "local"` → 400

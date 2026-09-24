@@ -190,6 +190,10 @@ class EvaluationRequest(BaseModel):
     #: Which lane executes this evaluation -- in-process ("local", the default)
     #: or the worker Lambda ("cloud"). See ``docs/cloud-evals.md``.
     execution: Literal["local", "cloud"] = "local"
+    #: Which front door started it: the CLI, the web UI, or anything else
+    #: calling the API directly. Descriptive only -- nothing branches on it --
+    #: and stored with the evaluation so its history can say where it came from.
+    source: Literal["cli", "ui", "api"] = "api"
 
     @model_validator(mode="after")
     def _check_kind_requirements(self) -> EvaluationRequest:
@@ -214,6 +218,7 @@ class EvaluationRequest(BaseModel):
             "run_config": self.run_config.model_dump() if self.run_config else None,
             "rubric": self.rubric,
             "grader": self.grader.model_dump(),
+            "source": self.source,
         }
         if self.suite is not None:
             # The whole suite, so a stored evaluation says exactly what was tested.
