@@ -78,8 +78,8 @@ uv pip install \
 # 3. The application itself.
 log "Staging the nimbus package"
 cp -R "${SERVER}/nimbus" "${STAGING}/nimbus"
-# The pre-rename handler path, so the Handler does not change in the deploy
-# that renames the code (server/compat/evalharness/__init__.py says why).
+# The pre-rename handler path, for the deploy that switches Handler to nimbus
+# (server/compat/evalharness/__init__.py says why). Delete in the next release.
 cp -R "${SERVER}/compat/evalharness" "${STAGING}/evalharness"
 
 # 4. Strip build noise so the hash reflects source, not incidental state.
