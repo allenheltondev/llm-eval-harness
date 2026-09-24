@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo } from 'react'
+import { Alert, Badge, Card, CardBody, CardHeader, Field, Input, Select } from '@readysetcloud/ui'
 import { findModel, groupModelsBySource, useRunConfigStore, useModelStore } from '../../stores'
 import type { ModelSource } from '../../api'
 
@@ -53,113 +54,101 @@ export default function ModelPanel() {
   }
 
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="model-panel-heading">
-      <div className="flex items-center justify-between mb-3">
-        <h2 id="model-panel-heading" className="text-base font-semibold text-gray-900">
+    <Card role="region" aria-labelledby="model-panel-heading">
+      <CardHeader className="flex items-center justify-between">
+        <h2 id="model-panel-heading" className="card-title">
           Model
         </h2>
         {cached && (
-          <span className="text-xs text-gray-500" title="Served from the server's catalog cache">
+          <Badge variant="neutral" title="Served from the server's catalog cache">
             cached
-          </span>
+          </Badge>
         )}
-      </div>
-
-      <label htmlFor="model-select" className="sr-only">
-        Model
-      </label>
-      <select
-        id="model-select"
-        className="input"
-        value={modelId}
-        onChange={event => handleSelect(event.target.value)}
-      >
-        <option value="">
-          {loading && models.length === 0 ? 'Loading models…' : 'Select a model…'}
-        </option>
-        {groups.map(group => (
-          <optgroup key={group.source} label={group.label} disabled={group.disabled}>
-            {group.models.map(model => (
-              <option key={model.model_id} value={model.model_id} disabled={group.disabled}>
-                {model.name}
+      </CardHeader>
+      <CardBody className="space-y-2">
+        {/* The card heading already reads "Model", so the select's own label
+            is screen-reader only. */}
+        <Field label={<span className="sr-only">Model</span>}>
+          {field => (
+            <select
+              {...field}
+              className="input"
+              value={modelId}
+              onChange={event => handleSelect(event.target.value)}
+            >
+              <option value="">
+                {loading && models.length === 0 ? 'Loading models…' : 'Select a model…'}
               </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-
-      {unavailable.length > 0 && !loading && (
-        <p className="mt-1 text-xs text-gray-500">
-          Not shown: {unavailable.map(entry => `${entry.label} (not configured)`).join(', ')}
-        </p>
-      )}
-
-      {selected && (
-        <p className="mt-2 text-xs text-gray-600 break-all">
-          <span className="font-mono">{selected.model_id}</span>
-          {' · '}
-          {selected.kind === 'inference-profile' ? 'inference profile' : 'foundation model'}
-          {selected.supports_streaming ? ' · streaming' : ' · no streaming'}
-        </p>
-      )}
-
-      {(error || (!loading && models.length === 0)) && (
-        <div className="mt-2">
-          {error ? (
-            <p className="text-xs text-red-600" role="alert">
-              Could not load models: {error.message}
-            </p>
-          ) : (
-            <p className="text-xs text-gray-600">
-              No models available from any configured provider.
-            </p>
+              {groups.map(group => (
+                <optgroup key={group.source} label={group.label} disabled={group.disabled}>
+                  {group.models.map(model => (
+                    <option key={model.model_id} value={model.model_id} disabled={group.disabled}>
+                      {model.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           )}
-          {/* Fallback affordance: the catalog degrades to empty rather than
-              erroring when a provider listing fails (expired AWS session,
-              NIMBUS_FAKE_MODEL runs, no providers configured), so let a
-              model id be typed directly rather than blocking on the dropdown.
-              A provider select sits next to it since a manually-typed id
-              carries no `source`. */}
-          <div className="mt-2 flex gap-2 items-end">
-            <div className="flex-1">
-              <label
-                htmlFor="model-id-manual"
-                className="block text-xs font-medium text-gray-700 mb-1"
-              >
-                Enter model id manually
-              </label>
-              <input
-                id="model-id-manual"
-                type="text"
-                className="input font-mono text-xs"
-                placeholder="e.g. anthropic.claude-3-5-sonnet-20241022-v2:0"
-                value={modelId}
-                onChange={event => setModelId(event.target.value)}
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="model-provider-manual"
-                className="block text-xs font-medium text-gray-700 mb-1"
-              >
-                Provider
-              </label>
-              <select
-                id="model-provider-manual"
-                className="input text-xs"
-                value={provider}
-                onChange={event => setProvider(event.target.value as ModelSource)}
-              >
-                {PROVIDER_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+        </Field>
+
+        {unavailable.length > 0 && !loading && (
+          <p className="text-xs text-muted-foreground">
+            Not shown: {unavailable.map(entry => `${entry.label} (not configured)`).join(', ')}
+          </p>
+        )}
+
+        {selected && (
+          <p className="text-xs text-muted-foreground break-all">
+            <span className="font-mono">{selected.model_id}</span>
+            {' · '}
+            {selected.kind === 'inference-profile' ? 'inference profile' : 'foundation model'}
+            {selected.supports_streaming ? ' · streaming' : ' · no streaming'}
+          </p>
+        )}
+
+        {(error || (!loading && models.length === 0)) && (
+          <div className="space-y-2">
+            {error ? (
+              <Alert variant="error">Could not load models: {error.message}</Alert>
+            ) : (
+              <Alert variant="info">No models available from any configured provider.</Alert>
+            )}
+            {/* Fallback affordance: the catalog degrades to empty rather than
+                erroring when a provider listing fails (expired AWS session,
+                NIMBUS_FAKE_MODEL runs, no providers configured), so let a
+                model id be typed directly rather than blocking on the dropdown.
+                A provider select sits next to it since a manually-typed id
+                carries no `source`. */}
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <Input
+                  label="Enter model id manually"
+                  type="text"
+                  className="font-mono text-xs"
+                  placeholder="e.g. anthropic.claude-3-5-sonnet-20241022-v2:0"
+                  value={modelId}
+                  onChange={event => setModelId(event.target.value)}
+                />
+              </div>
+              <div>
+                <Select
+                  label="Provider"
+                  className="text-xs"
+                  value={provider}
+                  onChange={event => setProvider(event.target.value as ModelSource)}
+                >
+                  {PROVIDER_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </section>
+        )}
+      </CardBody>
+    </Card>
   )
 }

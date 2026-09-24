@@ -6,6 +6,7 @@
  * for the number to move, and a finished run freezes it at `endedAt`.
  */
 
+import { StatTile } from '@readysetcloud/ui'
 import { useRunStore } from '../../stores'
 
 interface StatProps {
@@ -13,12 +14,16 @@ interface StatProps {
   value: string
 }
 
+/** One tile; `role="group"` + label so each value is announced with its name. */
 function Stat({ label, value }: StatProps) {
   return (
-    <div className="min-w-0">
-      <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className="text-sm font-medium text-gray-900 tabular-nums truncate">{value}</dd>
-    </div>
+    <StatTile
+      role="group"
+      aria-label={label}
+      className="min-w-0 tabular-nums"
+      label={label}
+      value={value}
+    />
   )
 }
 
@@ -42,18 +47,18 @@ export default function MetricsBar() {
   const elapsed = startedAt === null ? undefined : (endedAt ?? Date.now()) - startedAt
 
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="metrics-bar-heading">
+    <section aria-labelledby="metrics-bar-heading">
       <h2 id="metrics-bar-heading" className="sr-only">
         Run metrics
       </h2>
-      <dl className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Stat label="Input tokens" value={formatCount(metrics?.input_tokens)} />
         <Stat label="Output tokens" value={formatCount(metrics?.output_tokens)} />
         <Stat label="Total tokens" value={formatCount(metrics?.total_tokens)} />
         <Stat label="Latency" value={formatMs(metrics?.latency_ms)} />
         <Stat label="Cycles" value={formatCount(metrics?.cycle_count)} />
         <Stat label="Elapsed" value={formatMs(elapsed)} />
-      </dl>
+      </div>
     </section>
   )
 }

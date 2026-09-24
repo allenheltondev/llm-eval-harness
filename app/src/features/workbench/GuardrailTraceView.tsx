@@ -6,6 +6,7 @@
  * schema. It collapses itself away entirely when no trace arrived.
  */
 
+import { Card, CardBody } from '@readysetcloud/ui'
 import { useRunStore } from '../../stores'
 
 export default function GuardrailTraceView() {
@@ -14,21 +15,20 @@ export default function GuardrailTraceView() {
   if (!guardrailTrace) return null
 
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="guardrail-trace-heading">
-      <details>
-        <summary
-          id="guardrail-trace-heading"
-          className="cursor-pointer text-base font-semibold text-gray-900"
-        >
-          Guardrail trace
-        </summary>
-        <pre
-          data-testid="guardrail-trace-json"
-          className="mt-3 max-h-72 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800"
-        >
-          {JSON.stringify(guardrailTrace, null, 2)}
-        </pre>
-      </details>
-    </section>
+    <Card role="region" aria-labelledby="guardrail-trace-heading">
+      <CardBody>
+        <details>
+          <summary id="guardrail-trace-heading" className="card-title cursor-pointer">
+            Guardrail trace
+          </summary>
+          <pre
+            data-testid="guardrail-trace-json"
+            className="mt-3 max-h-72 overflow-auto rounded-lg border border-border bg-muted p-3 font-mono text-xs text-foreground"
+          >
+            {JSON.stringify(guardrailTrace, null, 2)}
+          </pre>
+        </details>
+      </CardBody>
+    </Card>
   )
 }

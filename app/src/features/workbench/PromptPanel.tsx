@@ -2,6 +2,7 @@
  * System + user prompt editors, written straight into `runConfigStore`.
  */
 
+import { Card, CardBody, CardHeader, TextArea } from '@readysetcloud/ui'
 import { useRunConfigStore } from '../../stores'
 
 export default function PromptPanel() {
@@ -11,38 +12,30 @@ export default function PromptPanel() {
   const setUserPrompt = useRunConfigStore(state => state.setUserPrompt)
 
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="prompt-panel-heading">
-      <h2 id="prompt-panel-heading" className="text-base font-semibold text-gray-900 mb-3">
-        Prompts
-      </h2>
-
-      <div className="mb-4">
-        <label htmlFor="system-prompt" className="block text-xs font-medium text-gray-700 mb-1">
-          System prompt
-        </label>
-        <textarea
-          id="system-prompt"
-          className="input font-mono text-sm"
+    <Card role="region" aria-labelledby="prompt-panel-heading">
+      <CardHeader>
+        <h2 id="prompt-panel-heading" className="card-title">
+          Prompts
+        </h2>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <TextArea
+          label="System prompt"
+          className="font-mono text-sm"
           rows={6}
           placeholder="You are a helpful assistant…"
           value={systemPrompt}
           onChange={event => setSystemPrompt(event.target.value)}
         />
-      </div>
-
-      <div>
-        <label htmlFor="user-prompt" className="block text-xs font-medium text-gray-700 mb-1">
-          User prompt
-        </label>
-        <textarea
-          id="user-prompt"
-          className="input font-mono text-sm"
+        <TextArea
+          label="User prompt"
+          className="font-mono text-sm"
           rows={5}
           placeholder="Ask the model something…"
           value={userPrompt}
           onChange={event => setUserPrompt(event.target.value)}
         />
-      </div>
-    </section>
+      </CardBody>
+    </Card>
   )
 }
