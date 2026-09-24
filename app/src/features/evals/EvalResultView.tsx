@@ -8,20 +8,28 @@
  * from the list/`refreshEvaluation`).
  */
 
+import { Alert, Badge, Card, CardBody, StatTile } from '@readysetcloud/ui'
 import type { EvaluationResult } from '../../api'
 
-/** A -> green ... F -> red. Anything else (a stray "Pass"/"Fail" grade) is neutral. */
+/** A/B -> success, C/D -> warning, F -> error. Anything else (a stray "Pass"/"Fail" grade) is neutral. */
 const GRADE_COLORS: Record<string, string> = {
-  A: 'text-green-600',
+  A: 'text-success-600',
   B: 'text-success-600',
-  C: 'text-yellow-600',
-  D: 'text-orange-600',
-  F: 'text-red-600'
+  C: 'text-warning-600',
+  D: 'text-warning-600',
+  F: 'text-error-600'
 }
 
 function gradeColorClass(grade: string | null): string {
-  if (!grade) return 'text-gray-400'
-  return GRADE_COLORS[grade.trim().charAt(0).toUpperCase()] ?? 'text-gray-500'
+  if (!grade) return 'text-muted-foreground'
+  return GRADE_COLORS[grade.trim().charAt(0).toUpperCase()] ?? 'text-muted-foreground'
+}
+
+/** The judge's per-run scores, when there are enough to draw a line through. */
+function perRunScores(metrics: Record<string, unknown>): number[] | undefined {
+  const scores = metrics.judge_scores
+  if (!Array.isArray(scores) || scores.length < 2) return undefined
+  return scores.every(score => typeof score === 'number') ? (scores as number[]) : undefined
 }
 
 const METRIC_LABELS: Record<string, string> = {
@@ -63,102 +71,98 @@ export default function EvalResultView({ result }: EvalResultViewProps) {
     key => [key, result.metrics[key]] as const
   )
 
+  const sparkline = perRunScores(result.metrics)
+
   return (
-    <section
-      className="card p-4 sm:p-6"
-      aria-labelledby="eval-result-heading"
-      data-testid="eval-result"
-    >
-      <h3 id="eval-result-heading" className="sr-only">
-        Evaluation result
-      </h3>
+    <Card role="region" aria-labelledby="eval-result-heading" data-testid="eval-result">
+      <CardBody>
+        <h3 id="eval-result-heading" className="sr-only">
+          Evaluation result
+        </h3>
 
-      <div className="flex items-center gap-4 mb-4">
-        <div
-          className={`text-5xl font-bold leading-none ${gradeColorClass(result.grade)}`}
-          data-testid="eval-grade"
-        >
-          {result.grade ?? '—'}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <StatTile
+            label="Grade"
+            value={
+              <span className={gradeColorClass(result.grade)} data-testid="eval-grade">
+                {result.grade ?? '—'}
+              </span>
+            }
+          />
+          <StatTile
+            label="Score"
+            value={
+              <span data-testid="eval-score">
+                {result.score === null ? '—' : `${result.score} / 100`}
+              </span>
+            }
+            meta={sparkline ? 'Judge score per run' : undefined}
+            sparkline={sparkline}
+          />
         </div>
-        <div>
-          <p className="text-xs text-gray-500">Score</p>
-          <p className="text-xl font-semibold text-gray-900" data-testid="eval-score">
-            {result.score === null ? '—' : `${result.score} / 100`}
+
+        {result.reasoning && (
+          <p
+            className="text-sm text-muted-foreground whitespace-pre-wrap mb-4"
+            data-testid="eval-reasoning"
+          >
+            {result.reasoning}
           </p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <Badge variant="neutral">Judge: {result.judge.model_id}</Badge>
+          {result.judge.system_prompt_used && <Badge variant="primary">Custom prompt</Badge>}
+          {result.judge.rubric_used && <Badge variant="primary">Custom rubric</Badge>}
         </div>
-      </div>
 
-      {result.reasoning && (
-        <p className="text-sm text-gray-700 whitespace-pre-wrap mb-4" data-testid="eval-reasoning">
-          {result.reasoning}
-        </p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2 mb-4 text-xs">
-        <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-mono">
-          Judge: {result.judge.model_id}
-        </span>
-        {result.judge.system_prompt_used && (
-          <span className="px-2 py-0.5 rounded-full bg-primary-100 text-primary-800">
-            Custom prompt
-          </span>
+        {result.judge_error && (
+          <Alert variant="error" className="mb-4">
+            Judge error: {result.judge_error}
+          </Alert>
         )}
-        {result.judge.rubric_used && (
-          <span className="px-2 py-0.5 rounded-full bg-primary-100 text-primary-800">
-            Custom rubric
-          </span>
-        )}
-      </div>
 
-      {result.judge_error && (
-        <p
-          className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-4"
-          role="alert"
-        >
-          Judge error: {result.judge_error}
-        </p>
-      )}
-
-      {metricEntries.length > 0 && (
-        <dl
-          className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 p-3 rounded-lg border border-gray-200 bg-gray-50"
-          data-testid="eval-metrics-grid"
-        >
-          {metricEntries.map(([key, value]) => (
-            <div key={key} className="min-w-0">
-              <dt className="text-xs text-gray-500">{METRIC_LABELS[key]}</dt>
-              <dd
-                className="text-sm font-medium text-gray-900 truncate"
-                title={formatMetric(value)}
-              >
-                {formatMetric(value)}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
-
-      {result.failed_runs.length > 0 && (
-        <div className="mb-4" data-testid="eval-failed-runs">
-          <h4 className="text-xs font-medium text-gray-700 mb-1">
-            Failed runs ({result.failed_runs.length})
-          </h4>
-          <ul className="text-xs text-red-700 space-y-0.5">
-            {result.failed_runs.map(failure => (
-              <li key={failure.index}>
-                Run {failure.index + 1}: {describeFailure(failure.error)}
-              </li>
+        {metricEntries.length > 0 && (
+          <dl
+            className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 p-3 rounded-lg border border-border bg-muted/30"
+            data-testid="eval-metrics-grid"
+          >
+            {metricEntries.map(([key, value]) => (
+              <div key={key} className="min-w-0">
+                <dt className="text-xs text-muted-foreground">{METRIC_LABELS[key]}</dt>
+                <dd
+                  className="text-sm font-medium text-foreground truncate"
+                  title={formatMetric(value)}
+                >
+                  {formatMetric(value)}
+                </dd>
+              </div>
             ))}
-          </ul>
-        </div>
-      )}
+          </dl>
+        )}
 
-      {result.run_ids.length > 0 && (
-        <p className="text-xs text-gray-500">
-          {result.run_ids.length} run{result.run_ids.length === 1 ? '' : 's'} recorded — view in
-          History for full transcripts.
-        </p>
-      )}
-    </section>
+        {result.failed_runs.length > 0 && (
+          <div className="mb-4" data-testid="eval-failed-runs">
+            <h4 className="text-xs font-medium text-muted-foreground mb-1">
+              Failed runs ({result.failed_runs.length})
+            </h4>
+            <ul className="text-xs text-error-700 space-y-0.5">
+              {result.failed_runs.map(failure => (
+                <li key={failure.index}>
+                  Run {failure.index + 1}: {describeFailure(failure.error)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {result.run_ids.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {result.run_ids.length} run{result.run_ids.length === 1 ? '' : 's'} recorded — view in
+            History for full transcripts.
+          </p>
+        )}
+      </CardBody>
+    </Card>
   )
 }

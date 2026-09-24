@@ -11,7 +11,18 @@
  */
 
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { Badge, StatusBadge } from '@readysetcloud/ui'
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  ErrorState,
+  SkeletonLoader,
+  StatusBadge
+} from '@readysetcloud/ui'
 import { statusTone } from '../../components/status'
 import DeterminismLauncher from './DeterminismLauncher'
 import EvalProgress from './EvalProgress'
@@ -80,8 +91,10 @@ export default function EvalsPage({
     onSelectEvaluation?.(id)
   }
 
+  const listFilters = cloudFilter ? { execution: 'cloud' as const } : {}
+
   useEffect(() => {
-    void loadEvaluations(cloudFilter ? { execution: 'cloud' } : {})
+    void loadEvaluations(listFilters)
     // Switching the filter drops the previous selection: a cursor (and the
     // rows it paged in) is only valid for the filter set it was issued under.
     // The first run is the page mounting, not a switch, and must keep a
@@ -160,150 +173,174 @@ export default function EvalsPage({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
         <DeterminismLauncher onStarted={id => setSelectedId(id)} />
 
-        <section className="card p-4 sm:p-6" aria-labelledby="eval-results-heading">
-          <h2 id="eval-results-heading" className="text-base font-semibold text-gray-900 mb-3">
-            Results
-          </h2>
+        <Card role="region" aria-labelledby="eval-results-heading">
+          <CardHeader>
+            <h2 id="eval-results-heading" className="card-title">
+              Results
+            </h2>
+          </CardHeader>
 
-          {selectedId === null && (
-            <p className="text-sm text-gray-500">
-              Start a new evaluation or select one from the list below to see its results.
-            </p>
-          )}
+          <CardBody>
+            {selectedId === null && (
+              <EmptyState
+                title="No evaluation selected"
+                description="Start a new evaluation or select one from the list below to see its results."
+              />
+            )}
 
-          {selectedId !== null && showLiveProgress && <EvalProgress />}
+            {selectedId !== null && showLiveProgress && <EvalProgress />}
 
-          {selectedId !== null && !showLiveProgress && resultToShow && (
-            <EvalResultView result={resultToShow} />
-          )}
+            {selectedId !== null && !showLiveProgress && resultToShow && (
+              <EvalResultView result={resultToShow} />
+            )}
 
-          {selectedId !== null && linkedError && !selectedRow && (
-            <p className="text-sm text-red-600" role="alert" data-testid="eval-link-error">
-              Could not load evaluation {selectedId}: {linkedError}
-            </p>
-          )}
+            {selectedId !== null && linkedError && !selectedRow && (
+              <Alert variant="error" data-testid="eval-link-error">
+                Could not load evaluation {selectedId}: {linkedError}
+              </Alert>
+            )}
 
-          {selectedId !== null && !showLiveProgress && !resultToShow && !linkedError && (
-            <p className="text-sm text-gray-500" data-testid="eval-no-result">
-              {isSelectedActive && activeStatus === 'error'
-                ? 'The evaluation failed before it produced a result.'
-                : isSelectedActive && activeStatus === 'cancelled'
-                  ? 'The evaluation was cancelled before it produced a result.'
-                  : 'This evaluation has no result yet.'}
-            </p>
-          )}
-        </section>
+            {selectedId !== null && !showLiveProgress && !resultToShow && !linkedError && (
+              <p className="text-sm text-muted-foreground" data-testid="eval-no-result">
+                {isSelectedActive && activeStatus === 'error'
+                  ? 'The evaluation failed before it produced a result.'
+                  : isSelectedActive && activeStatus === 'cancelled'
+                    ? 'The evaluation was cancelled before it produced a result.'
+                    : 'This evaluation has no result yet.'}
+              </p>
+            )}
+          </CardBody>
+        </Card>
       </div>
 
       {selectedRow && <EvaluationDetailView evaluation={selectedRow} result={resultToShow} />}
 
-      <section className="card p-4 sm:p-6" aria-labelledby="eval-list-heading">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <h2 id="eval-list-heading" className="text-base font-semibold text-gray-900">
+      <Card role="region" aria-labelledby="eval-list-heading">
+        <CardHeader className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="eval-list-heading" className="card-title">
             Past evaluations
           </h2>
-          <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
+          {/* A lone filter checkbox sits inline in the header, so it keeps its
+              wrapping label rather than a stacked Field. */}
+          <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground cursor-pointer">
             <input
               type="checkbox"
               data-testid="eval-cloud-filter"
-              className="h-4 w-4 rounded border-gray-300 text-primary-600"
+              className="h-4 w-4 rounded border-border accent-primary-600"
               checked={cloudFilter}
               onChange={event => setCloudFilter(event.target.checked)}
             />
             Cloud
           </label>
-        </div>
+        </CardHeader>
 
-        {listLoading && evaluations.length === 0 && (
-          <p className="text-sm text-gray-500">Loading evaluations…</p>
-        )}
+        <CardBody>
+          {listLoading && evaluations.length === 0 && (
+            <div role="status" data-testid="eval-list-loading">
+              <span className="sr-only">Loading evaluations…</span>
+              <SkeletonLoader count={3} />
+            </div>
+          )}
 
-        {listError && (
-          <p className="text-sm text-red-600 mb-3" role="alert">
-            Could not load evaluations: {listError.message}
-          </p>
-        )}
+          {listError && (
+            <ErrorState
+              className="mb-3"
+              heading="Could not load evaluations"
+              message={listError.message}
+              action={{ label: 'Retry', onClick: () => void loadEvaluations(listFilters) }}
+            />
+          )}
 
-        {!listLoading && evaluations.length === 0 && !listError && (
-          <p className="text-sm text-gray-500">No evaluations yet.</p>
-        )}
+          {!listLoading && evaluations.length === 0 && !listError && (
+            <EmptyState
+              title="No evaluations yet"
+              description="Evaluations started here or from the CLI will be listed here."
+            />
+          )}
 
-        {evaluations.length > 0 && (
-          <ul className="divide-y divide-gray-200" data-testid="eval-list">
-            {evaluations.map(row => (
-              <li key={row.id}>
-                {/* A `div[role=button]`, not a real `<button>`: a Cancel button lives inside
-                    it, and nesting interactive controls inside a `<button>` is invalid HTML. */}
-                <div
-                  role="button"
-                  tabIndex={0}
-                  data-testid={`eval-row-${row.id}`}
-                  onClick={() => handleSelectRow(row)}
-                  onKeyDown={event => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      handleSelectRow(row)
-                    }
-                  }}
-                  className={`w-full text-left py-2 px-2 -mx-2 rounded-lg flex flex-wrap items-center justify-between gap-2 hover:bg-gray-50 cursor-pointer ${
-                    selectedId === row.id ? 'bg-primary-50' : ''
-                  }`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xs font-medium text-gray-700 uppercase">{row.kind}</span>
-                    <Badge
-                      variant={row.execution === 'cloud' ? 'primary' : 'neutral'}
-                      data-testid={`eval-lane-${row.id}`}
-                    >
-                      {row.execution}
-                    </Badge>
-                    {sourceLabel(row.source) && (
-                      <Badge variant="primary" data-testid={`eval-source-${row.id}`}>
-                        {sourceLabel(row.source)}
-                      </Badge>
-                    )}
-                    <StatusBadge tone={statusTone(row.status)} role={undefined}>
-                      {statusLabel(row.status)}
-                    </StatusBadge>
-                    <span className="text-xs text-gray-500">{formatTs(row.ts)}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {row.result?.grade && (
-                      <span className="text-sm font-semibold text-gray-900">
-                        {row.result.grade}
+          {evaluations.length > 0 && (
+            <ul className="divide-y divide-border" data-testid="eval-list">
+              {evaluations.map(row => (
+                <li key={row.id}>
+                  {/* A `div[role=button]`, not a real `<button>`: a Cancel button lives inside
+                      it, and nesting interactive controls inside a `<button>` is invalid HTML. */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    data-testid={`eval-row-${row.id}`}
+                    onClick={() => handleSelectRow(row)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        handleSelectRow(row)
+                      }
+                    }}
+                    className={`w-full text-left py-2 px-2 -mx-2 rounded-lg flex flex-wrap items-center justify-between gap-2 hover:bg-muted/50 cursor-pointer ${
+                      selectedId === row.id ? 'bg-primary-50' : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs font-medium text-muted-foreground uppercase">
+                        {row.kind}
                       </span>
-                    )}
-                    {row.result?.score !== null && row.result?.score !== undefined && (
-                      <span className="text-xs text-gray-500">{row.result.score}/100</span>
-                    )}
-                    {isCancellable(row.status) && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary py-1 px-2 text-xs"
-                        onClick={event => void handleCancelRow(row, event)}
+                      <Badge
+                        variant={row.execution === 'cloud' ? 'primary' : 'neutral'}
+                        data-testid={`eval-lane-${row.id}`}
                       >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+                        {row.execution}
+                      </Badge>
+                      {sourceLabel(row.source) && (
+                        <Badge variant="primary" data-testid={`eval-source-${row.id}`}>
+                          {sourceLabel(row.source)}
+                        </Badge>
+                      )}
+                      <StatusBadge tone={statusTone(row.status)} role={undefined}>
+                        {statusLabel(row.status)}
+                      </StatusBadge>
+                      <span className="text-xs text-muted-foreground">{formatTs(row.ts)}</span>
+                    </div>
 
-        {nextCursor && (
-          <button
-            type="button"
-            className="btn btn-secondary mt-3 text-xs"
-            disabled={listLoading}
-            onClick={() => void loadMoreEvaluations()}
-          >
-            {listLoading ? 'Loading…' : 'Load more'}
-          </button>
-        )}
-      </section>
+                    <div className="flex items-center gap-2">
+                      {row.result?.grade && (
+                        <span className="text-sm font-semibold text-foreground">
+                          {row.result.grade}
+                        </span>
+                      )}
+                      {row.result?.score !== null && row.result?.score !== undefined && (
+                        <span className="text-xs text-muted-foreground">
+                          {row.result.score}/100
+                        </span>
+                      )}
+                      {isCancellable(row.status) && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={event => void handleCancelRow(row, event)}
+                        >
+                          Cancel
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {nextCursor && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="mt-3"
+              loading={listLoading}
+              loadingLabel="Loading…"
+              onClick={() => void loadMoreEvaluations()}
+            >
+              Load more
+            </Button>
+          )}
+        </CardBody>
+      </Card>
     </div>
   )
 }

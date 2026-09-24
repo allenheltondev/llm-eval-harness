@@ -22,7 +22,7 @@ test('runs a determinism evaluation to completion and records its runs', async (
   await expect(page.getByTestId('workbench-config-summary')).toBeVisible()
   await expect(page.getByTestId('workbench-config-summary')).toContainText(MODEL_ID)
 
-  await page.locator('#eval-n').fill('3')
+  await page.getByLabel(/Number of runs/).fill('3')
   // Grader model defaults to a non-empty id (`amazon.nova-pro-v1:0`) from
   // settings, so the launcher is ready without needing the (unreachable)
   // model catalog.

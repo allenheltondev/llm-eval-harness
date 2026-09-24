@@ -50,14 +50,24 @@ describe('EvalResultView', () => {
     expect(screen.getByText(/3 runs recorded/)).toBeInTheDocument()
   })
 
-  it('colors the grade green for A and red for F, and handles a null grade/score', () => {
+  it('draws the per-run judge scores under the score only when there are several', () => {
+    const { container, rerender } = render(<EvalResultView result={baseResult} />)
+    expect(screen.getByText('Judge score per run')).toBeInTheDocument()
+    expect(container.querySelector('svg')).not.toBeNull()
+
+    rerender(<EvalResultView result={{ ...baseResult, metrics: { judge_scores: [80] } }} />)
+    expect(screen.queryByText('Judge score per run')).not.toBeInTheDocument()
+    expect(container.querySelector('svg')).toBeNull()
+  })
+
+  it('colors the grade with the success tone for A and the error tone for F, and handles a null grade/score', () => {
     const { rerender } = render(
       <EvalResultView result={{ ...baseResult, grade: 'A', score: 97 }} />
     )
-    expect(screen.getByTestId('eval-grade')).toHaveClass('text-green-600')
+    expect(screen.getByTestId('eval-grade')).toHaveClass('text-success-600')
 
     rerender(<EvalResultView result={{ ...baseResult, grade: 'F', score: 12 }} />)
-    expect(screen.getByTestId('eval-grade')).toHaveClass('text-red-600')
+    expect(screen.getByTestId('eval-grade')).toHaveClass('text-error-600')
 
     rerender(
       <EvalResultView
