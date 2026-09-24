@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import RunDetailView from '../RunDetailView'
 import { INITIAL_HISTORY_STATE, useHistoryStore } from '../../../stores'
 import type { RunDetail } from '../../../api'
@@ -64,6 +64,15 @@ describe('RunDetailView', () => {
 
     expect(screen.getByText('Loading run…')).toBeInTheDocument()
     expect(getRunDetail).toHaveBeenCalledWith('r1')
+  })
+
+  it('shows a load failure with a retry that refetches past the cache', () => {
+    useHistoryStore.setState({ error: { code: 'not_found', message: 'run not found' } })
+    render(<RunDetailView runId="r1" />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('run not found')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(getRunDetail).toHaveBeenLastCalledWith('r1', true)
   })
 
   it('renders prompts, output, tool transcript and metrics once cached', () => {

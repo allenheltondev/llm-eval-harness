@@ -8,8 +8,21 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Loading, StatusBadge } from '@readysetcloud/ui'
+import {
+  Alert,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  ErrorState,
+  Input,
+  Select,
+  SkeletonLoader,
+  StatusBadge
+} from '@readysetcloud/ui'
 import { statusTone } from '../../components/status'
+import { useNotify } from '../../components/notify'
 import { api } from '../../api'
 import type { Page, RunDetail, RunSummary } from '../../api'
 import {
@@ -43,71 +56,52 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
   const models = useModelStore(state => state.models)
   const modelsLoaded = useModelStore(state => state.modelsLoaded)
 
+  function setModel(value: string) {
+    void setFilters({ model_id: value === '' ? null : value })
+  }
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <div>
-        <label
-          htmlFor="history-filter-model"
-          className="block text-xs font-medium text-gray-700 mb-1"
+      {modelsLoaded && models.length > 0 ? (
+        <Select
+          label="Model"
+          data-testid="history-filter-model"
+          value={filters.model_id ?? ''}
+          onChange={event => setModel(event.target.value)}
         >
-          Model
-        </label>
-        {modelsLoaded && models.length > 0 ? (
-          <select
-            id="history-filter-model"
-            data-testid="history-filter-model"
-            className="input"
-            value={filters.model_id ?? ''}
-            onChange={event =>
-              void setFilters({ model_id: event.target.value === '' ? null : event.target.value })
-            }
-          >
-            <option value="">All models</option>
-            {models.map(model => (
-              <option key={model.model_id} value={model.model_id}>
-                {model.name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            id="history-filter-model"
-            data-testid="history-filter-model"
-            type="text"
-            className="input"
-            placeholder="model id…"
-            value={filters.model_id ?? ''}
-            onChange={event =>
-              void setFilters({ model_id: event.target.value === '' ? null : event.target.value })
-            }
-          />
-        )}
-      </div>
-
-      <div>
-        <label
-          htmlFor="history-filter-status"
-          className="block text-xs font-medium text-gray-700 mb-1"
-        >
-          Status
-        </label>
-        <select
-          id="history-filter-status"
-          data-testid="history-filter-status"
-          className="input"
-          value={filters.status ?? ''}
-          onChange={event =>
-            void setFilters({ status: event.target.value === '' ? null : event.target.value })
-          }
-        >
-          <option value="">All statuses</option>
-          {STATUS_OPTIONS.map(status => (
-            <option key={status} value={status}>
-              {status}
+          <option value="">All models</option>
+          {models.map(model => (
+            <option key={model.model_id} value={model.model_id}>
+              {model.name}
             </option>
           ))}
-        </select>
-      </div>
+        </Select>
+      ) : (
+        <Input
+          label="Model"
+          data-testid="history-filter-model"
+          type="text"
+          placeholder="model id…"
+          value={filters.model_id ?? ''}
+          onChange={event => setModel(event.target.value)}
+        />
+      )}
+
+      <Select
+        label="Status"
+        data-testid="history-filter-status"
+        value={filters.status ?? ''}
+        onChange={event =>
+          void setFilters({ status: event.target.value === '' ? null : event.target.value })
+        }
+      >
+        <option value="">All statuses</option>
+        {STATUS_OPTIONS.map(status => (
+          <option key={status} value={status}>
+            {status}
+          </option>
+        ))}
+      </Select>
     </div>
   )
 }
@@ -134,17 +128,29 @@ function RunRow({
   onToggleCompare
 }: RunRowProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const remove = useHistoryStore(state => state.remove)
   const loading = useHistoryStore(state => state.loading)
+  const notify = useNotify()
 
   async function handleDelete() {
-    await remove(run.id)
-    setConfirmingDelete(false)
+    setDeleting(true)
+    try {
+      await remove(run.id)
+    } finally {
+      setDeleting(false)
+      setConfirmingDelete(false)
+    }
+    // `remove` reports failure through the store's `error` (shown above the
+    // table) rather than throwing, so success is "the row is gone".
+    if (!useHistoryStore.getState().items.some(item => item.id === run.id)) {
+      notify('Run deleted', { variant: 'success' })
+    }
   }
 
   return (
     <tr
-      className={`border-b border-gray-100 last:border-0 cursor-pointer hover:bg-gray-50 ${
+      className={`border-b border-border last:border-0 cursor-pointer hover:bg-muted ${
         selected ? 'bg-primary-50' : ''
       }`}
       data-testid="history-row"
@@ -156,51 +162,56 @@ function RunRow({
           type="checkbox"
           aria-label={`Compare run ${run.id}`}
           data-testid="history-compare-checkbox"
-          className="h-4 w-4 rounded border-gray-300 text-primary-600"
+          className="h-4 w-4 rounded border-border text-primary-600"
           checked={compareChecked}
           disabled={compareDisabled}
           onChange={event => onToggleCompare(event.target.checked)}
         />
       </td>
-      <td className="py-2 pr-4 text-sm text-gray-700 whitespace-nowrap">{formatTs(run.ts)}</td>
-      <td className="py-2 pr-4 text-sm font-mono text-gray-900 break-all">{run.model_id}</td>
+      <td className="py-2 pr-4 text-sm text-muted-foreground whitespace-nowrap">
+        {formatTs(run.ts)}
+      </td>
+      <td className="py-2 pr-4 text-sm font-mono text-foreground break-all">{run.model_id}</td>
       <td className="py-2 pr-4">
         <StatusBadge tone={statusTone(run.status)} role={undefined}>
           {run.status}
         </StatusBadge>
       </td>
-      <td className="py-2 pr-4 text-sm text-gray-700 tabular-nums">{formatTokens(run)}</td>
+      <td className="py-2 pr-4 text-sm text-muted-foreground tabular-nums">{formatTokens(run)}</td>
       <td className="py-2 pl-2 text-right" onClick={event => event.stopPropagation()}>
         {confirmingDelete ? (
           <div className="flex items-center justify-end gap-2">
-            <span className="text-xs text-gray-600">Delete?</span>
-            <button
-              type="button"
-              className="text-xs font-medium text-red-700 hover:text-red-800 disabled:opacity-50"
+            <span className="text-xs text-muted-foreground">Delete?</span>
+            <Button
+              variant="error"
+              size="sm"
               data-testid="history-delete-confirm"
               disabled={loading}
+              loading={deleting}
               onClick={() => void handleDelete()}
             >
               Confirm
-            </button>
-            <button
-              type="button"
-              className="text-xs font-medium text-gray-600 hover:text-gray-800"
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               data-testid="history-delete-cancel"
+              disabled={deleting}
               onClick={() => setConfirmingDelete(false)}
             >
               Cancel
-            </button>
+            </Button>
           </div>
         ) : (
-          <button
-            type="button"
-            className="text-xs font-medium text-red-700 hover:text-red-800"
+          <Button
+            variant="ghost"
+            size="sm"
             data-testid="history-delete-btn"
+            aria-label={`Delete run ${run.id}`}
             onClick={() => setConfirmingDelete(true)}
           >
             Delete
-          </button>
+          </Button>
         )}
       </td>
     </tr>
@@ -214,6 +225,7 @@ function RunRow({
 function ExportButton({ filters }: { filters: HistoryFilters }) {
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const notify = useNotify()
 
   async function handleExport() {
     setExporting(true)
@@ -231,6 +243,9 @@ function ExportButton({ filters }: { filters: HistoryFilters }) {
       anchor.click()
       anchor.remove()
       URL.revokeObjectURL(url)
+      notify(`Exported ${rows.length.toLocaleString()} ${rows.length === 1 ? 'run' : 'runs'}`, {
+        variant: 'success'
+      })
     } catch (error) {
       setExportError(error instanceof Error ? error.message : 'Export failed')
     } finally {
@@ -240,20 +255,37 @@ function ExportButton({ filters }: { filters: HistoryFilters }) {
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+      <Button
+        variant="secondary"
+        size="sm"
         data-testid="history-export-btn"
-        disabled={exporting}
+        loading={exporting}
+        loadingLabel="Exporting…"
         onClick={() => void handleExport()}
       >
-        {exporting ? 'Exporting…' : 'Export NDJSON'}
-      </button>
+        Export NDJSON
+      </Button>
       {exportError && (
-        <p className="text-xs text-red-600" role="alert">
+        <Alert variant="error" className="text-xs">
           {exportError}
-        </p>
+        </Alert>
       )}
+    </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Loading placeholder                                                        */
+/* -------------------------------------------------------------------------- */
+
+/** Skeleton rows for a first load; the visually hidden status line is what screen readers get. */
+function ListSkeleton({ text, testId }: { text: string; testId: string }) {
+  return (
+    <div data-testid={testId}>
+      <span className="sr-only" role="status">
+        {text}
+      </span>
+      <SkeletonLoader count={3} />
     </div>
   )
 }
@@ -274,6 +306,8 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by "Try again" after a failed first page, to re-run the fetch effect.
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -296,7 +330,7 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
     return () => {
       cancelled = true
     }
-  }, [filters])
+  }, [filters, reloadKey])
 
   async function handleLoadMore() {
     if (!nextCursor || loading) return
@@ -313,88 +347,101 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
     }
   }
 
+  function retry() {
+    // A failed first page reloads it; a failed "Load more" retries that page.
+    if (items.length > 0 && nextCursor) void handleLoadMore()
+    else setReloadKey(key => key + 1)
+  }
+
   return (
-    <section
-      className="card p-4 sm:p-6"
-      aria-labelledby="cloud-runs-heading"
-      data-testid="cloud-runs-panel"
-    >
-      <h2 id="cloud-runs-heading" className="text-base font-semibold text-gray-900 mb-1">
-        Cloud runs
-      </h2>
-      <p className="text-xs text-gray-500 mb-3" data-testid="cloud-runs-note">
-        These are cloud-lane evaluation runs — executed on Bedrock AgentCore and persisted to your
-        AWS account&apos;s DynamoDB table, not this machine&apos;s local history.
-      </p>
+    <section aria-labelledby="cloud-runs-heading" data-testid="cloud-runs-panel">
+      <Card>
+        <CardHeader>
+          <h2 id="cloud-runs-heading" className="card-title">
+            Cloud runs
+          </h2>
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="cloud-runs-note">
+            These are cloud-lane evaluation runs — executed on Bedrock AgentCore and persisted to
+            your AWS account&apos;s DynamoDB table, not this machine&apos;s local history.
+          </p>
+        </CardHeader>
+        <CardBody>
+          {error && (
+            <ErrorState
+              className="mb-3"
+              heading="Could not load cloud runs"
+              message={error}
+              action={{ label: 'Try again', onClick: retry }}
+            />
+          )}
 
-      {error && (
-        <p className="mb-3 text-xs text-red-600" role="alert">
-          {error}
-        </p>
-      )}
+          {loading && items.length === 0 && (
+            <ListSkeleton text="Loading cloud runs…" testId="cloud-runs-loading" />
+          )}
 
-      {loading && items.length === 0 && <Loading text="Loading cloud runs…" />}
-
-      {!loading && items.length === 0 && !error && (
-        <p className="text-sm text-gray-600" data-testid="cloud-runs-empty">
-          No cloud runs match these filters.
-        </p>
-      )}
-
-      {items.length > 0 && (
-        <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left" data-testid="cloud-runs-table">
-              <thead>
-                <tr className="border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                  <th className="py-2 pr-4">Time</th>
-                  <th className="py-2 pr-4">Model</th>
-                  <th className="py-2 pr-4">Status</th>
-                  <th className="py-2 pr-4">Tokens</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map(run => (
-                  <tr
-                    key={run.id}
-                    className="border-b border-gray-100 last:border-0"
-                    data-testid="cloud-run-row"
-                  >
-                    <td className="py-2 pr-4 text-sm text-gray-700 whitespace-nowrap">
-                      {formatTs(run.ts)}
-                    </td>
-                    <td className="py-2 pr-4 text-sm font-mono text-gray-900 break-all">
-                      {run.model_id}
-                    </td>
-                    <td className="py-2 pr-4">
-                      <StatusBadge tone={statusTone(run.status)} role={undefined}>
-                        {run.status}
-                      </StatusBadge>
-                    </td>
-                    <td className="py-2 pr-4 text-sm text-gray-700 tabular-nums">
-                      {formatTokens(run)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {nextCursor && (
-            <div className="mt-4 flex justify-center">
-              <button
-                type="button"
-                className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                data-testid="cloud-runs-load-more-btn"
-                disabled={loading}
-                onClick={() => void handleLoadMore()}
-              >
-                {loading ? 'Loading…' : 'Load more'}
-              </button>
+          {!loading && items.length === 0 && !error && (
+            <div data-testid="cloud-runs-empty">
+              <EmptyState title="No cloud runs match these filters." />
             </div>
           )}
-        </>
-      )}
+
+          {items.length > 0 && (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left" data-testid="cloud-runs-table">
+                  <thead>
+                    <tr className="border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      <th className="py-2 pr-4">Time</th>
+                      <th className="py-2 pr-4">Model</th>
+                      <th className="py-2 pr-4">Status</th>
+                      <th className="py-2 pr-4">Tokens</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(run => (
+                      <tr
+                        key={run.id}
+                        className="border-b border-border last:border-0"
+                        data-testid="cloud-run-row"
+                      >
+                        <td className="py-2 pr-4 text-sm text-muted-foreground whitespace-nowrap">
+                          {formatTs(run.ts)}
+                        </td>
+                        <td className="py-2 pr-4 text-sm font-mono text-foreground break-all">
+                          {run.model_id}
+                        </td>
+                        <td className="py-2 pr-4">
+                          <StatusBadge tone={statusTone(run.status)} role={undefined}>
+                            {run.status}
+                          </StatusBadge>
+                        </td>
+                        <td className="py-2 pr-4 text-sm text-muted-foreground tabular-nums">
+                          {formatTokens(run)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {nextCursor && (
+                <div className="mt-4 flex justify-center">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    data-testid="cloud-runs-load-more-btn"
+                    loading={loading}
+                    loadingLabel="Loading…"
+                    onClick={() => void handleLoadMore()}
+                  >
+                    Load more
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </CardBody>
+      </Card>
     </section>
   )
 }
@@ -457,98 +504,113 @@ export default function HistoryPage({ runId = null, onSelectRun }: HistoryPagePr
 
   return (
     <div className="space-y-4" data-testid="history-page">
-      <section className="card p-4 sm:p-6" aria-labelledby="history-heading">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h2 id="history-heading" className="text-lg font-semibold text-gray-900">
-            Run history
-          </h2>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
-              <input
-                type="checkbox"
-                data-testid="history-cloud-filter"
-                className="h-4 w-4 rounded border-gray-300 text-primary-600"
-                checked={cloudRunsFilter}
-                onChange={event => setCloudRunsFilter(event.target.checked)}
-              />
-              Cloud runs
-            </label>
-            <button
-              type="button"
-              className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-              data-testid="history-refresh-btn"
-              disabled={loading}
-              onClick={() => void loadFirstPage()}
-            >
-              Refresh
-            </button>
-            <ExportButton filters={filters} />
-          </div>
-        </div>
+      <section aria-labelledby="history-heading">
+        <Card>
+          <CardHeader className="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="history-heading" className="card-title">
+              Run history
+            </h2>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* A lone inline toggle: the package's Field stacks its label
+                  above the control, which does not suit a toolbar checkbox. */}
+              <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="history-cloud-filter"
+                  className="h-4 w-4 rounded border-border text-primary-600"
+                  checked={cloudRunsFilter}
+                  onChange={event => setCloudRunsFilter(event.target.checked)}
+                />
+                Cloud runs
+              </label>
+              <Button
+                variant="secondary"
+                size="sm"
+                data-testid="history-refresh-btn"
+                disabled={loading}
+                onClick={() => void loadFirstPage()}
+              >
+                Refresh
+              </Button>
+              <ExportButton filters={filters} />
+            </div>
+          </CardHeader>
 
-        <div className="mb-4">
-          <FilterBar filters={filters} />
-        </div>
-
-        {error && (
-          <p className="mb-3 text-xs text-red-600" role="alert">
-            {error.message}
-          </p>
-        )}
-
-        {loading && items.length === 0 && <Loading text="Loading runs…" />}
-
-        {loaded && !loading && items.length === 0 && !error && (
-          <p className="text-sm text-gray-600" data-testid="history-empty">
-            No runs match these filters.
-          </p>
-        )}
-
-        {items.length > 0 && (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left" data-testid="history-table">
-                <thead>
-                  <tr className="border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    <th className="py-2 pr-3">Compare</th>
-                    <th className="py-2 pr-4">Time</th>
-                    <th className="py-2 pr-4">Model</th>
-                    <th className="py-2 pr-4">Status</th>
-                    <th className="py-2 pr-4">Tokens</th>
-                    <th className="py-2 pl-2 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map(run => (
-                    <RunRow
-                      key={run.id}
-                      run={run}
-                      selected={selectedRunId === run.id}
-                      compareChecked={compareIds.includes(run.id)}
-                      compareDisabled={comparing && !compareIds.includes(run.id)}
-                      onSelect={() => selectRun(selectedRunId === run.id ? null : run.id)}
-                      onToggleCompare={checked => toggleCompare(run.id, checked)}
-                    />
-                  ))}
-                </tbody>
-              </table>
+          <CardBody>
+            <div className="mb-4">
+              <FilterBar filters={filters} />
             </div>
 
-            {hasMore && (
-              <div className="mt-4 flex justify-center">
-                <button
-                  type="button"
-                  className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                  data-testid="history-load-more-btn"
-                  disabled={loading}
-                  onClick={() => void loadMore()}
-                >
-                  {loading ? 'Loading…' : 'Load more'}
-                </button>
+            {error && (
+              <ErrorState
+                className="mb-3"
+                heading="Could not load runs"
+                message={error.message}
+                action={{ label: 'Try again', onClick: () => void loadFirstPage() }}
+              />
+            )}
+
+            {loading && items.length === 0 && (
+              <ListSkeleton text="Loading runs…" testId="history-loading" />
+            )}
+
+            {loaded && !loading && items.length === 0 && !error && (
+              <div data-testid="history-empty">
+                <EmptyState
+                  title="No runs match these filters."
+                  description="Runs from the Workbench appear here once they finish."
+                />
               </div>
             )}
-          </>
-        )}
+
+            {items.length > 0 && (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left" data-testid="history-table">
+                    <thead>
+                      <tr className="border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        <th className="py-2 pr-3">Compare</th>
+                        <th className="py-2 pr-4">Time</th>
+                        <th className="py-2 pr-4">Model</th>
+                        <th className="py-2 pr-4">Status</th>
+                        <th className="py-2 pr-4">Tokens</th>
+                        <th className="py-2 pl-2 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map(run => (
+                        <RunRow
+                          key={run.id}
+                          run={run}
+                          selected={selectedRunId === run.id}
+                          compareChecked={compareIds.includes(run.id)}
+                          compareDisabled={comparing && !compareIds.includes(run.id)}
+                          onSelect={() => selectRun(selectedRunId === run.id ? null : run.id)}
+                          onToggleCompare={checked => toggleCompare(run.id, checked)}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {hasMore && (
+                  <div className="mt-4 flex justify-center">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      data-testid="history-load-more-btn"
+                      loading={loading}
+                      loadingLabel="Loading…"
+                      onClick={() => void loadMore()}
+                    >
+                      Load more
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </CardBody>
+        </Card>
       </section>
 
       {cloudRunsFilter && <CloudRunsPanel filters={filters} />}

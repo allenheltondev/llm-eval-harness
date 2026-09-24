@@ -11,6 +11,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { ToastProvider } from '@readysetcloud/ui'
 import type { RunDetail, RunSummary } from '../../../api'
 
 const exportAllMock = vi.fn()
@@ -188,6 +189,12 @@ describe('HistoryPage: filters', () => {
     expect(setFilters).toHaveBeenCalledWith({ model_id: 'm1' })
   })
 
+  it('labels the filter controls', () => {
+    render(<HistoryPage />)
+    expect(screen.getByLabelText('Model')).toBe(screen.getByTestId('history-filter-model'))
+    expect(screen.getByLabelText('Status')).toBe(screen.getByTestId('history-filter-status'))
+  })
+
   it('offers no scenario filter or column', () => {
     render(<HistoryPage />)
     expect(screen.queryByTestId('history-filter-scenario')).not.toBeInTheDocument()
@@ -232,6 +239,32 @@ describe('HistoryPage: delete', () => {
       fireEvent.click(within(row).getByTestId('history-delete-confirm'))
     })
     expect(remove).toHaveBeenCalledWith('r1')
+  })
+
+  it('toasts once the run is gone, but not when the delete failed', async () => {
+    remove.mockImplementationOnce(async (id: string) => {
+      useHistoryStore.setState(state => ({ items: state.items.filter(item => item.id !== id) }))
+    })
+    render(
+      <ToastProvider>
+        <HistoryPage />
+      </ToastProvider>
+    )
+    let row = screen.getAllByTestId('history-row')[0]
+    fireEvent.click(within(row).getByTestId('history-delete-btn'))
+    await act(async () => {
+      fireEvent.click(within(row).getByTestId('history-delete-confirm'))
+    })
+    expect(screen.getByText('Run deleted')).toBeInTheDocument()
+    expect(screen.getAllByTestId('history-row')).toHaveLength(1)
+
+    // The default mock leaves the row in place, i.e. the store reported a failure.
+    row = screen.getAllByTestId('history-row')[0]
+    fireEvent.click(within(row).getByTestId('history-delete-btn'))
+    await act(async () => {
+      fireEvent.click(within(row).getByTestId('history-delete-confirm'))
+    })
+    expect(screen.getAllByText('Run deleted')).toHaveLength(1)
   })
 
   it('cancel backs out without calling remove', () => {
@@ -364,6 +397,20 @@ describe('HistoryPage: list load error', () => {
     render(<HistoryPage />)
     expect(screen.getByRole('alert')).toHaveTextContent('database is locked')
   })
+
+  it('offers a retry that reloads the first page', () => {
+    useHistoryStore.setState({ error: { code: 'internal_error', message: 'database is locked' } })
+    render(<HistoryPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(loadFirstPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows skeleton rows while the first page loads', () => {
+    useHistoryStore.setState({ items: [], loading: true, loaded: false })
+    render(<HistoryPage />)
+    expect(screen.getByTestId('history-loading')).toHaveTextContent('Loading runs…')
+    expect(screen.queryByTestId('history-empty')).not.toBeInTheDocument()
+  })
 })
 
 describe('HistoryPage: NDJSON export', () => {
@@ -396,6 +443,34 @@ describe('HistoryPage: NDJSON export', () => {
     expect(clickSpy).toHaveBeenCalledTimes(1)
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
 
+    clickSpy.mockRestore()
+  })
+
+  it('confirms a finished export with a toast', async () => {
+    window.URL.createObjectURL = vi.fn(
+      () => 'blob:mock-url'
+    ) as unknown as typeof URL.createObjectURL
+    window.URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined)
+    exportAllMock.mockImplementation(
+      async (_filters: unknown, options: { onEvent: (run: RunDetail) => void }) => {
+        options.onEvent(detail('r1'))
+        options.onEvent(detail('r2'))
+      }
+    )
+
+    render(
+      <ToastProvider>
+        <HistoryPage />
+      </ToastProvider>
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('history-export-btn'))
+    })
+
+    expect(screen.getByText('Exported 2 runs')).toBeInTheDocument()
     clickSpy.mockRestore()
   })
 
@@ -464,6 +539,20 @@ describe('HistoryPage: Cloud runs filter', () => {
     fireEvent.click(screen.getByTestId('history-cloud-filter'))
 
     expect(await screen.findByText('cloud unreachable')).toBeInTheDocument()
+  })
+
+  it('retrying a failed first cloud page fetches it again', async () => {
+    runsListMock.mockRejectedValueOnce(new Error('cloud unreachable'))
+    render(<HistoryPage />)
+    fireEvent.click(screen.getByTestId('history-cloud-filter'))
+    await screen.findByText('cloud unreachable')
+
+    runsListMock.mockResolvedValueOnce({ items: [summary('cr1')], next_cursor: null })
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByTestId('cloud-run-row')).toBeInTheDocument()
+    expect(runsListMock).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText('cloud unreachable')).not.toBeInTheDocument()
   })
 
   it('shows Load more with a cursor, appends the next page on click, and surfaces a load-more failure', async () => {
