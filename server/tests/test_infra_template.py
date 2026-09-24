@@ -134,54 +134,32 @@ def test_worker_retries_an_invocation_that_fails_before_claiming(resources: dict
 
 
 # --------------------------------------------------------------------------- #
-# The rename's deploy: no window where running code misses its configuration
+# After the rename's overlap release
 # --------------------------------------------------------------------------- #
-
-LEGACY_PREFIX = "EVALHARNESS_"
 
 
 @pytest.mark.parametrize("logical_id", ["ServerFunction", "EvalWorkerFunction"])
-def test_every_setting_is_also_given_under_its_pre_rename_name(
-    resources: dict, logical_id: str
-) -> None:
-    """CloudFormation may apply the environment before the code.
-
-    The code still running then reads ``EVALHARNESS_*``; each of its settings
-    must be there, with the same value the new code reads as ``NIMBUS_*``.
-    """
+def test_no_setting_is_given_under_its_pre_rename_name(resources: dict, logical_id: str) -> None:
+    """The overlap release has shipped everywhere: one name per setting again."""
     env = _env(resources, logical_id)
-    current = {
-        name.removeprefix("NIMBUS_"): value
-        for name, value in env.items()
-        if name.startswith("NIMBUS_")
-    }
-    legacy = {
-        name.removeprefix(LEGACY_PREFIX): value
-        for name, value in env.items()
-        if name.startswith(LEGACY_PREFIX)
-    }
 
-    assert current
-    assert legacy == current
+    assert not [name for name in env if name.startswith("EVALHARNESS_")]
 
 
-def test_the_old_server_code_keeps_its_sign_in_gate(resources: dict) -> None:
-    """Without these the old code serves every route unauthenticated."""
-    env = _env(resources, "ServerFunction")
-
-    assert env["EVALHARNESS_AUTH_USER_POOL_ID"] == {"Fn::Ref": "UserPool"}
-    assert env["EVALHARNESS_AUTH_CLIENT_ID"] == {"Fn::Ref": "UserPoolClient"}
-
-
-def test_the_worker_handler_keeps_its_pre_rename_path(resources: dict) -> None:
+def test_the_worker_handler_is_the_nimbus_worker(resources: dict) -> None:
     assert (
         resources["EvalWorkerFunction"]["Properties"]["Handler"]
-        == "evalharness.worker.lambda_app.handler"
+        == "nimbus.worker.lambda_app.handler"
     )
 
 
-def test_the_pre_rename_handler_is_the_nimbus_worker(monkeypatch) -> None:
-    """The shim the worker zip carries resolves to the real handler."""
+def test_the_pre_rename_handler_still_resolves_for_this_deploy(monkeypatch) -> None:
+    """The handler changes in this deploy, so the old name must work in the new zip.
+
+    CloudFormation may land the new code before the new ``Handler``; until it
+    does, Lambda still imports ``evalharness.worker.lambda_app``. Remove this
+    test with the shim, in the release after this one.
+    """
     import importlib
     import sys
 
@@ -195,9 +173,5 @@ def test_the_pre_rename_handler_is_the_nimbus_worker(monkeypatch) -> None:
     shim = importlib.import_module("evalharness.worker.lambda_app")
 
     assert shim.handler is lambda_app.handler
-
-
-def test_the_worker_zip_carries_the_shim() -> None:
     script = (TEMPLATE.parent.parent / "scripts" / "package-eval-worker.sh").read_text()
-
     assert 'cp -R "${SERVER}/compat/evalharness" "${STAGING}/evalharness"' in script

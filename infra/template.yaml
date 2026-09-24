@@ -211,13 +211,12 @@ Resources:
       CodeUri:
         Bucket: !Ref ArtifactBucket
         Key: !Ref EvalWorkerArtifactKey
-      # Still the pre-rename path, served by server/compat/evalharness (a shim
-      # onto nimbus.worker.lambda_app): CloudFormation applies configuration
-      # and code in separate calls with invocations in between, so changing
-      # the handler in the deploy that renames the code would leave a window
-      # where it names a module the running code does not have. Point it at
-      # nimbus.worker.lambda_app.handler in the release after this one.
-      Handler: evalharness.worker.lambda_app.handler
+      # The worker zip still carries the pre-rename evalharness.worker.lambda_app
+      # shim for this one deploy: CloudFormation applies configuration and code
+      # in separate calls, so if the new code lands before this handler, the
+      # old handler name must still resolve. Drop the shim in the next release
+      # (docs/serverless-deploy.md).
+      Handler: nimbus.worker.lambda_app.handler
       Runtime: python3.12
       Architectures:
         - arm64
@@ -281,15 +280,6 @@ Resources:
           # Read by worker.lambda_app.build_store for the evaluation and run
           # items it writes -- the same rule the server applies to its own.
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
-          # -- pre-rename names, for one release ------------------------------ #
-          # CloudFormation can apply this environment before the new code, so
-          # the code still running (which reads EVALHARNESS_*) must keep finding
-          # its settings. Identical values; the new code prefers NIMBUS_*.
-          # tests/test_infra_template.py keeps the two sets in step.
-          EVALHARNESS_AWS_REGION: !Ref AWS::Region
-          EVALHARNESS_DB_PATH: /tmp/nimbus-worker.db
-          EVALHARNESS_HISTORY_BACKEND: sqlite
-          EVALHARNESS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -382,28 +372,6 @@ Resources:
           # and CloudFront are both open doors (see the UserPool comment).
           NIMBUS_AUTH_USER_POOL_ID: !Ref UserPool
           NIMBUS_AUTH_CLIENT_ID: !Ref UserPoolClient
-          # -- pre-rename names, for one release ------------------------------ #
-          # CloudFormation updates configuration and code in separate calls,
-          # and requests are served in between. If this environment lands
-          # first, the code still running reads EVALHARNESS_* -- and without
-          # the auth pair it would serve every route unauthenticated through
-          # a public Function URL. So every setting is also given under its
-          # old name, with the same value, until the release after this one;
-          # the new code prefers NIMBUS_*. tests/test_infra_template.py keeps
-          # the two sets in step.
-          EVALHARNESS_AWS_REGION: !Ref AWS::Region
-          EVALHARNESS_DB_PATH: /tmp/nimbus.db
-          EVALHARNESS_HISTORY_BACKEND: dynamodb
-          EVALHARNESS_LOCAL_EVALS: 'off'
-          EVALHARNESS_EVAL_TABLE: !Ref EvalTable
-          EVALHARNESS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
-          EVALHARNESS_EVAL_FUNCTION_NAME: !If
-            - ServerHasEvalWorker
-            - !Ref EvalWorkerFunction
-            - !Ref AWS::NoValue
-          EVALHARNESS_CORS_ORIGINS: !Ref ServerCorsOrigins
-          EVALHARNESS_AUTH_USER_POOL_ID: !Ref UserPool
-          EVALHARNESS_AUTH_CLIENT_ID: !Ref UserPoolClient
       Policies:
         - AWSLambdaBasicExecutionRole
         - Version: 2012-10-17
