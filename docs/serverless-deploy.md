@@ -137,7 +137,15 @@ something the code on the other side of that gap still needs. The rename from
 2. the `EVALHARNESS_*` variables were dropped and the `Handler` moved to
    `nimbus.worker.lambda_app.handler`, with the shim still shipped in case the
    new code landed before the new handler;
-3. the shim was deleted.
+3. the shim was deleted. That release is only safe once step 2 has
+   *succeeded* on the stack, so `make deploy-backend` now first runs
+   `scripts/check-deploy-prerequisites.sh`, which reads the live worker's
+   `Handler` and stops the deploy unless it is already
+   `nimbus.worker.lambda_app.handler`. The workflow's concurrency group orders
+   deploys but would still run this one after a failed step 2. The check fails
+   closed: it needs `cloudformation:DescribeStackResource` and
+   `lambda:GetFunctionConfiguration`, and a denial stops the deploy with the
+   reason.
 
 The same pattern applies to any future rename of a setting or a handler: add
 the new name alongside the old, switch over, then remove the old — one deploy
