@@ -92,18 +92,29 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
   `exp` and `token_use` checked. Failure is `401 {"error": {"code":
   "unauthorized"}}`; an unreachable JWKS is `502 upstream_error`. Neither
   setting present (every local run, the E2E suite) means no gate.
-- **Health**: `GET /health` stays open and gains
-  `"auth": {"required": false}` or `{"required": true, "provider":
-  "cognito", "region", "user_pool_id", "client_id"}` — the SPA's only source
-  of auth configuration, so nothing is baked in at build time.
-- **SPA** (`app/src/auth/`): `AuthGate` reads `/health`; when auth is
-  required it configures the core, installs a token provider on the HTTP
-  layer (`setAuthTokenProvider`, so every JSON request and NDJSON stream
-  carries the bearer header) and renders `LoginPage` until a session exists.
-  A `401` from the API drops the session and returns to sign-in with a
-  notice. Sign-in, the `NEW_PASSWORD_REQUIRED` first-login step, forgot /
-  reset password, silent refresh and revoke-on-sign-out are the rsc-core
-  core, minus sign-up and the cross-subdomain cookie bridge.
+- **Authorization** (optional): `NIMBUS_AUTH_REQUIRED_GROUP` names a Cognito
+  group a token must carry in `cognito:groups`; a valid token without it is
+  `403 {"error": {"code": "forbidden", "detail": {"required_group": ...}}}`.
+  This is what makes a pool that other apps share -- and that anyone can sign
+  up to -- safe: an account proves who someone is; the group grants them
+  this stack.
+- **Health**: `GET /health` stays open and publishes
+  `"auth": {"required": false, "supports_required_group": true}` or
+  `{"required": true, "provider": "cognito", "region", "user_pool_id",
+  "client_id", "required_group", "supports_required_group": true}` — the
+  SPA's only source of auth configuration, so nothing is baked in at build
+  time. `supports_required_group` says the running server enforces a group,
+  which a deploy that moves the stack to a shared pool checks first.
+- **SPA** (`app/src/auth/`): sign-in is the Ready, Set, Cloud package,
+  `@readysetcloud/ui/auth` (its `LoginForm` with the new-password,
+  confirmation, reset and -- on a group-gated pool -- sign-up flows; silent
+  refresh; revoke on sign-out; the `rsc:auth` session). `AuthGate` reads
+  `/health`; when auth is required it configures the package, installs its
+  token provider on the HTTP layer (`setAuthTokenProvider`, so every JSON
+  request and NDJSON stream carries the bearer header) and renders the
+  sign-in flows until a session exists. A `401` from the API drops the
+  session and returns to sign-in with a notice; a `403` shows a no-access
+  screen naming the account and the group to ask for.
 - **Users**: `make create-user EMAIL=...` (`admin-create-user` against the
   stack's `UserPoolId` output). Cognito emails a temporary password.
 

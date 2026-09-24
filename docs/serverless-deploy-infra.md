@@ -29,10 +29,10 @@ account:
 - `/workspace/readysetcloud/rsc-core/template.yaml` — a working CloudFront
   distribution in front of a non-S3 origin, and the source of the two managed
   policy ids used below. Its `CognitoUserPool` / `CognitoUserPoolClient` are
-  the model for this stack's `UserPool` / `UserPoolClient`, and
-  `ui/src/auth/core.ts` (the published `@readysetcloud/ui/auth`) is the model
-  for `app/src/auth/core.ts` — the `cognito-idp` calls, the session document
-  and the refresh/revoke behaviour were ported from it, not designed here.
+  the model for this stack's `UserPool` / `UserPoolClient`. Its published
+  `@readysetcloud/ui/auth` is what the SPA signs in with -- the
+  `cognito-idp` calls, the session document and the refresh/revoke
+  behaviour are the package's, not designed here.
 - This repository's own source (`server/nimbus/**`, `app/src/api/http.ts`)
   for every claim about what the application does.
 

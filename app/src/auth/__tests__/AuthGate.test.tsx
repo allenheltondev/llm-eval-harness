@@ -150,6 +150,19 @@ describe('AuthGate', () => {
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
   })
 
+  it('offers no sign-up on an invitation-only pool (no required group)', async () => {
+    mockFetch(jsonResponse({ ...HEALTH_AUTH, auth: { ...HEALTH_AUTH.auth, required_group: null } }))
+    render(
+      <AuthGate>
+        <p>app</p>
+      </AuthGate>
+    )
+    await screen.findByRole('heading', { name: 'Sign in' })
+
+    expect(screen.queryByRole('button', { name: 'Create an account' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Forgot password?' })).toBeInTheDocument()
+  })
+
   it('renders the app with the session when one exists, sending the bearer header', async () => {
     seedSession()
     const spy = mockFetch(jsonResponse(HEALTH_AUTH), jsonResponse({ items: [] }))

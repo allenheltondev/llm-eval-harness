@@ -131,7 +131,10 @@ function Gate({
     [signedIn, user, packageSignOut]
   )
 
-  if (!signedIn) return <SignIn notice={notice} />
+  // Accounts are open to anyone only on a pool that gates by group (the
+  // shared RSC pool); a stack's own pool is invitation-only, where a sign-up
+  // form would only lead to Cognito refusing it.
+  if (!signedIn) return <SignIn notice={notice} allowSignUp={requiredGroup !== null} />
   if (forbidden) {
     return (
       <NoAccess
@@ -163,7 +166,7 @@ type Flow =
  * The package's sign-in flows, switched with local state: there is no router,
  * and the address bar belongs to the app's own hash routes.
  */
-function SignIn({ notice }: { notice: string | null }) {
+function SignIn({ notice, allowSignUp }: { notice: string | null; allowSignUp: boolean }) {
   const [flow, setFlow] = useState<Flow>({ name: 'sign-in' })
   const toSignIn = () => setFlow({ name: 'sign-in' })
   const linkButton = (label: string, onClick: () => void) => (
@@ -187,10 +190,12 @@ function SignIn({ notice }: { notice: string | null }) {
           onPasswordResetRequired={email => setFlow({ name: 'forgot', email, startAtReset: true })}
           forgotPasswordLink={linkButton('Forgot password?', () => setFlow({ name: 'forgot' }))}
           signUpPrompt={
-            <>
-              New to Ready, Set, Cloud?{' '}
-              {linkButton('Create an account', () => setFlow({ name: 'sign-up' }))}
-            </>
+            allowSignUp ? (
+              <>
+                New to Ready, Set, Cloud?{' '}
+                {linkButton('Create an account', () => setFlow({ name: 'sign-up' }))}
+              </>
+            ) : undefined
           }
         />
       )}
