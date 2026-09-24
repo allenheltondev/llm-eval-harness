@@ -83,8 +83,7 @@ export const TABS: TabDef[] = [
     id: 'evals',
     label: 'Evals',
     section: 'Run',
-    description:
-      'Launch evaluations and see how every case scored.',
+    description: 'Launch evaluations and see how every case scored.',
     icon: (
       <Icon>
         <path d="M9 11l3 3 8-8" />
@@ -110,8 +109,7 @@ export const TABS: TabDef[] = [
     id: 'guardrails',
     label: 'Guardrails',
     section: 'Manage',
-    description:
-      'Create and version Bedrock guardrails, and see what they catch.',
+    description: 'Create and version Bedrock guardrails, and see what they catch.',
     icon: (
       <Icon>
         <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z" />
@@ -121,8 +119,7 @@ export const TABS: TabDef[] = [
   {
     id: 'about',
     label: 'About',
-    description:
-      'What Nimbus is for, and the principles it is built on.',
+    description: 'What Nimbus is for, and the principles it is built on.',
     icon: (
       <Icon>
         <circle cx="12" cy="12" r="9" />
