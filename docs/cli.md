@@ -237,9 +237,15 @@ page in the web UI is printed when it starts and again when it finishes
   outlive one HTTP request; the CLI reconnects and carries on from where it
   was (the server replays the event log to each new subscriber), and only
   gives up — pointing you at the link — after repeated failures to connect.
+- **Grading runs from this machine.** `eval --run <id>` with ids the stack has
+  never seen (runs made here, before you signed in or with `--local`) grades
+  them here instead, and says so: `| Run '<id>' not found on https://…; grading
+  on this machine instead`. It falls back only when the stack refuses the
+  request up front, so nothing is ever graded twice.
 - **`--local` and `--db` mean this machine.** `--db` names a local history
   file, so it implies `--local`. `eval --remote` is the opposite: it insists on
-  the stack, and fails rather than running here when you are not signed in.
+  the stack, and fails rather than running here when you are not signed in —
+  or, with `--run`, when the stack does not have the runs.
 
 ### Signing in
 

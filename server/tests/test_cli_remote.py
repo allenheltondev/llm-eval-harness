@@ -22,10 +22,11 @@ from typing import Any, NamedTuple
 import httpx
 import pytest
 from fastapi import Depends, FastAPI, Header, HTTPException
+from sqlmodel import Session
 
 from nimbus.cli import commands, remote
 from nimbus.cli.main import main
-from nimbus.errors import register_exception_handlers
+from nimbus.errors import NotFoundError, register_exception_handlers
 from nimbus.evals import engine as evals_engine
 from nimbus.evals import jobs as evals_jobs
 from nimbus.evals.judge import FakeJudgeModel, get_judge_factory
@@ -1267,3 +1268,92 @@ def test_a_run_whose_stream_breaks_is_reported(harness, monkeypatch):
 
     assert result.code == 1
     assert f"lost the run's stream from {URL}: connection reset" in result.err
+
+
+class TestGradingRunsFromThisMachine:
+    """``eval --run`` on a stack that never saw those runs grades them here instead."""
+
+    @pytest.fixture
+    def local_only(self, app, monkeypatch):
+        """Run ids the stack does not have (they live in this machine's history)."""
+        hidden: set[str] = set()
+
+        class StackRepo:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def get_run(self, run_id):
+                if run_id in hidden:
+                    raise NotFoundError(f"Run {run_id!r} not found")
+                return self._inner.get_run(run_id)
+
+        app.dependency_overrides[runs.get_repo] = lambda: StackRepo(
+            store_repo.get_history_repo(_settings())
+        )
+        # The local judge: this machine grades with the fake model, never AWS.
+        monkeypatch.setenv("NIMBUS_FAKE_MODEL", "1")
+        return hidden
+
+    def local_run(self, hidden: set[str]) -> str:
+        with Session(db.get_engine()) as session:
+            record = history.create_run(
+                session,
+                model_id="m1",
+                system_prompt="",
+                user_prompt="hi",
+                output="An answer.",
+                status="completed",
+            )
+        hidden.add(record.id)
+        return record.id
+
+    def test_runs_the_stack_does_not_have_are_graded_here(self, harness, local_only):
+        sign_in(harness)
+        run_id = self.local_run(local_only)
+
+        result = run_cli("eval", "--run", run_id)
+
+        assert result.code == 0, result.err
+        assert f"| Run {run_id!r} not found on {URL}; grading on this machine instead" in result.err
+        terminal = json.loads(result.out)
+        assert terminal["status"] == "completed"
+        assert "url" not in terminal  # graded here: there is no page on the stack
+        [stored] = stored_evaluations()
+        assert stored.kind == "grade"
+        assert stored.run_ids == [run_id]
+
+    def test_runs_on_the_stack_are_graded_there(self, harness, local_only):
+        sign_in(harness)
+        run_id = json.loads(run_cli("run", "--json", "-m", "m1", "-p", "hi").out.splitlines()[0])[
+            "run_id"
+        ]
+
+        result = run_cli("eval", "--run", run_id)
+
+        assert result.code == 0, result.err
+        assert "grading on this machine" not in result.err
+        assert json.loads(result.out)["url"].startswith(f"{URL}/#/evals/")
+
+    def test_remote_insists_on_the_stack(self, harness, local_only):
+        sign_in(harness)
+        run_id = self.local_run(local_only)
+
+        result = run_cli("eval", "--remote", "--run", run_id)
+
+        assert result.code == 1
+        assert f"Run {run_id!r} not found" in result.err
+        assert "grading on this machine" not in result.err
+        assert stored_evaluations() == []
+
+    def test_a_run_nowhere_is_still_an_error(self, harness, local_only):
+        sign_in(harness)
+        local_only.add("nope")
+
+        result = run_cli("eval", "--run", "nope")
+
+        assert result.code == 1
+        assert "grading on this machine instead" in result.err
+        assert result.err.rstrip().endswith("nimbus: Run 'nope' not found")

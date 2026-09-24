@@ -327,7 +327,12 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
     """
     request = build_eval_request(args)
     if getattr(args, "target", None) is not None or getattr(args, "remote", False):
-        return await evaluate_remote(args, request, out, err)
+        try:
+            return await evaluate_remote(args, request, out, err)
+        except _RunsNotOnStack as missing:
+            # `eval --run` with ids from this machine's history: the stack has
+            # never seen them, so grade them where they are -- and say so.
+            _note(err, f"| {missing} on {args.target.url}; grading on this machine instead")
     repo = get_history_repo(settings)
 
     if request.kind == "grade":
@@ -379,6 +384,10 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
 # --------------------------------------------------------------------------- #
 
 
+class _RunsNotOnStack(Exception):
+    """``eval --run`` named runs the stack does not have; the message is the stack's."""
+
+
 def _choose_lane(health: dict[str, Any], url: str) -> str:
     """The lane the server's own UI would pick: the cloud one when it has it.
 
@@ -413,7 +422,14 @@ async def evaluate_remote(
         api = remote.RemoteApi(http, login)
         execution = _choose_lane(await api.health(), login.url)
         body = request.model_copy(update={"execution": execution}).model_dump(mode="json")
-        created = await api.submit(body)
+        try:
+            created = await api.submit(body)
+        except remote.RemoteNotFoundError as exc:
+            # Refused before anything started, so falling back cannot run
+            # anything twice. Only when the stack was the default, not asked for.
+            if request.kind == "grade" and not getattr(args, "remote", False):
+                raise _RunsNotOnStack(exc.message) from None
+            raise
         evaluation_id = created["id"]
         link = remote.evaluation_link(login.url, evaluation_id)
         _note(err, f"| evaluation {evaluation_id} submitted to {login.url} ({execution} lane)")
