@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import LoadingSpinner from '../../components/LoadingSpinner'
+import { Loading } from '@readysetcloud/ui'
 import { useGuardrailStore } from '../../stores'
 import type { GuardrailVersionSummary } from '../../api'
 
@@ -69,7 +69,7 @@ export default function VersionsPanel({
         </button>
       </div>
 
-      {loading && <LoadingSpinner text="Loading versions…" />}
+      {loading && <Loading text="Loading versions…" />}
 
       {!loading && versions.length === 0 && (
         <p className="text-sm text-gray-600" data-testid="versions-empty">

@@ -69,6 +69,12 @@ export interface AuthTokenProvider {
    * drop the local session and show the sign-in screen.
    */
   onUnauthorized?: () => void
+  /**
+   * Called when the server answers 403: signed in, but this account has not
+   * been granted the stack (it is not in the required Cognito group). The
+   * auth layer shows a no-access screen rather than a broken app.
+   */
+  onForbidden?: () => void
 }
 
 let tokenProvider: AuthTokenProvider | null = null
@@ -96,9 +102,10 @@ export async function withAuthHeader(
   return token ? { ...headers, authorization: `Bearer ${token}` } : headers
 }
 
-/** Let the auth layer know the server rejected the session. */
+/** Let the auth layer know the server rejected the session, or the account. */
 export function noteResponseStatus(status: number): void {
   if (status === 401) tokenProvider?.onUnauthorized?.()
+  if (status === 403) tokenProvider?.onForbidden?.()
 }
 
 export interface RequestOptions {

@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import LoadingSpinner from '../../components/LoadingSpinner'
+import { Loading } from '@readysetcloud/ui'
 import { selectGuardrailDetail, useGuardrailStore } from '../../stores'
 import type {
   ContentFilter,
@@ -336,7 +336,7 @@ export default function GuardrailEditor({
   if (guardrailId && detailLoading && !detail) {
     return (
       <div className="card p-4 sm:p-6 max-w-3xl mx-auto">
-        <LoadingSpinner text="Loading guardrail…" />
+        <Loading text="Loading guardrail…" />
       </div>
     )
   }

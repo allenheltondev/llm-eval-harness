@@ -1,27 +1,8 @@
-/** Public surface of the auth layer (see core.ts for the design). */
+/**
+ * Public surface of the auth layer. Sign-in itself is the Ready, Set, Cloud
+ * auth package (`@readysetcloud/ui/auth`); this layer decides *whether* the
+ * app needs it (AuthGate) and what the app knows about the user (session).
+ */
 
-export {
-  AUTH_STORAGE_KEY,
-  AuthError,
-  claims,
-  completeNewPassword,
-  configureAuth,
-  confirmForgotPassword,
-  errorMessage,
-  forgotPassword,
-  getAuthConfig,
-  getFreshIdToken,
-  isAuthError,
-  isSignedIn,
-  onAuthChange,
-  readSession,
-  signIn,
-  signOut,
-  type AuthConfig,
-  type IdClaims,
-  type Session,
-  type SignInResult
-} from './core'
-export { AuthProvider, useAuth, type AuthState } from './react'
 export { default as AuthGate, SESSION_EXPIRED_NOTICE, type AuthGateProps } from './AuthGate'
-export { default as LoginPage, PASSWORD_REQUIREMENTS, type LoginPageProps } from './LoginPage'
+export { NO_AUTH, SessionContext, displayName, useSession, type Session } from './session'

@@ -11,13 +11,15 @@
  */
 
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { Badge, StatusBadge } from '@readysetcloud/ui'
+import { statusTone } from '../../components/status'
 import DeterminismLauncher from './DeterminismLauncher'
 import EvalProgress from './EvalProgress'
 import EvalResultView from './EvalResultView'
 import EvaluationDetailView, { sourceLabel } from './EvaluationDetailView'
 import { useEvalStore } from '../../stores'
 import { api } from '../../api'
-import type { EvaluationDetail, EvaluationExecution, EvaluationStatus } from '../../api'
+import type { EvaluationDetail, EvaluationStatus } from '../../api'
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'Pending',
@@ -27,26 +29,8 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: 'Cancelled'
 }
 
-const STATUS_CLASSES: Record<string, string> = {
-  pending: 'bg-amber-100 text-amber-800',
-  running: 'bg-blue-100 text-blue-800',
-  completed: 'bg-primary-100 text-primary-800',
-  error: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-200 text-gray-700'
-}
-
-/** Lane badge classes — `local` is quiet grey, `cloud` stands out blue. */
-const EXECUTION_CLASSES: Record<EvaluationExecution, string> = {
-  local: 'bg-gray-100 text-gray-600',
-  cloud: 'bg-primary-100 text-primary-800'
-}
-
 function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status
-}
-
-function statusClasses(status: string): string {
-  return STATUS_CLASSES[status] ?? 'bg-gray-100 text-gray-700'
 }
 
 function isCancellable(status: EvaluationStatus | string): boolean {
@@ -267,25 +251,20 @@ export default function EvalsPage({
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-xs font-medium text-gray-700 uppercase">{row.kind}</span>
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-xs font-medium uppercase ${EXECUTION_CLASSES[row.execution]}`}
+                    <Badge
+                      variant={row.execution === 'cloud' ? 'primary' : 'neutral'}
                       data-testid={`eval-lane-${row.id}`}
                     >
                       {row.execution}
-                    </span>
+                    </Badge>
                     {sourceLabel(row.source) && (
-                      <span
-                        className="px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800"
-                        data-testid={`eval-source-${row.id}`}
-                      >
+                      <Badge variant="primary" data-testid={`eval-source-${row.id}`}>
                         {sourceLabel(row.source)}
-                      </span>
+                      </Badge>
                     )}
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClasses(row.status)}`}
-                    >
+                    <StatusBadge tone={statusTone(row.status)} role={undefined}>
                       {statusLabel(row.status)}
-                    </span>
+                    </StatusBadge>
                     <span className="text-xs text-gray-500">{formatTs(row.ts)}</span>
                   </div>
 

@@ -1,14 +1,14 @@
 /**
- * The header's sign-out control: absent whenever the deployment has no auth
- * (every local run), present and working behind an AuthProvider.
+ * The rail's account controls: absent whenever the deployment has no auth
+ * (every local run); behind sign-in, the profile menu (who is signed in, and
+ * sign-out) and the Ready, Set, Cloud app launcher.
  *
- * The Workbench's `GET /tools` fetch is stubbed at the API client so the only
- * `fetch` the sign-out test observes is Cognito's RevokeToken.
+ * The session is supplied through the app's own context -- AuthGate fills it
+ * from the auth package in the real app; its behavior is AuthGate's tests.
  */
 
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { jsonResponse, mockFetch } from '../api/__tests__/helpers'
 
 const toolsMock = vi.fn()
 
@@ -18,7 +18,7 @@ vi.mock('../api', async importOriginal => {
 })
 
 const { default: AppShell } = await import('../AppShell')
-const { AUTH_STORAGE_KEY, AuthProvider, configureAuth, readSession } = await import('../auth')
+const { SessionContext } = await import('../auth')
 const {
   DEFAULT_RUN_CONFIG,
   DEFAULT_SETTINGS,
@@ -30,12 +30,28 @@ const {
   useSettingsStore
 } = await import('../stores')
 
-function fakeJwt(payload: Record<string, unknown>): string {
-  const b64 = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-  return `h.${b64(JSON.stringify(payload))}.s`
+type SessionValue = import('../auth').Session
+
+function signedIn(overrides: Partial<SessionValue> = {}): SessionValue {
+  return {
+    required: true,
+    signedIn: true,
+    user: { email: 'ada@example.com', given_name: 'Ada', family_name: 'Lovelace' },
+    signOut: vi.fn().mockResolvedValue(undefined),
+    ...overrides
+  }
+}
+
+function renderWith(session: SessionValue) {
+  return render(
+    <SessionContext.Provider value={session}>
+      <AppShell />
+    </SessionContext.Provider>
+  )
 }
 
 beforeEach(() => {
+  window.history.replaceState(null, '', '/')
   localStorage.clear()
   toolsMock.mockReset()
   toolsMock.mockResolvedValue({ toolsets: [] })
@@ -50,58 +66,52 @@ beforeEach(() => {
     guardrails: [],
     loadGuardrails: vi.fn().mockResolvedValue(undefined)
   })
-  configureAuth({ region: 'us-east-1', clientId: 'c' })
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  configureAuth(null)
 })
 
-describe('AppShell sign-out', () => {
-  it('renders no sign-out control outside an AuthProvider', () => {
+describe('AppShell account controls', () => {
+  it('renders none outside sign-in (every local run)', () => {
     render(<AppShell />)
+
+    expect(screen.queryByRole('button', { name: 'Open profile menu' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
   })
 
-  it('renders no sign-out control behind a provider while signed out', () => {
-    render(
-      <AuthProvider>
-        <AppShell />
-      </AuthProvider>
-    )
-    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
-  })
+  it('shows who is signed in and signs out from the profile menu', async () => {
+    const session = signedIn()
+    renderWith(session)
 
-  it('shows who is signed in and clears the session on click', async () => {
-    localStorage.setItem(
-      AUTH_STORAGE_KEY,
-      JSON.stringify({ idToken: fakeJwt({ email: 'a@b.c' }), refreshToken: 'rt', expiresAt: 9e9 })
-    )
-    const spy = mockFetch(jsonResponse({}))
-    render(
-      <AuthProvider>
-        <AppShell />
-      </AuthProvider>
-    )
-    const button = screen.getByRole('button', { name: 'Sign out' })
-    expect(button).toHaveAttribute('title', 'Signed in as a@b.c')
+    fireEvent.click(screen.getByRole('button', { name: 'Open profile menu' }))
+    const menu = screen.getByRole('dialog', { name: 'Profile menu' })
+    expect(within(menu).getByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument()
+    expect(within(menu).getByText('ada@example.com')).toBeInTheDocument()
 
     await act(async () => {
-      fireEvent.click(button)
+      fireEvent.click(within(menu).getByRole('button', { name: 'Sign out' }))
     })
-    expect(readSession()).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
-    expect(spy).toHaveBeenCalledTimes(1) // RevokeToken
+    expect(session.signOut).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back to a plain title when the token carries no email', () => {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ idToken: fakeJwt({}), expiresAt: 9e9 }))
-    render(
-      <AuthProvider>
-        <AppShell />
-      </AuthProvider>
-    )
-    expect(screen.getByRole('button', { name: 'Sign out' })).toHaveAttribute('title', 'Sign out')
+  it('names an account by its email when the token carries no name', () => {
+    renderWith(signedIn({ user: { email: 'grace@example.com' } }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open profile menu' }))
+    const menu = screen.getByRole('dialog', { name: 'Profile menu' })
+    expect(within(menu).getByRole('heading', { name: 'grace@example.com' })).toBeInTheDocument()
+  })
+
+  it('opens the Ready, Set, Cloud app launcher', () => {
+    renderWith(signedIn())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open app launcher' }))
+    const launcher = screen.getByRole('dialog', { name: 'App launcher' })
+    const hrefs = within(launcher)
+      .getAllByRole('link')
+      .map(link => link.getAttribute('href'))
+    expect(hrefs).toContain('https://readysetcloud.io')
+    expect(hrefs).toContain('https://bootcamp.readysetcloud.io')
   })
 })

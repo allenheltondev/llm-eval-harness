@@ -1,36 +1,130 @@
 /**
- * The application shell: a sticky header (title, tab bar) over one page per
- * tab.
+ * The application shell: the Ready, Set, Cloud `AppNav` as a side rail
+ * beside one page per section.
  *
- * The active tab (and, on Evals and History, the open evaluation or run) is
- * the URL fragment — see `routing.ts` — so a link the CLI prints, or one
- * copied from the address bar, opens the same thing after a reload. Every tab
- * rebuilds itself from its store on mount, so no other state needs to live
- * in the URL.
+ * The active section (and, on Evals and History, the open evaluation or run)
+ * is the URL fragment — see `routing.ts` — so a link the CLI prints, or one
+ * copied from the address bar, opens the same thing after a reload. The rail's
+ * links are plain `#/...` anchors: a hash change is not a page load, so no
+ * router link component is needed. Every page rebuilds itself from its store
+ * on mount, so no other state needs to live in the URL.
  */
 
-import { useAuth } from './auth/react'
+import { useCallback, useState, type ReactNode } from 'react'
+import { AppNav, readySetCloudServices, type AppNavItem, type AppTheme } from '@readysetcloud/ui'
+import { displayName, useSession } from './auth'
 import AboutPage from './features/about/AboutPage'
 import EvalsPage from './features/evals/EvalsPage'
 import GuardrailsPage from './features/guardrails/GuardrailsPage'
 import HistoryPage from './features/history/HistoryPage'
 import WorkbenchPage from './features/workbench/WorkbenchPage'
-import { useHashRoute, type Route, type TabId } from './routing'
+import { routeHash, useHashRoute, type Route, type TabId } from './routing'
 
 export type { TabId } from './routing'
+
+/**
+ * 20px outline icons, stroked in `currentColor` so the rail's states color
+ * them. The inline `fill: none` matters: the design system fills nav icons
+ * (`.app-nav-link-icon svg { fill: currentColor }`), which a `fill` attribute
+ * cannot override, and a filled outline icon is a solid blob.
+ */
+function Icon({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      style={{ fill: 'none' }}
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  )
+}
 
 interface TabDef {
   id: TabId
   label: string
+  /** The rail heading this section sits under; none for the standalone one. */
+  section?: string
+  icon: ReactNode
 }
 
 export const TABS: TabDef[] = [
-  { id: 'workbench', label: 'Workbench' },
-  { id: 'evals', label: 'Evals' },
-  { id: 'history', label: 'History' },
-  { id: 'guardrails', label: 'Guardrails' },
-  { id: 'about', label: 'About' }
+  {
+    id: 'workbench',
+    label: 'Workbench',
+    section: 'Run',
+    icon: (
+      <Icon>
+        <path d="M4 17l6-6-6-6" />
+        <path d="M12 19h8" />
+      </Icon>
+    )
+  },
+  {
+    id: 'evals',
+    label: 'Evals',
+    section: 'Run',
+    icon: (
+      <Icon>
+        <path d="M9 11l3 3 8-8" />
+        <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9" />
+      </Icon>
+    )
+  },
+  {
+    id: 'history',
+    label: 'History',
+    section: 'Review',
+    icon: (
+      <Icon>
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+        <path d="M3 3v5h5" />
+        <path d="M12 7v5l3 3" />
+      </Icon>
+    )
+  },
+  {
+    id: 'guardrails',
+    label: 'Guardrails',
+    section: 'Manage',
+    icon: (
+      <Icon>
+        <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z" />
+      </Icon>
+    )
+  },
+  {
+    id: 'about',
+    label: 'About',
+    icon: (
+      <Icon>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 16v-4" />
+        <path d="M12 8h.01" />
+      </Icon>
+    )
+  }
 ]
+
+/** This app's id in the Ready, Set, Cloud service registry (not listed there yet). */
+export const SERVICE_ID = 'nimbus'
+
+const THEME_KEY = 'nimbus.theme'
+
+function storedTheme(): AppTheme {
+  try {
+    const value = localStorage.getItem(THEME_KEY)
+    return value === 'light' || value === 'dark' ? value : 'system'
+  } catch {
+    return 'system'
+  }
+}
 
 function TabPage({ route, navigate }: { route: Route; navigate: (next: Route) => void }) {
   switch (route.tab) {
@@ -59,74 +153,59 @@ function TabPage({ route, navigate }: { route: Route; navigate: (next: Route) =>
 
 export default function AppShell() {
   const [route, navigate] = useHashRoute()
-  const activeTab = route.tab
-  // Outside an AuthProvider (every local run) `required` is false and no
-  // sign-out control renders; behind AuthGate it is the signed-in user's.
-  const { required: authRequired, signedIn, user, signOut } = useAuth()
+  // Local runs have no sign-in at all; behind AuthGate this is the signed-in user.
+  const { required: authRequired, signedIn, user, signOut } = useSession()
+  const [theme, setTheme] = useState<AppTheme>(storedTheme)
+
+  const changeTheme = useCallback((next: AppTheme) => {
+    setTheme(next)
+    try {
+      localStorage.setItem(THEME_KEY, next)
+    } catch {
+      // Private mode: the choice lasts for this page only.
+    }
+  }, [])
+
+  const navItems: AppNavItem[] = TABS.map(tab => ({
+    id: tab.id,
+    label: tab.label,
+    href: routeHash({ tab: tab.id }),
+    active: tab.id === route.tab,
+    icon: tab.icon,
+    section: tab.section
+  }))
+
+  const authState = !authRequired ? 'none' : signedIn ? 'authenticated' : 'anonymous'
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-100">
-      <header className="sticky top-0 z-40 border-b border-secondary-200 bg-gradient-to-br from-primary-50 to-secondary-100 shadow-sm">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="text-center sm:text-left">
-              <h1 className="text-xl md:text-2xl font-bold text-primary-700 leading-tight">
-                Nimbus
-              </h1>
-              <p className="text-xs md:text-sm text-secondary-700">
-                Building enterprise-grade AI agents before it was cool
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <nav
-                role="tablist"
-                aria-label="Sections"
-                className="flex flex-wrap justify-center rounded-lg border border-gray-200 bg-surface p-1 shadow-sm"
-              >
-                {TABS.map(tab => {
-                  const selected = tab.id === activeTab
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      role="tab"
-                      id={`tab-${tab.id}`}
-                      aria-selected={selected}
-                      aria-controls={`tabpanel-${tab.id}`}
-                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 ${
-                        selected
-                          ? 'bg-primary-600 text-white'
-                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                      }`}
-                      onClick={() => navigate({ tab: tab.id })}
-                    >
-                      {tab.label}
-                    </button>
-                  )
-                })}
-              </nav>
-
-              {authRequired && signedIn && (
-                <button
-                  type="button"
-                  onClick={() => void signOut()}
-                  title={typeof user.email === 'string' ? `Signed in as ${user.email}` : 'Sign out'}
-                  className="rounded-md border border-gray-200 bg-surface px-3 py-1.5 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50 hover:text-gray-900"
-                >
-                  Sign out
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen bg-background text-foreground min-[641px]:flex">
+      <div className="min-[641px]:sticky min-[641px]:top-0 min-[641px]:h-screen">
+        <AppNav
+          appName="Nimbus"
+          layout="side"
+          homeHref={routeHash({ tab: 'workbench' })}
+          navItems={navItems}
+          services={readySetCloudServices}
+          currentServiceId={SERVICE_ID}
+          authState={authState}
+          user={
+            authState === 'authenticated'
+              ? {
+                  name: displayName(user),
+                  email: typeof user.email === 'string' ? user.email : undefined
+                }
+              : undefined
+          }
+          onSignOut={() => void signOut()}
+          theme={theme}
+          onThemeChange={changeTheme}
+        />
+      </div>
 
       <main
-        role="tabpanel"
-        id={`tabpanel-${activeTab}`}
-        aria-labelledby={`tab-${activeTab}`}
-        className="container mx-auto px-4 sm:px-6 lg:px-8 py-6"
+        id={`section-${route.tab}`}
+        aria-label={TABS.find(tab => tab.id === route.tab)?.label}
+        className="min-w-0 flex-1 px-4 sm:px-6 lg:px-8 py-6"
       >
         <TabPage route={route} navigate={navigate} />
       </main>

@@ -64,7 +64,11 @@ export default function EvalResultView({ result }: EvalResultViewProps) {
   )
 
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="eval-result-heading" data-testid="eval-result">
+    <section
+      className="card p-4 sm:p-6"
+      aria-labelledby="eval-result-heading"
+      data-testid="eval-result"
+    >
       <h3 id="eval-result-heading" className="sr-only">
         Evaluation result
       </h3>

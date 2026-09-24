@@ -8,7 +8,8 @@
  */
 
 import { useEffect, useState } from 'react'
-import LoadingSpinner from '../../components/LoadingSpinner'
+import { Loading, StatusBadge } from '@readysetcloud/ui'
+import { statusTone } from '../../components/status'
 import { api } from '../../api'
 import type { Page, RunDetail, RunSummary } from '../../api'
 import {
@@ -22,16 +23,6 @@ import CompareView from './CompareView'
 import RunDetailView from './RunDetailView'
 
 const STATUS_OPTIONS = ['completed', 'error', 'cancelled']
-
-const STATUS_CLASSES: Record<string, string> = {
-  completed: 'bg-primary-100 text-primary-800',
-  error: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-200 text-gray-700'
-}
-
-function statusBadgeClass(status: string): string {
-  return STATUS_CLASSES[status] ?? 'bg-gray-100 text-gray-700'
-}
 
 function formatTs(ts: string): string {
   const date = new Date(ts)
@@ -174,11 +165,9 @@ function RunRow({
       <td className="py-2 pr-4 text-sm text-gray-700 whitespace-nowrap">{formatTs(run.ts)}</td>
       <td className="py-2 pr-4 text-sm font-mono text-gray-900 break-all">{run.model_id}</td>
       <td className="py-2 pr-4">
-        <span
-          className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(run.status)}`}
-        >
+        <StatusBadge tone={statusTone(run.status)} role={undefined}>
           {run.status}
-        </span>
+        </StatusBadge>
       </td>
       <td className="py-2 pr-4 text-sm text-gray-700 tabular-nums">{formatTokens(run)}</td>
       <td className="py-2 pl-2 text-right" onClick={event => event.stopPropagation()}>
@@ -325,7 +314,11 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
   }
 
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="cloud-runs-heading" data-testid="cloud-runs-panel">
+    <section
+      className="card p-4 sm:p-6"
+      aria-labelledby="cloud-runs-heading"
+      data-testid="cloud-runs-panel"
+    >
       <h2 id="cloud-runs-heading" className="text-base font-semibold text-gray-900 mb-1">
         Cloud runs
       </h2>
@@ -340,7 +333,7 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
         </p>
       )}
 
-      {loading && items.length === 0 && <LoadingSpinner text="Loading cloud runs…" />}
+      {loading && items.length === 0 && <Loading text="Loading cloud runs…" />}
 
       {!loading && items.length === 0 && !error && (
         <p className="text-sm text-gray-600" data-testid="cloud-runs-empty">
@@ -374,11 +367,9 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
                       {run.model_id}
                     </td>
                     <td className="py-2 pr-4">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass(run.status)}`}
-                      >
+                      <StatusBadge tone={statusTone(run.status)} role={undefined}>
                         {run.status}
-                      </span>
+                      </StatusBadge>
                     </td>
                     <td className="py-2 pr-4 text-sm text-gray-700 tabular-nums">
                       {formatTokens(run)}
@@ -505,7 +496,7 @@ export default function HistoryPage({ runId = null, onSelectRun }: HistoryPagePr
           </p>
         )}
 
-        {loading && items.length === 0 && <LoadingSpinner text="Loading runs…" />}
+        {loading && items.length === 0 && <Loading text="Loading runs…" />}
 
         {loaded && !loading && items.length === 0 && !error && (
           <p className="text-sm text-gray-600" data-testid="history-empty">
