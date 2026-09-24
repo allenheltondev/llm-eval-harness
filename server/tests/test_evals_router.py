@@ -203,6 +203,42 @@ async def test_determinism_runs_n_times_and_completes(client, models, judge_mode
     assert len(judge_model.calls) == 4
 
 
+async def test_an_evaluation_records_where_it_was_started(client):
+    accepted = await client.post("/api/v1/evaluations", json=determinism_body(source="ui"))
+
+    assert accepted.json()["source"] == "ui"
+    finished = await wait_for_terminal(client, accepted.json()["id"])
+    assert finished["source"] == "ui"
+    assert finished["config"]["source"] == "ui"
+    listed = (await client.get("/api/v1/evaluations")).json()["items"]
+    assert [row["source"] for row in listed] == ["ui"]
+
+
+async def test_a_caller_that_does_not_say_is_the_api(client):
+    accepted = await client.post("/api/v1/evaluations", json=determinism_body())
+
+    assert accepted.json()["source"] == "api"
+    await wait_for_terminal(client, accepted.json()["id"])
+
+
+async def test_an_unknown_source_is_rejected(client):
+    response = await client.post("/api/v1/evaluations", json=determinism_body(source="cron"))
+
+    assert response.status_code == 422
+
+
+def test_an_evaluation_stored_before_sources_existed_has_none():
+    from evalharness.schemas.runs import EvaluationDetail
+
+    detail = EvaluationDetail(
+        id="e", ts="2026-01-01T00:00:00Z", kind="grade", status="completed",
+        config={"kind": "grade"}, run_ids=[],
+    )
+
+    assert detail.source is None
+    assert detail.model_dump()["source"] is None
+
+
 async def test_n_is_clamped_into_the_supported_range(client):
     accepted = await client.post("/api/v1/evaluations", json=determinism_body(n=99))
     finished = await wait_for_terminal(client, accepted.json()["id"])

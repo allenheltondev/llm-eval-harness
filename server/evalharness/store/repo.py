@@ -326,7 +326,10 @@ def build_history_repo(settings: Settings) -> HistoryRepo:
     from evalharness.store.ddb_history import DynamoHistoryRepo
 
     table_name = deployment.history_table(settings)
-    return DynamoHistoryRepo(ddb_reader.build_table(table_name, settings.aws_region))
+    return DynamoHistoryRepo(
+        ddb_reader.build_table(table_name, settings.aws_region),
+        retention_days=settings.history_retention_days,
+    )
 
 
 def get_history_repo(settings: Settings) -> HistoryRepo:
@@ -344,7 +347,10 @@ def get_history_repo(settings: Settings) -> HistoryRepo:
         backend,
         ""
         if backend == "sqlite"
-        else f"{deployment.history_table(settings)}@{settings.aws_region}",
+        else (
+            f"{deployment.history_table(settings)}@{settings.aws_region}"
+            f"/{settings.history_retention_days}d"
+        ),
     )
     if key not in _repos:
         _repos[key] = build_history_repo(settings)

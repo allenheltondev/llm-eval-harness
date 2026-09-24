@@ -52,6 +52,18 @@ Parameters:
       and DELETES the function, bucket and distribution. Use `make
       deploy-backend`.
 
+  HistoryRetentionDays:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: >
+      How many days deployed history -- evaluations, their results and their
+      runs -- is kept before DynamoDB expires it. 0 (the default) keeps it
+      forever. An evaluation's progress events and cancel flag are a replay
+      log, not history, and expire after 90 days (or with the evaluation, if
+      sooner) either way. Changing this applies to items as they are written:
+      a finished evaluation keeps the expiry it was stored with.
+
   ServerMemorySize:
     Type: Number
     Default: 1024
@@ -260,6 +272,9 @@ Resources:
           # from another machine. The worker's own DynamoDB writes go through
           # that store, not through the history repo.
           EVALHARNESS_HISTORY_BACKEND: sqlite
+          # Read by worker.lambda_app.build_store for the evaluation and run
+          # items it writes -- the same rule the server applies to its own.
+          EVALHARNESS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -338,6 +353,7 @@ Resources:
           EVALHARNESS_HISTORY_BACKEND: dynamodb
           EVALHARNESS_LOCAL_EVALS: 'off'
           EVALHARNESS_EVAL_TABLE: !Ref EvalTable
+          EVALHARNESS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
           EVALHARNESS_EVAL_FUNCTION_NAME: !If
             - ServerHasEvalWorker
             - !Ref EvalWorkerFunction

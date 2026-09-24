@@ -94,6 +94,18 @@ def test_server_keeps_its_own_backend_explicit(resources: dict) -> None:
     assert "EVALHARNESS_EVAL_TABLE" in env
 
 
+def test_history_retention_reaches_both_writers_and_defaults_to_forever(
+    resources: dict, template: dict
+) -> None:
+    """The server and the worker both write history items; one rule, one parameter."""
+    parameter = template["Parameters"]["HistoryRetentionDays"]
+    assert parameter["Default"] == 0
+    assert parameter["MinValue"] == 0
+    for function in ("ServerFunction", "EvalWorkerFunction"):
+        env = _env(resources, function)
+        assert env["EVALHARNESS_HISTORY_RETENTION_DAYS"] == {"Fn::Ref": "HistoryRetentionDays"}
+
+
 def test_function_url_has_a_public_resource_policy(resources: dict, template: dict) -> None:
     """``AuthType: NONE`` is not reachable on its own; SAM does not add this under a !Ref."""
     permission = resources["ServerFunctionUrlPublicPermission"]

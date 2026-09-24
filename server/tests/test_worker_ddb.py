@@ -81,17 +81,88 @@ def test_begin_writes_pending_meta_with_gsi1_and_ttl(store, client):
     assert item["GSI1SK"] == item["ts"]
 
 
-def test_every_item_carries_a_ninety_day_ttl(store, client):
+def _written(client) -> dict[str, dict]:
+    """The last item put per kind: meta, event, run, cancel."""
+    kinds: dict[str, dict] = {}
+    for name, kwargs in client.calls:
+        if name != "put_item":
+            continue
+        item = kwargs["Item"]
+        sk = item["sk"]["S"]
+        kind = "run" if item["pk"]["S"].startswith("RUN#") else sk.split("#")[0].lower()
+        kinds[kind] = item
+    return kinds
+
+
+def _write_one_of_each(store) -> None:
     store.begin(REQUEST)
     store.emit({"type": "eval_start", "evaluation_id": EVAL_ID, "kind": "determinism", "n": 3})
     store.put_run({"id": "run-1", "status": "completed"})
     store.request_cancel()
 
-    expected = int(FIXED_NOW) + TTL_DAYS * 24 * 60 * 60
-    written = [kwargs["Item"] for name, kwargs in client.calls if name == "put_item"]
-    assert written, "expected at least one put_item"
-    for item in written:
-        assert item[TTL_ATTRIBUTE] == {"N": str(expected)}
+
+DAY = 24 * 60 * 60
+
+
+def test_history_is_kept_forever_and_the_replay_log_expires(store, client):
+    _write_one_of_each(store)
+
+    items = _written(client)
+    assert set(items) == {"meta", "event", "run", "cancel"}
+    assert TTL_ATTRIBUTE not in items["meta"]
+    assert TTL_ATTRIBUTE not in items["run"]
+    ninety_days = {"N": str(int(FIXED_NOW) + TTL_DAYS * DAY)}
+    assert items["event"][TTL_ATTRIBUTE] == ninety_days
+    assert items["cancel"][TTL_ATTRIBUTE] == ninety_days
+
+
+def test_a_retention_limit_expires_the_evaluation_and_its_runs(client):
+    store = DynamoEvalStore(
+        TABLE, EVAL_ID, client=client, clock=lambda: FIXED_NOW, retention_days=30
+    )
+    _write_one_of_each(store)
+
+    items = _written(client)
+    thirty_days = {"N": str(int(FIXED_NOW) + 30 * DAY)}
+    assert items["meta"][TTL_ATTRIBUTE] == thirty_days
+    assert items["run"][TTL_ATTRIBUTE] == thirty_days
+    # The replay log never outlives the evaluation it replays.
+    assert items["event"][TTL_ATTRIBUTE] == thirty_days
+
+
+def test_a_long_retention_leaves_the_replay_log_at_ninety_days(client):
+    store = DynamoEvalStore(
+        TABLE, EVAL_ID, client=client, clock=lambda: FIXED_NOW, retention_days=365
+    )
+    _write_one_of_each(store)
+
+    items = _written(client)
+    assert items["meta"][TTL_ATTRIBUTE] == {"N": str(int(FIXED_NOW) + 365 * DAY)}
+    assert items["event"][TTL_ATTRIBUTE] == {"N": str(int(FIXED_NOW) + TTL_DAYS * DAY)}
+
+
+def test_settling_drops_a_ttl_the_row_was_begun_with(store, client):
+    """A row another writer begun under the 90-day rule stops expiring when it settles."""
+    store.begin(REQUEST)
+    client.items[(f"EVAL#{EVAL_ID}", "META")][TTL_ATTRIBUTE] = {"N": "1000"}
+
+    store.complete("completed", result={"grade": "A"})
+    store.finalize()
+
+    assert TTL_ATTRIBUTE not in meta(client)
+    assert meta(client)["status"] == {"S": "completed"}
+
+
+def test_settling_under_a_retention_limit_restarts_the_clock(client):
+    store = DynamoEvalStore(
+        TABLE, EVAL_ID, client=client, clock=lambda: FIXED_NOW, retention_days=30
+    )
+    store.begin(REQUEST)
+
+    store.complete("completed", result={"grade": "A"})
+    store.finalize()
+
+    assert meta(client)[TTL_ATTRIBUTE] == {"N": str(int(FIXED_NOW) + 30 * DAY)}
 
 
 def test_begin_leaves_an_existing_meta_alone(store, client):

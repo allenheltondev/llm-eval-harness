@@ -412,7 +412,14 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
 /* Page                                                                       */
 /* -------------------------------------------------------------------------- */
 
-export default function HistoryPage() {
+interface HistoryPageProps {
+  /** A run to open on arrival (the `#/runs/<id>` link). */
+  runId?: string | null
+  /** Told when the open run changes, so the address bar can follow. */
+  onSelectRun?: (runId: string | null) => void
+}
+
+export default function HistoryPage({ runId = null, onSelectRun }: HistoryPageProps = {}) {
   const items = useHistoryStore(state => state.items)
   const loading = useHistoryStore(state => state.loading)
   const loaded = useHistoryStore(state => state.loaded)
@@ -425,7 +432,18 @@ export default function HistoryPage() {
 
   const loadModels = useModelStore(state => state.loadModels)
 
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(runId)
+
+  // A link followed while already on this tab (e.g. a run link on an
+  // evaluation, or the back button) moves the selection with it.
+  useEffect(() => {
+    setSelectedRunId(runId)
+  }, [runId])
+
+  function selectRun(id: string | null) {
+    setSelectedRunId(id)
+    onSelectRun?.(id)
+  }
   const [compareIds, setCompareIds] = useState<string[]>([])
   const [cloudRunsFilter, setCloudRunsFilter] = useState(false)
 
@@ -517,9 +535,7 @@ export default function HistoryPage() {
                       selected={selectedRunId === run.id}
                       compareChecked={compareIds.includes(run.id)}
                       compareDisabled={comparing && !compareIds.includes(run.id)}
-                      onSelect={() =>
-                        setSelectedRunId(current => (current === run.id ? null : run.id))
-                      }
+                      onSelect={() => selectRun(selectedRunId === run.id ? null : run.id)}
                       onToggleCompare={checked => toggleCompare(run.id, checked)}
                     />
                   ))}

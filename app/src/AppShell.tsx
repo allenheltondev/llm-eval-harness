@@ -2,20 +2,22 @@
  * The application shell: a sticky header (title, tab bar) over one page per
  * tab.
  *
- * Tab state is deliberately plain `useState` — there is no router, and the
- * active tab is not worth persisting: every tab rebuilds itself from its store
- * on mount, so a reload landing on the Workbench is the right default.
+ * The active tab (and, on Evals and History, the open evaluation or run) is
+ * the URL fragment — see `routing.ts` — so a link the CLI prints, or one
+ * copied from the address bar, opens the same thing after a reload. Every tab
+ * rebuilds itself from its store on mount, so no other state needs to live
+ * in the URL.
  */
 
-import { useState } from 'react'
 import { useAuth } from './auth/react'
 import AboutPage from './features/about/AboutPage'
 import EvalsPage from './features/evals/EvalsPage'
 import GuardrailsPage from './features/guardrails/GuardrailsPage'
 import HistoryPage from './features/history/HistoryPage'
 import WorkbenchPage from './features/workbench/WorkbenchPage'
+import { useHashRoute, type Route, type TabId } from './routing'
 
-export type TabId = 'workbench' | 'evals' | 'history' | 'guardrails' | 'about'
+export type { TabId } from './routing'
 
 interface TabDef {
   id: TabId
@@ -30,14 +32,24 @@ export const TABS: TabDef[] = [
   { id: 'about', label: 'About' }
 ]
 
-function TabPage({ tab }: { tab: TabId }) {
-  switch (tab) {
+function TabPage({ route, navigate }: { route: Route; navigate: (next: Route) => void }) {
+  switch (route.tab) {
     case 'workbench':
       return <WorkbenchPage />
     case 'evals':
-      return <EvalsPage />
+      return (
+        <EvalsPage
+          evaluationId={route.evaluationId ?? null}
+          onSelectEvaluation={id => navigate({ tab: 'evals', evaluationId: id ?? undefined })}
+        />
+      )
     case 'history':
-      return <HistoryPage />
+      return (
+        <HistoryPage
+          runId={route.runId ?? null}
+          onSelectRun={id => navigate({ tab: 'history', runId: id ?? undefined })}
+        />
+      )
     case 'guardrails':
       return <GuardrailsPage />
     case 'about':
@@ -46,7 +58,8 @@ function TabPage({ tab }: { tab: TabId }) {
 }
 
 export default function AppShell() {
-  const [activeTab, setActiveTab] = useState<TabId>('workbench')
+  const [route, navigate] = useHashRoute()
+  const activeTab = route.tab
   // Outside an AuthProvider (every local run) `required` is false and no
   // sign-out control renders; behind AuthGate it is the signed-in user's.
   const { required: authRequired, signedIn, user, signOut } = useAuth()
@@ -86,7 +99,7 @@ export default function AppShell() {
                           ? 'bg-primary-600 text-white'
                           : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
                       }`}
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={() => navigate({ tab: tab.id })}
                     >
                       {tab.label}
                     </button>
@@ -115,7 +128,7 @@ export default function AppShell() {
         aria-labelledby={`tab-${activeTab}`}
         className="container mx-auto px-4 sm:px-6 lg:px-8 py-6"
       >
-        <TabPage tab={activeTab} />
+        <TabPage route={route} navigate={navigate} />
       </main>
     </div>
   )

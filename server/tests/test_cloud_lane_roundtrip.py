@@ -31,6 +31,7 @@ REQUEST = {
     "run_config": {"model_id": "fake.model-v1", "user_prompt": "hello"},
     "grader": {"model_id": "amazon.nova-pro-v1:0"},
     "execution": "cloud",
+    "source": "cli",
 }
 
 RUN_RECORD = {
@@ -99,6 +100,7 @@ def test_meta_reads_back_as_evaluation_detail(stores: tuple[DynamoEvalStore, Fak
     assert detail.run_ids == [RUN_ID]
     assert detail.result is not None and detail.result["grade"] == "A"
     assert detail.config["n"] == 3
+    assert detail.source == "cli"  # the request is the config, so where it came from survives
 
 
 def test_run_item_reads_back_as_run_detail(stores: tuple[DynamoEvalStore, FakeTable]) -> None:

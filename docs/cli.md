@@ -16,6 +16,9 @@ evalharness <command> [options]
   runs     list stored runs, newest first
   show     print one stored run or evaluation as JSON
   serve    start the HTTP API and UI
+  login    sign in to a deployed harness, for `eval --remote`
+  logout   forget that sign-in
+  whoami   which harness `eval --remote` uses, and as whom
 ```
 
 `make install` (or `uv sync` inside `server/`) installs the console script
@@ -135,6 +138,8 @@ evalharness eval --suite cases.yaml -m <other> # same cases, another model
 | `--suite FILE` | Run a test suite from a YAML or JSON file. Run options given on the command line override the file's `run_config`; `-p`, `-n` and `--run` are errors with it. |
 | `--run RUN_ID` | Grade this stored run instead of executing new ones; repeatable. |
 | `--rubric` | Extra rubric text for the judge. |
+| `--remote` | Run it on the harness you signed in to with `login`, not on this machine — see [Running on a deployed harness](#running-on-a-deployed-harness). |
+| `--detach` | With `--remote`: submit, print the evaluation's id and link, and return without following it. |
 | `--grader-model`, `--grader-provider`, `--grader-system` | The judge. Independent of the graded runs — an OpenAI judge grading Bedrock runs is a reasonable setup. A non-Bedrock `--grader-provider` **requires** `--grader-model`: the built-in default is a Bedrock model id, and no default is invented for the other providers. |
 
 Plus every `run` option above, which describes the repeats.
@@ -144,6 +149,62 @@ cannot wait fifteen minutes. A CLI invocation *is* the job: it runs in the
 foreground, and Ctrl-C cancels the evaluation rather than just stopping your
 view of it. The terminal state lands on stdout as JSON; the grade and the
 judge's reasoning are summarised on stderr.
+
+## Running on a deployed harness
+
+By default an evaluation runs here and is stored in this machine's history.
+With `--remote` it runs on your deployed stack instead, is stored in *that*
+stack's history, and shows up in its web UI next to the ones started there —
+labelled **CLI** — with the full per-case results, the configuration it ran
+with, and links to every run.
+
+```bash
+evalharness login --url https://d1234abcd.cloudfront.net   # once; prompts for email + password
+evalharness eval --remote --suite cases.yaml               # runs on the stack, followed here
+evalharness eval --remote --detach -m <model-id> -p '...'  # submit and return
+evalharness whoami                                         # ada@example.com @ https://…
+evalharness logout
+```
+
+What you see is the same as a local evaluation: progress on stderr, the
+terminal state as JSON on stdout (plus a `url`), the same exit codes, and
+`--json` streams the same NDJSON. The difference is where it runs and is kept.
+The link to its page in the web UI is printed when it starts and again when it
+finishes (`https://…/#/evals/<id>`); the page opens straight to it.
+
+- **Where it runs.** The CLI asks the server (`GET /health`) and uses the lane
+  its own UI would: the cloud lane on a deployed stack, the server's own
+  process on a laptop's `evalharness serve`. Model credentials are the
+  server's, not yours; suites, `--run` and every run option work as they do
+  locally, with the server's usual limits (a cloud request is capped at
+  200,000 bytes).
+- **Ctrl-C cancels it on the server**, as it would locally — the evaluation is
+  the server's, and stopping only your view would leave it running unwatched.
+  Use `--detach` to submit and walk away; follow it in the UI.
+- **A dropped connection is not a failed evaluation.** A long evaluation can
+  outlive one HTTP request; the CLI reconnects and carries on from where it
+  was (the server replays the event log to each new subscriber), and only
+  gives up — pointing you at the link — after repeated failures to connect.
+- **`--remote` and `--db` don't mix**: `--db` names a local store.
+
+### Signing in
+
+`login` reads the stack's user pool from its `/health` and signs in with the
+same email and password as the web UI (the pool is invitation-only; `make
+create-user` invites someone). The password is read without echo, or from
+stdin with `--password-stdin` for scripts, and is never stored. An invited
+user's first sign-in asks for a permanent password, which needs a terminal.
+`--url` is remembered, so a later `login` only asks for the password.
+
+The login is saved at `~/.config/evalharness/login.json` (or under
+`$XDG_CONFIG_HOME`, or `$EVALHARNESS_CONFIG_DIR`), readable by you alone
+(mode `0600`). It holds the ID token the API checks and the refresh token the
+CLI uses to renew it, so it lasts until the refresh token does (30 days by
+default) and `eval --remote` never asks you to sign in mid-way. `logout`
+revokes the refresh token and deletes the file. Plain `http://` URLs are
+refused except for `localhost`, so the token never crosses a network
+unencrypted. A server with sign-in switched off (a local `serve`) needs no
+password: `login --url http://localhost:8000` just remembers it.
 
 ## `models`, `tools`
 

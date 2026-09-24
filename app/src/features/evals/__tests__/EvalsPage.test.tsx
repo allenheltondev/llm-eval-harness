@@ -5,7 +5,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { EvaluationDetail } from '../../../api'
 
 const healthMock = vi.fn().mockResolvedValue({
@@ -14,9 +14,18 @@ const healthMock = vi.fn().mockResolvedValue({
   cloud_evals: { configured: false }
 })
 
+const getEvaluationMock = vi.fn()
+
 vi.mock('../../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../api')>()
-  return { ...actual, api: { ...actual.api, health: healthMock } }
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      health: healthMock,
+      evaluations: { ...actual.api.evaluations, get: getEvaluationMock }
+    }
+  }
 })
 
 const EvalsPage = (await import('../EvalsPage')).default
@@ -85,6 +94,7 @@ const rows: EvaluationDetail[] = [
 
 beforeEach(() => {
   healthMock.mockClear()
+  getEvaluationMock.mockReset()
   loadEvaluations.mockClear()
   loadMoreEvaluations.mockClear()
   refreshEvaluation.mockClear()
@@ -197,5 +207,90 @@ describe('EvalsPage', () => {
 
     fireEvent.click(screen.getByTestId('eval-cloud-filter'))
     expect(loadEvaluations).toHaveBeenLastCalledWith({})
+  })
+
+  it('labels where each evaluation was started', () => {
+    useEvalStore.setState({
+      evaluations: [
+        { ...rows[0], source: 'cli' },
+        { ...rows[1], source: null }
+      ]
+    })
+    render(<EvalsPage />)
+
+    expect(screen.getByTestId('eval-source-eval-completed')).toHaveTextContent('CLI')
+    expect(screen.queryByTestId('eval-source-eval-running')).not.toBeInTheDocument()
+  })
+
+  it('opens a linked evaluation from the loaded list without fetching it', () => {
+    render(<EvalsPage evaluationId="eval-completed" />)
+
+    expect(screen.getByTestId('eval-result')).toBeInTheDocument()
+    expect(screen.getByTestId('eval-detail')).toBeInTheDocument()
+    expect(getEvaluationMock).not.toHaveBeenCalled()
+    // Mounting is not a filter switch: the linked selection survives it.
+    expect(screen.getByTestId('eval-row-eval-completed').className).toContain('bg-primary-50')
+  })
+
+  it('arriving by link keeps the link in the address bar', () => {
+    const onSelectEvaluation = vi.fn()
+    render(<EvalsPage evaluationId="eval-completed" onSelectEvaluation={onSelectEvaluation} />)
+
+    // Mounting loads the list; it must not report "nothing selected" and so
+    // rewrite #/evals/<id> to #/evals.
+    expect(onSelectEvaluation).not.toHaveBeenCalled()
+  })
+
+  it('fetches a linked evaluation that is not on the loaded page', async () => {
+    getEvaluationMock.mockResolvedValue({
+      ...rows[0],
+      id: 'eval-older',
+      source: 'cli',
+      execution: 'cloud'
+    })
+    render(<EvalsPage evaluationId="eval-older" />)
+
+    await waitFor(() => expect(screen.getByTestId('eval-detail')).toBeInTheDocument())
+    expect(getEvaluationMock).toHaveBeenCalledWith('eval-older')
+    expect(screen.getByTestId('eval-detail-source')).toHaveTextContent('CLI')
+    expect(screen.getByTestId('eval-grade')).toHaveTextContent('A')
+  })
+
+  it('says so when a linked evaluation cannot be loaded', async () => {
+    getEvaluationMock.mockRejectedValue(new Error('Evaluation not found'))
+    render(<EvalsPage evaluationId="nope" />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('eval-link-error')).toHaveTextContent('Evaluation not found')
+    )
+    expect(screen.queryByTestId('eval-detail')).not.toBeInTheDocument()
+  })
+
+  it('reports the selected evaluation so the address bar can follow', () => {
+    const onSelectEvaluation = vi.fn()
+    render(<EvalsPage onSelectEvaluation={onSelectEvaluation} />)
+
+    fireEvent.click(screen.getByTestId('eval-row-eval-completed'))
+
+    expect(onSelectEvaluation).toHaveBeenCalledWith('eval-completed')
+  })
+
+  it('follows a new link while already on the page', () => {
+    const { rerender } = render(<EvalsPage evaluationId={null} />)
+    expect(screen.queryByTestId('eval-detail')).not.toBeInTheDocument()
+
+    rerender(<EvalsPage evaluationId="eval-completed" />)
+
+    expect(screen.getByTestId('eval-detail')).toBeInTheDocument()
+  })
+
+  it('switching the lane filter clears the selection and tells the address bar', () => {
+    const onSelectEvaluation = vi.fn()
+    render(<EvalsPage evaluationId="eval-completed" onSelectEvaluation={onSelectEvaluation} />)
+
+    fireEvent.click(screen.getByTestId('eval-cloud-filter'))
+
+    expect(onSelectEvaluation).toHaveBeenLastCalledWith(null)
+    expect(screen.queryByTestId('eval-detail')).not.toBeInTheDocument()
   })
 })
