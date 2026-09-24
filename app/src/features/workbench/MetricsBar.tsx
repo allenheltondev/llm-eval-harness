@@ -51,7 +51,7 @@ export default function MetricsBar() {
       <h2 id="metrics-bar-heading" className="sr-only">
         Run metrics
       </h2>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <Stat label="Input tokens" value={formatCount(metrics?.input_tokens)} />
         <Stat label="Output tokens" value={formatCount(metrics?.output_tokens)} />
         <Stat label="Total tokens" value={formatCount(metrics?.total_tokens)} />
