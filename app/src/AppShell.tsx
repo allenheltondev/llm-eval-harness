@@ -10,7 +10,7 @@
  * on mount, so no other state needs to live in the URL.
  */
 
-import { useCallback, useState, type ReactNode } from 'react'
+import { useCallback, useState, type MouseEvent, type ReactNode } from 'react'
 import { AppNav, readySetCloudServices, type AppNavItem, type AppTheme } from '@readysetcloud/ui'
 import { displayName, useSession } from './auth'
 import AboutPage from './features/about/AboutPage'
@@ -18,7 +18,7 @@ import EvalsPage from './features/evals/EvalsPage'
 import GuardrailsPage from './features/guardrails/GuardrailsPage'
 import HistoryPage from './features/history/HistoryPage'
 import WorkbenchPage from './features/workbench/WorkbenchPage'
-import { routeHash, useHashRoute, type Route, type TabId } from './routing'
+import { parseRoute, routeHash, useHashRoute, type Route, type TabId } from './routing'
 
 export type { TabId } from './routing'
 
@@ -177,10 +177,31 @@ export default function AppShell() {
 
   const authState = !authRequired ? 'none' : signedIn ? 'authenticated' : 'anonymous'
 
+  // AppNav keeps its mobile menu's open state to itself and does not close it
+  // when a link is followed, so on a narrow screen the menu would stay open
+  // over the page just chosen. Remounting it on every route change closes it.
+  // A tap on the link for the page already shown changes no route (nor, from
+  // a bare `/`, does Workbench's); that bumps `navEpoch` instead. Only then:
+  // remounting on every click would detach the link before the browser
+  // follows it.
+  const [navEpoch, setNavEpoch] = useState(0)
+  const currentHash = routeHash(route)
+  const closeMenuOnSamePage = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      const href = (event.target as Element).closest('a[href^="#"]')?.getAttribute('href')
+      if (href && routeHash(parseRoute(href)) === currentHash) setNavEpoch(n => n + 1)
+    },
+    [currentHash]
+  )
+
   return (
     <div className="min-h-screen bg-background text-foreground min-[641px]:flex">
-      <div className="min-[641px]:sticky min-[641px]:top-0 min-[641px]:h-screen">
+      <div
+        className="min-[641px]:sticky min-[641px]:top-0 min-[641px]:h-screen"
+        onClick={closeMenuOnSamePage}
+      >
         <AppNav
+          key={`${currentHash}:${navEpoch}`}
           appName="Nimbus"
           layout="side"
           homeHref={routeHash({ tab: 'workbench' })}

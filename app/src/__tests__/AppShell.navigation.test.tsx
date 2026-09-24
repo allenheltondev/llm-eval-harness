@@ -4,7 +4,7 @@
  * down to the callback they are handed -- their own behavior is their tests'.
  */
 
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../features/evals/EvalsPage', () => ({
@@ -67,5 +67,80 @@ describe('AppShell selection routes', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'clear run' }))
     expect(window.location.hash).toBe('#/history')
+  })
+})
+
+/**
+ * AppNav's mobile menu (the collapsible top bar below 641px) holds its own
+ * open state and does not close when a link is followed. AppShell closes it.
+ */
+describe('AppShell mobile menu', () => {
+  function openMenu() {
+    const toggle = screen.getByRole('button', { name: 'Toggle navigation' })
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Toggle navigation' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+  }
+
+  function expectMenuClosed() {
+    expect(screen.getByRole('button', { name: 'Toggle navigation' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+    expect(document.querySelector('.app-nav-collapse-open')).toBeNull()
+  }
+
+  async function follow(name: string) {
+    const link = screen.getByRole('link', { name })
+    await act(async () => {
+      fireEvent.click(link)
+      // jsdom follows the fragment link; the hash router hears hashchange.
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+  }
+
+  it('closes after following a link to another page', async () => {
+    render(<AppShell />)
+    go('#/workbench')
+    openMenu()
+
+    await follow('History')
+
+    expect(window.location.hash).toBe('#/history')
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: 'History' })).toHaveAttribute('aria-current', 'page')
+    )
+    expectMenuClosed()
+  })
+
+  it('closes after tapping the page already shown', async () => {
+    render(<AppShell />)
+    go('#/evals')
+    openMenu()
+
+    await follow('Evals')
+
+    expectMenuClosed()
+  })
+
+  it('closes after tapping Workbench from a bare address, which changes no route', async () => {
+    render(<AppShell />)
+    openMenu()
+
+    await follow('Workbench')
+
+    expectMenuClosed()
+  })
+
+  it('closes when the route changes some other way (back, a page selection)', () => {
+    render(<AppShell />)
+    go('#/evals')
+    openMenu()
+
+    fireEvent.click(screen.getByRole('button', { name: 'pick evaluation' }))
+
+    expectMenuClosed()
   })
 })
