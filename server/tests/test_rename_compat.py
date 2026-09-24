@@ -11,7 +11,7 @@ import stat
 import pytest
 
 from nimbus.cli import remote
-from nimbus.config import DEFAULT_DB_PATH, LEGACY_DB_PATH, Settings
+from nimbus.config import LEGACY_DB_PATH, LOCAL_DB_PATH, Settings
 
 
 @pytest.fixture(autouse=True)
@@ -95,8 +95,22 @@ def test_the_old_ollama_name_is_still_read(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_the_default_database_is_the_new_file():
-    assert Settings().db_path == DEFAULT_DB_PATH
+def test_the_default_database_is_in_the_user_data_dir(tmp_path):
+    assert Settings().db_path == str(tmp_path / "xdg-data" / "nimbus" / "history.db")
+
+
+def test_the_user_data_dir_falls_back_to_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("XDG_DATA_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    assert Settings().db_path == str(tmp_path / "home" / ".local/share/nimbus/history.db")
+
+
+def test_a_history_file_in_the_working_directory_stays_the_default(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "nimbus.db").write_bytes(b"")
+
+    assert Settings().db_path == LOCAL_DB_PATH
 
 
 def test_an_existing_old_database_keeps_being_used(tmp_path):
@@ -111,7 +125,7 @@ def test_the_new_database_wins_once_it_exists(tmp_path):
     (tmp_path / "data" / "evalharness.db").write_bytes(b"")
     (tmp_path / "data" / "nimbus.db").write_bytes(b"")
 
-    assert Settings().db_path == DEFAULT_DB_PATH
+    assert Settings().db_path == LOCAL_DB_PATH
 
 
 def test_an_explicit_database_path_is_taken_as_given(monkeypatch, tmp_path):

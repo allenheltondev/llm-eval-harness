@@ -110,6 +110,9 @@ class CatalogResult:
     models: list[ModelEntry]
     providers: dict[str, dict[str, Any]]
     cached: bool
+    #: Why Bedrock listed nothing, when it failed to list: one line, for the CLI
+    #: to show. Not part of the ``GET /models`` payload.
+    bedrock_error: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -279,12 +282,14 @@ class ProviderCatalog:
         # is advisory, and a listing that works despite it (an assumed role,
         # say) should still show up.
         bedrock_cached = bedrock.is_cached(settings.aws_region)
+        bedrock_error = None
         try:
             models = list(bedrock.list_models(settings.aws_region))
         except Exception as exc:
             # Same one-line, no-traceback treatment the other providers get --
             # /health polls this on a loop.
             logger.warning("Failed to list bedrock models: %r", exc)
+            bedrock_error = describe_error(exc)
             bedrock_cached = False
             models = []
 
@@ -299,7 +304,19 @@ class ProviderCatalog:
                 listings=listings,
             ),
             cached=bedrock_cached and all(listing.cached for listing in listings.values()),
+            bedrock_error=bedrock_error,
         )
+
+
+def describe_error(exc: Exception) -> str:
+    """One readable line for a provider failure: an AWS error's code and message."""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error") or {}
+        code, message = error.get("Code"), error.get("Message")
+        if code and message:
+            return f"{code}: {message}"
+    return str(exc) or type(exc).__name__
 
 
 def _provider_block(

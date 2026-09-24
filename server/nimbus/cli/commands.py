@@ -17,23 +17,30 @@ import argparse
 import asyncio
 import contextlib
 import getpass
+import platform
 import time
+from collections.abc import AsyncIterator
 from contextlib import aclosing
-from typing import Any, TextIO
+from datetime import datetime
+from importlib import resources
+from typing import Annotated, Any, TextIO
+
+from pydantic import Field, TypeAdapter, ValidationError
 
 from nimbus.awscat.catalog import ModelCatalog
-from nimbus.cli import remote, render
+from nimbus.cli import diagnose, remote, render
 from nimbus.config import Settings
 from nimbus.engine.events import (
     ErrorEvent,
     MetricsEvent,
     RunCompleteEvent,
+    RunEvent,
     TextDeltaEvent,
 )
 from nimbus.engine.model_factory import build_model
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import GuardrailConfig, InferenceConfig, RunRequest
-from nimbus.errors import NotFoundError
+from nimbus.errors import AppError, NotFoundError
 from nimbus.evals.engine import EvalDeps, LocalEvalStore, execute_evaluation_with_seam
 from nimbus.evals.jobs import to_json_line
 from nimbus.evals.judge import build_judge_model
@@ -43,7 +50,7 @@ from nimbus.evals.schemas import (
     GraderConfig,
 )
 from nimbus.models_catalog import ProviderCatalog
-from nimbus.providers import DEFAULT_PROVIDER, PROVIDERS, is_configured
+from nimbus.providers import DEFAULT_PROVIDER
 from nimbus.schemas.runs import EvaluationDetail, RunDetail
 from nimbus.store.repo import HistoryRepo, get_history_repo
 from nimbus.tools.registry import list_handlers
@@ -81,6 +88,31 @@ def _write(stream: TextIO, text: str) -> None:
 def _note(err: TextIO, line: str | None) -> None:
     if line is not None:
         _write(err, line + "\n")
+
+
+def _on_stack(err: TextIO, login: remote.Login) -> None:
+    """Say where a command is running, when it is not running here."""
+    who = f" as {login.email}" if login.email else ""
+    _note(err, f"| on {login.url}{who}")
+
+
+#: Parses one NDJSON line of a run's stream back into the engine's own event.
+_RUN_EVENT: TypeAdapter[RunEvent] = TypeAdapter(Annotated[RunEvent, Field(discriminator="type")])
+
+
+async def _remote_run_events(login: remote.Login, body: dict[str, Any]) -> AsyncIterator[RunEvent]:
+    """A run on the stack, as the same events a local run yields.
+
+    An event type this CLI does not know (a newer server) is skipped rather
+    than fatal: the stream's text and its ending are what matter here.
+    """
+    async with remote.http_client() as http:
+        api = remote.RemoteApi(http, login)
+        async for entry in api.run(body):
+            try:
+                yield _RUN_EVENT.validate_python(entry)
+            except ValidationError:
+                continue
 
 
 # --------------------------------------------------------------------------- #
@@ -241,7 +273,12 @@ async def run(args: argparse.Namespace, settings: Settings, out: TextIO, err: Te
     and the row is persisted as ``cancelled`` rather than left ``running``.
     """
     request = build_run_request(args)
-    events = execute_run(request, settings=settings, repo=get_history_repo(settings))
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        _on_stack(err, target)
+        events = _remote_run_events(target, request.model_dump(mode="json", by_alias=True))
+    else:
+        events = execute_run(request, settings=settings, repo=get_history_repo(settings))
     status = "error"
     # True when text has been written whose last character is not a newline.
     # Tracked rather than "has any text been written" because a model that ends
@@ -289,7 +326,7 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
     means cancel this evaluation rather than "stop watching it".
     """
     request = build_eval_request(args)
-    if getattr(args, "remote", False):
+    if getattr(args, "target", None) is not None or getattr(args, "remote", False):
         return await evaluate_remote(args, request, out, err)
     repo = get_history_repo(settings)
 
@@ -338,7 +375,7 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
 
 
 # --------------------------------------------------------------------------- #
-# eval --remote, login, logout, whoami
+# eval on a stack, login, logout, whoami
 # --------------------------------------------------------------------------- #
 
 
@@ -359,17 +396,17 @@ def _choose_lane(health: dict[str, Any], url: str) -> str:
 async def evaluate_remote(
     args: argparse.Namespace, request: EvaluationRequest, out: TextIO, err: TextIO
 ) -> int:
-    """Run the evaluation on the signed-in server and follow it from here.
+    """Run the evaluation on the signed-in stack and follow it from here.
 
     The server owns it -- it runs there, is stored there, and is listed in that
     server's UI -- and this command renders its event stream exactly as it
     renders a local one. Ctrl-C cancels it on the server, as it would locally;
     ``--detach`` submits and returns instead of following.
     """
-    login = remote.load_login()
-    if login is None or not login.signed_in:
+    login = getattr(args, "target", None)
+    if login is None:
         raise remote.NotSignedInError(
-            "not signed in to a harness: run `nimbus login --url https://<your-stack>`"
+            "not signed in to a stack: run `nimbus login --url https://<your-stack>`"
         )
 
     async with remote.http_client() as http:
@@ -425,7 +462,7 @@ def _prompt(err: TextIO, stdin: TextIO, label: str) -> str:
 
 
 async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
-    """Sign in to a harness and save the login for ``eval --remote``.
+    """Sign in to a stack and save the login; commands run there from then on.
 
     The password comes from the terminal without echo, or from stdin with
     ``--password-stdin`` (for scripts); it is sent to the user pool and never
@@ -443,7 +480,8 @@ async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: 
         auth = health.get("auth") or {}
         if not auth.get("required"):
             remote.save_login(remote.Login(url=url))
-            _note(err, f"| {url} does not require sign-in; saved it for `eval --remote`")
+            _note(err, f"| {url} does not require sign-in; commands now run there")
+            _note(err, "| pass --local to use this machine, or `nimbus logout` to stop")
             if args.json:
                 _write(out, render.dumps({"url": url, "email": None}) + "\n")
             return EXIT_OK
@@ -488,7 +526,8 @@ async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: 
             expires_at=outcome.expires_at,
         )
     )
-    _note(err, f"| signed in to {url} as {email}")
+    _note(err, f"| signed in to {url} as {email}; commands now run there")
+    _note(err, "| pass --local to use this machine, or `nimbus logout` to stop")
     if args.json:
         _write(out, render.dumps({"url": url, "email": email}) + "\n")
     return EXIT_OK
@@ -507,15 +546,18 @@ async def logout(args: argparse.Namespace, settings: Settings, out: TextIO, err:
             async with remote.http_client() as http:
                 await remote.cognito_for(http, saved).revoke(saved.refresh_token)
     remote.clear_login()
-    _note(err, f"| signed out of {saved.url}")
+    _note(err, f"| signed out of {saved.url}; commands run on this machine again")
     return EXIT_OK
 
 
 async def whoami(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
-    """Which server ``eval --remote`` talks to, and as whom. Offline."""
+    """Where commands run: which stack, and as whom. Offline."""
     saved = remote.load_login()
     if saved is None:
-        raise remote.NotSignedInError("not signed in: run `nimbus login --url https://...`")
+        raise remote.NotSignedInError(
+            "not signed in: commands run on this machine (`nimbus login --url https://...` "
+            "to use a stack)"
+        )
     remaining = None if saved.expires_at is None else int(saved.expires_at - time.time())
     if args.json:
         _write(
@@ -528,6 +570,7 @@ async def whoami(args: argparse.Namespace, settings: Settings, out: TextIO, err:
     if remaining is not None:
         state = f"valid for {remaining // 60} more minutes" if remaining > 0 else "expired"
         _note(err, f"| token {state}; it is refreshed automatically")
+    _note(err, "| commands run on this stack; pass --local to use this machine")
     return EXIT_OK
 
 
@@ -543,6 +586,9 @@ async def models(args: argparse.Namespace, settings: Settings, out: TextIO, err:
     behaviour: a provider that fails to list contributes nothing and does not
     fail the command.
     """
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        return await _models_on_stack(args, target, out, err)
     result = await ProviderCatalog().collect(settings, ModelCatalog())
 
     if args.json:
@@ -555,35 +601,71 @@ async def models(args: argparse.Namespace, settings: Settings, out: TextIO, err:
         )
         return EXIT_OK
 
-    rows = [
-        [entry.get("source", ""), entry.get("model_id", ""), entry.get("name", "")]
-        for entry in result.models
-    ]
+    rows = _model_rows(result.models)
     if rows:
         _write(out, render.table(rows, ["PROVIDER", "MODEL ID", "NAME"]) + "\n")
 
-    unconfigured = [name for name in PROVIDERS if not is_configured(name, settings)]
+    checks = diagnose.provider_checks(settings, result)
+    for check in checks:
+        if check.status == "fail":
+            _note(err, f"| {check.name}: {check.detail}")
+            _note(err, f"|   fix: {check.fix}")
+    unconfigured = [check for check in checks if check.status == "off"]
     if unconfigured:
-        _note(err, f"| not configured: {', '.join(unconfigured)}")
+        listed = ", ".join(f"{check.name} ({check.fix})" for check in unconfigured)
+        _note(err, f"| not configured: {listed}")
     if not rows:
-        _note(err, "| no models available")
+        _note(err, "| no models available: `nimbus doctor` checks your setup")
+    return EXIT_OK
+
+
+def _model_rows(entries: list[dict[str, Any]]) -> list[list[str]]:
+    return [
+        [entry.get("source", ""), entry.get("model_id", ""), entry.get("name", "")]
+        for entry in entries
+    ]
+
+
+async def _models_on_stack(
+    args: argparse.Namespace, login: remote.Login, out: TextIO, err: TextIO
+) -> int:
+    """The stack's ``GET /models``: what runs *there* can use, not what this machine can."""
+    _on_stack(err, login)
+    async with remote.http_client() as http:
+        payload = await remote.RemoteApi(http, login).get("/models")
+    if args.json:
+        _write(out, render.dumps(payload) + "\n")
+        return EXIT_OK
+    rows = _model_rows(payload.get("models") or [])
+    if rows:
+        _write(out, render.table(rows, ["PROVIDER", "MODEL ID", "NAME"]) + "\n")
+    unconfigured = [
+        name
+        for name, block in (payload.get("providers") or {}).items()
+        if not (block or {}).get("configured")
+    ]
+    if unconfigured:
+        _note(err, f"| not configured on the stack: {', '.join(unconfigured)}")
+    if not rows:
+        _note(err, "| the stack offers no models")
     return EXIT_OK
 
 
 async def tools(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
     """List the toolsets a run may name with ``--toolset``."""
-    handlers = list_handlers()
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        _on_stack(err, target)
+        async with remote.http_client() as http:
+            payload = await remote.RemoteApi(http, target).get("/tools")
+        toolsets = payload.get("toolsets") or []
+    else:
+        toolsets = [{"name": name, "tools": names} for name, names in list_handlers().items()]
     if args.json:
-        _write(
-            out,
-            render.dumps(
-                {"toolsets": [{"name": name, "tools": names} for name, names in handlers.items()]}
-            )
-            + "\n",
-        )
+        _write(out, render.dumps({"toolsets": toolsets}) + "\n")
         return EXIT_OK
 
-    rows = [[name, ", ".join(names)] for name, names in handlers.items()]
+    rows = [[entry["name"], ", ".join(entry["tools"])] for entry in toolsets]
     if rows:
         _write(out, render.table(rows, ["TOOLSET", "TOOLS"]) + "\n")
     else:
@@ -598,6 +680,9 @@ async def tools(args: argparse.Namespace, settings: Settings, out: TextIO, err: 
 
 async def runs(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
     """List stored runs, newest first."""
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        return await _runs_on_stack(args, target, out, err)
     repo: HistoryRepo = get_history_repo(settings)
     records, next_cursor = repo.list_runs(
         model_id=args.model, status=args.status, limit=args.limit, cursor=args.cursor
@@ -617,12 +702,50 @@ async def runs(args: argparse.Namespace, settings: Settings, out: TextIO, err: T
         ]
         for record in records
     ]
+    _run_table(rows, next_cursor, out, err)
+    return EXIT_OK
+
+
+def _run_table(rows: list[list[str]], next_cursor: str | None, out: TextIO, err: TextIO) -> None:
     if rows:
         _write(out, render.table(rows, ["ID", "WHEN", "STATUS", "MODEL"]) + "\n")
     else:
         _note(err, "| no runs stored")
     if next_cursor:
         _note(err, f"| more: --cursor {next_cursor}")
+
+
+def _when(value: Any) -> str:
+    """A server timestamp as the local table shows one: to the second."""
+    try:
+        return datetime.fromisoformat(str(value)).isoformat(timespec="seconds")
+    except ValueError:
+        return str(value)
+
+
+async def _runs_on_stack(
+    args: argparse.Namespace, login: remote.Login, out: TextIO, err: TextIO
+) -> int:
+    _on_stack(err, login)
+    async with remote.http_client() as http:
+        page = await remote.RemoteApi(http, login).get(
+            "/runs",
+            {
+                "limit": args.limit,
+                "model_id": args.model,
+                "status": args.status,
+                "cursor": args.cursor,
+            },
+        )
+    items, next_cursor = page.get("items") or [], page.get("next_cursor")
+    if args.json:
+        _write(out, render.dumps({"items": items, "next_cursor": next_cursor}) + "\n")
+        return EXIT_OK
+    rows = [
+        [item["id"], _when(item.get("ts")), item.get("status", ""), item.get("model_id", "")]
+        for item in items
+    ]
+    _run_table(rows, next_cursor, out, err)
     return EXIT_OK
 
 
@@ -633,6 +756,17 @@ async def show(args: argparse.Namespace, settings: Settings, out: TextIO, err: T
     -- they have an id and they want to see it -- so this looks in both rather
     than making them remember which kind of thing they are holding.
     """
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        _on_stack(err, target)
+        async with remote.http_client() as http:
+            api = remote.RemoteApi(http, target)
+            for path in (f"/runs/{args.id}", f"/evaluations/{args.id}"):
+                with contextlib.suppress(remote.RemoteNotFoundError):
+                    _write(out, render.dumps(await api.get(path)) + "\n")
+                    return EXIT_OK
+        raise NotFoundError(f"No run or evaluation with id {args.id!r} on {target.url}")
+
     repo: HistoryRepo = get_history_repo(settings)
     try:
         record = repo.get_run(args.id)
@@ -648,6 +782,94 @@ async def show(args: argparse.Namespace, settings: Settings, out: TextIO, err: T
 
     _write(out, render.dumps(RunDetail.model_validate(record).model_dump()) + "\n")
     return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# Getting started: init, doctor
+# --------------------------------------------------------------------------- #
+
+#: The starter suite `init` writes -- byte for byte the documented example
+#: (docs/examples/support-suite.yaml), which a test keeps true.
+STARTER_SUITE = "starter-suite.yaml"
+_STARTER_MODEL_LINE = "  model_id: amazon.nova-lite-v1:0\n"
+
+
+def starter_suite(model: str | None = None) -> str:
+    text = resources.files("nimbus.cli").joinpath(STARTER_SUITE).read_text(encoding="utf-8")
+    if model:
+        text = text.replace(_STARTER_MODEL_LINE, f"  model_id: {model}\n", 1)
+    return text
+
+
+async def init(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """Write a commented starter suite to edit into your own; never over an existing file."""
+    path = args.file
+    if path.exists() and not args.force:
+        raise AppError(f"{path} already exists; pass --force to replace it")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(starter_suite(args.model), encoding="utf-8")
+    if args.json:
+        _write(out, render.dumps({"path": str(path)}) + "\n")
+    _note(err, f"| wrote {path}: four example cases for a support prompt")
+    _note(err, f"| run it:   nimbus eval --suite {path}")
+    _note(err, "| models:   nimbus models   (then -m <model id>, or edit run_config.model_id)")
+    return EXIT_OK
+
+
+_DOCTOR_MARK = {"ok": "ok", "off": "--", "fail": "!!"}
+
+
+async def doctor(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """Check everything nimbus needs, and say what to do about what is missing.
+
+    Exits ``1`` when something that is set up is broken, so it can gate a
+    script; things that are simply not set up (a provider you do not use) are
+    listed, not failures -- unless nothing at all can run a model.
+    """
+    from nimbus.cli.main import version
+
+    catalog = await ProviderCatalog().collect(settings, ModelCatalog())
+    local = diagnose.provider_checks(settings, catalog)
+    login = remote.load_login()
+    stack = await diagnose.stack_checks(login)
+    checks = [diagnose.history_check(settings), *local, *stack]
+    if not any(check.status == "ok" for check in (*local, *stack)):
+        checks.append(
+            diagnose.Check(
+                "models",
+                "fail",
+                "nothing can run a model: no provider here, no stack",
+                "set up one provider above, or sign in to a stack",
+            )
+        )
+    healthy = not any(check.status == "fail" for check in checks)
+
+    if args.json:
+        _write(
+            out,
+            render.dumps(
+                {
+                    "version": version(),
+                    "ok": healthy,
+                    "checks": [
+                        {"name": c.name, "status": c.status, "detail": c.detail, "fix": c.fix}
+                        for c in checks
+                    ],
+                }
+            )
+            + "\n",
+        )
+    else:
+        _write(out, f"nimbus {version()} (Python {platform.python_version()})\n\n")
+        width = max(len(check.name) for check in checks)
+        for check in checks:
+            mark = _DOCTOR_MARK[check.status]
+            _write(out, f"{mark}  {check.name.ljust(width)}  {check.detail}\n")
+            if check.fix and check.status != "ok":
+                _write(out, f"{' ' * (width + 6)}-> {check.fix}\n")
+        problems = sum(1 for check in checks if check.status == "fail")
+        _note(err, "| all good" if healthy else f"| {problems} problem{'s' * (problems != 1)}")
+    return EXIT_OK if healthy else EXIT_FAILED
 
 
 # --------------------------------------------------------------------------- #

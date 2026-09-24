@@ -1,11 +1,12 @@
-"""Driving a deployed harness from the CLI: sign-in, the saved login, and the API.
+"""Driving a deployed stack from the CLI: sign-in, the saved login, and the API.
 
 ``nimbus login --url URL`` signs in the way the web UI does -- the server's
 ``GET /health`` names the Cognito pool, and the user pool's own API takes an
 email and password (``USER_PASSWORD_AUTH``; there is no Hosted UI) -- and saves
-the resulting tokens. ``nimbus eval --remote`` then submits through that
-server's ``POST /evaluations`` and follows ``GET /evaluations/{id}/events``,
-which is byte-for-byte the NDJSON the local command renders. The evaluation is
+the resulting tokens. From then on commands go through that server's API:
+``nimbus eval`` submits to ``POST /evaluations`` and follows
+``GET /evaluations/{id}/events``, which is byte-for-byte the NDJSON the local
+command renders. The evaluation is
 the server's, stored in the server's history, so the UI lists it alongside the
 ones it started itself.
 
@@ -29,7 +30,7 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
@@ -87,6 +88,12 @@ class RemoteError(AppError):
 
 class NotSignedInError(RemoteError):
     code = "not_signed_in"
+
+
+class RemoteNotFoundError(RemoteError):
+    """The server answered 404: the thing asked for is not there."""
+
+    code = "not_found"
 
 
 class UnreachableError(RemoteError):
@@ -500,6 +507,8 @@ class RemoteApi:
             await response.aclose()
             if response.status_code == 401:
                 raise NotSignedInError(f"{self.login.url} refused the sign-in: {message}")
+            if response.status_code == 404:
+                raise RemoteNotFoundError(message)
             raise RemoteError(message)
         return response
 
@@ -509,6 +518,28 @@ class RemoteApi:
 
     async def health(self) -> dict[str, Any]:
         return await discover(self._http, self.login.url)
+
+    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """``GET`` an API path; ``None``-valued parameters are left out."""
+        given = {key: value for key, value in (params or {}).items() if value is not None}
+        query = urlencode(given)
+        return await self._json("GET", f"{path}?{query}" if query else path)
+
+    async def run(self, body: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+        """``POST /runs`` as a stream: each NDJSON event, as it arrives.
+
+        Closing the generator (Ctrl-C) closes the connection, which is what
+        tells the server to cancel the run and store it as ``cancelled``.
+        """
+        response = await self._send("POST", "/runs", body=body, stream=True)
+        try:
+            async for line in response.aiter_lines():
+                if line.strip():
+                    yield json.loads(line)
+        except httpx.TransportError as exc:
+            raise UnreachableError(f"lost the run's stream from {self.login.url}: {exc}") from None
+        finally:
+            await response.aclose()
 
     async def submit(self, body: dict[str, Any]) -> dict[str, Any]:
         return await self._json("POST", "/evaluations", body=body)

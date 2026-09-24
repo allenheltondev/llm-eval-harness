@@ -85,24 +85,35 @@ OLLAMA_HOST=localhost:11434 make dev       # or a local model, no cloud account 
 ```
 
 The app opens at `http://localhost:3000` and talks to the server at `http://localhost:8000`.
-History lives in `server/data/nimbus.db`.
+History lives in `~/.local/share/nimbus/history.db`, shared with the `nimbus` command (a
+checkout that already has `server/data/nimbus.db` keeps using it).
 
 ## Command line
 
-`make install` installs the console script into `server/.venv`, so it is `uv run nimbus`
-from `server/` — or plain `nimbus` once that venv is active, which is how the examples below
-are written. The full reference is **[docs/cli.md](docs/cli.md)**; the shape of it:
+Install `nimbus` once and use it from any directory — it needs Python 3.12 and
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
+uv tool install "git+https://github.com/allenheltondev/llm-eval-harness#subdirectory=server"
+nimbus doctor                                    # what is set up, and what to do about the rest
+```
+
+(In a checkout, `make install` puts it in `server/.venv` instead: `uv run nimbus` from `server/`.)
+The full reference is **[docs/cli.md](docs/cli.md)**; the shape of it:
+
+```bash
+nimbus doctor                                    # check your setup
 nimbus models                                    # what can I run against?
 nimbus run -m <model-id> -p 'your prompt'        # one run, streamed
 nimbus eval -m <model-id> -p '...' -n 10         # determinism experiment, graded
+nimbus init && nimbus eval --suite suite.yaml    # a starter test suite, then run it
 nimbus eval --run <id> --run <id>                # grade runs you already have
 nimbus runs                                      # history, newest first
 nimbus show <id>                                 # one run or evaluation, as JSON
 nimbus serve                                     # the HTTP API the web UI talks to
-nimbus login --url https://<your-stack>          # then, on the deployed stack:
-nimbus eval --remote --suite cases.yaml          #   runs there, shows in its web UI
+nimbus login --url https://<your-stack>          # from now on, commands run on that stack
+nimbus eval --suite suite.yaml                   #   so this shows in its web UI
+nimbus --local runs                              #   and --local is this machine again
 ```
 
 Two conventions worth knowing up front:
@@ -196,9 +207,9 @@ and item shapes: `docs/cloud-evals.md`; infrastructure notes and first-deploy ve
 ### History: from the CLI, in the UI, kept
 
 Every evaluation is recorded with where it was started — the web UI, the CLI, or another API
-client — and the Evals tab labels it. `nimbus login` then `nimbus eval --remote …` runs an
-evaluation on the deployed stack from your terminal, so it lands in that stack's history and its
-UI like any other ([docs/cli.md](docs/cli.md#running-on-a-deployed-harness)).
+client — and the Evals tab labels it. After `nimbus login`, every `nimbus run` and `nimbus eval`
+runs on the deployed stack from your terminal, so it lands in that stack's history and its UI
+like any other ([docs/cli.md](docs/cli.md#running-on-a-deployed-stack)).
 
 Opening an evaluation shows everything recorded about it: the grade and metrics, a suite's
 per-case table (verdict, score for each repeat, the judge's reasoning, the case itself), the
@@ -455,7 +466,7 @@ to `~/.config/nimbus` the first time it is read.
 | Env var | Default | Description |
 | --- | --- | --- |
 | `NIMBUS_AWS_REGION` | `us-east-1` | AWS region for Bedrock/Guardrails/DynamoDB calls |
-| `NIMBUS_DB_PATH` | `./data/nimbus.db` | SQLite path for run/evaluation history |
+| `NIMBUS_DB_PATH` | `~/.local/share/nimbus/history.db` | SQLite path for run/evaluation history (`$XDG_DATA_HOME/nimbus/` when set; `./data/nimbus.db` when that exists where the server starts) |
 | `NIMBUS_CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON list) |
 | `NIMBUS_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of a real provider (test infrastructure) |
 | `NIMBUS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |

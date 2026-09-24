@@ -18,7 +18,7 @@ errors, minus the session**, and each backend owns its own connection:
 Why an object rather than a module of functions that accept-and-ignore a
 ``session``: the session is not merely unused by the DynamoDB backend, it is
 *unbuildable*. ``Depends(get_session)`` calls ``get_engine()``, which creates
-``./data/nimbus.db`` -- a read-only filesystem inside Lambda. Handing every
+the default history file -- on a read-only filesystem inside Lambda. Handing every
 router a repository instead of a session means the SQLite engine is never
 constructed unless the SQLite backend is actually selected, which is what makes
 the deployed process work at all. It also shrinks the routers: they no longer

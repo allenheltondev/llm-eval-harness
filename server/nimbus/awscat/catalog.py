@@ -81,11 +81,9 @@ class ModelCatalog:
             List of foundation model dicts
         """
         models = []
-        try:
-            response = client.list_foundation_models()
-        except ClientError as e:
-            logger.error(f"Failed to list foundation models: {e}")
-            raise
+        # A failure propagates as-is: the caller decides how loudly to say so
+        # (ProviderCatalog.collect logs it once and degrades to no models).
+        response = client.list_foundation_models()
 
         for model in response.get("modelSummaries", []):
             # Filter: must support ON_DEMAND inference

@@ -1,5 +1,6 @@
 """Shared pytest fixtures for the nimbus test suite."""
 
+import os
 from collections.abc import AsyncIterator
 
 import httpx
@@ -35,6 +36,33 @@ AUTH_ENV_VARS = (
     "EVALHARNESS_AUTH_USER_POOL_ID",
     "EVALHARNESS_AUTH_CLIENT_ID",
 )
+
+
+@pytest.fixture(autouse=True)
+def restored_environment():
+    """Put ``os.environ`` back after every test.
+
+    ``nimbus --db`` exports NIMBUS_DB_PATH and NIMBUS_HISTORY_BACKEND into the
+    real environment on purpose (it is the only channel ``serve``'s uvicorn
+    child can read), so any test that invokes the CLI with ``--db`` would
+    otherwise leave the next test running with a pinned SQLite backend.
+    """
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def isolated_user_data(monkeypatch, tmp_path):
+    """The default history file and the saved login live in the test's own directory.
+
+    Never in ~: a developer signed in to a stack would otherwise have every
+    local-CLI test quietly run against that stack.
+    """
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setenv("NIMBUS_CONFIG_DIR", str(tmp_path / "nimbus-config"))
+    monkeypatch.delenv("EVALHARNESS_CONFIG_DIR", raising=False)
 
 
 @pytest.fixture(autouse=True)

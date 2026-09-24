@@ -5,9 +5,10 @@ history behind them, and the model/toolset catalogues that say what is
 available. ``nimbus serve`` starts the HTTP API for anyone who would
 rather click, which makes the web UI one front door rather than the front door.
 
-Nothing here talks HTTP. Commands call the same engine functions the routers
-call, against the same history store, so a local run and a run submitted to a
-deployed server differ in where they execute and nothing else.
+On this machine, commands call the same engine functions the routers call,
+against the same history store. Signed in to a stack (``nimbus login``), they
+call that stack's API instead and render its answers the same way, so a local
+run and a run on a deployed stack differ in where they execute and nothing else.
 
 Conventions this file exists to enforce:
 
@@ -25,16 +26,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import inspect
+import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
+from importlib import metadata
 from pathlib import Path
 from typing import TextIO
 
 import yaml
 from pydantic import ValidationError
 
-from nimbus.cli import commands
+from nimbus.cli import commands, remote
 from nimbus.cli.commands import EXIT_CANCELLED, EXIT_FAILED
 from nimbus.config import Settings
 from nimbus.errors import AppError
@@ -62,7 +65,21 @@ COMMANDS: dict[str, Command] = {
     "login": commands.login,
     "logout": commands.logout,
     "whoami": commands.whoami,
+    "init": commands.init,
+    "doctor": commands.doctor,
 }
+
+
+#: The distribution ``nimbus`` is installed as (``uv tool install``, pip).
+DISTRIBUTION = "nimbus-evals"
+
+
+def version() -> str:
+    """The installed version; ``dev`` when running from a tree that is not installed."""
+    try:
+        return metadata.version(DISTRIBUTION)
+    except metadata.PackageNotFoundError:
+        return "dev"
 
 
 class UsageError(Exception):
@@ -78,11 +95,16 @@ class UsageError(Exception):
 #: the root parser, once on every subcommand) so that both `nimbus --json
 #: run ...` and `nimbus run --json ...` work. People type both.
 _JSON_HELP = "machine-readable output on stdout (NDJSON for streams, JSON otherwise)"
-_DB_HELP = "sqlite history file (default: NIMBUS_DB_PATH, else ./data/nimbus.db)"
+_LOCAL_HELP = (
+    "use this machine even when signed in to a stack (the default then is the stack; "
+    "see `nimbus whoami`)"
+)
+_VERBOSE_HELP = "also show the log: provider and AWS diagnostics, on stderr"
+_DB_HELP = "sqlite history file (default: NIMBUS_DB_PATH, else ~/.local/share/nimbus/history.db)"
 
 
 def _global_options() -> argparse.ArgumentParser:
-    """``--db`` and ``--json`` as accepted *after* the subcommand.
+    """``--db``, ``--json``, ``--verbose`` and ``--local`` as accepted *after* the subcommand.
 
     ``default=SUPPRESS`` is what makes the duplication safe: these only set an
     attribute when actually passed, so a subcommand that does not mention them
@@ -92,6 +114,10 @@ def _global_options() -> argparse.ArgumentParser:
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument("--db", type=Path, default=argparse.SUPPRESS, help=_DB_HELP)
     parent.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=_JSON_HELP)
+    parent.add_argument(
+        "-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help=_VERBOSE_HELP
+    )
+    parent.add_argument("--local", action="store_true", default=argparse.SUPPRESS, help=_LOCAL_HELP)
     return parent
 
 
@@ -151,10 +177,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="nimbus",
-        description="Run and evaluate LLM prompts locally.",
+        description=(
+            "Run, evaluate and compare LLM prompts: on this machine, or on a Nimbus "
+            "stack you have signed in to. New here? `nimbus doctor` checks your setup."
+        ),
     )
+    parser.add_argument("--version", action="version", version=f"nimbus {version()}")
     parser.add_argument("--db", type=Path, default=None, help=_DB_HELP)
     parser.add_argument("--json", action="store_true", default=False, help=_JSON_HELP)
+    parser.add_argument("-v", "--verbose", action="store_true", default=False, help=_VERBOSE_HELP)
+    parser.add_argument("--local", action="store_true", default=False, help=_LOCAL_HELP)
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
 
     run = subparsers.add_parser(
@@ -214,14 +246,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--remote",
         action="store_true",
         help=(
-            "run it on the server you signed in to with `nimbus login`, so it is "
-            "stored there and shows in that server's web UI"
+            "insist on the stack you signed in to (already the default once signed in); "
+            "fails rather than running here when you are not"
         ),
     )
     evaluate.add_argument(
         "--detach",
         action="store_true",
-        help="with --remote: submit, print the evaluation's id and link, and return",
+        help="on a stack: submit, print the evaluation's id and link, and return",
     )
 
     subparsers.add_parser(
@@ -243,24 +275,54 @@ def build_parser() -> argparse.ArgumentParser:
     login = subparsers.add_parser(
         "login",
         parents=[output],
-        help="sign in to a deployed harness for `eval --remote`",
+        help="sign in to a deployed Nimbus stack; commands then run there",
         description=(
-            "Sign in to a harness (the URL of its web UI) and save the login for "
-            "`eval --remote`. The password is read without echo, or from stdin with "
-            "--password-stdin; it is never stored."
+            "Sign in to a Nimbus stack (the URL of its web UI). From then on run, eval, "
+            "runs, show, models and tools use that stack, and what you run shows in its "
+            "web UI; --local uses this machine for one command, `nimbus logout` for good. "
+            "The password is read without echo, or from stdin with --password-stdin; it "
+            "is never stored."
         ),
     )
-    login.add_argument("--url", help="the harness's URL (default: the one you last signed in to)")
+    login.add_argument("--url", help="the stack's URL (default: the one you last signed in to)")
     login.add_argument("--email", help="your email (prompted for when omitted)")
     login.add_argument(
         "--password-stdin", action="store_true", help="read the password from stdin"
     )
-    subparsers.add_parser("logout", parents=[output], help="forget the saved login")
     subparsers.add_parser(
-        "whoami", parents=[output], help="show which harness `eval --remote` uses, and as whom"
+        "logout", parents=[output], help="sign out; commands run on this machine again"
+    )
+    subparsers.add_parser(
+        "whoami", parents=[output], help="show where commands run: which stack, and as whom"
     )
 
-    serve = subparsers.add_parser("serve", parents=[output], help="start the HTTP API and UI")
+    init = subparsers.add_parser(
+        "init",
+        parents=[output],
+        help="write a starter test suite to edit into your own",
+        description=(
+            "Write a commented example suite -- four cases for a support prompt -- "
+            "to edit into your own, then run it with `nimbus eval --suite FILE`."
+        ),
+    )
+    init.add_argument(
+        "file", nargs="?", type=Path, default=Path("suite.yaml"), help="(default: suite.yaml)"
+    )
+    init.add_argument("-m", "--model", help="the model id to put in run_config")
+    init.add_argument("--force", action="store_true", help="replace the file if it exists")
+    subparsers.add_parser(
+        "doctor",
+        parents=[output],
+        help="check your setup: history, model providers, the signed-in stack",
+        description=(
+            "Check everything nimbus needs and say what to do about anything missing. "
+            "Exits 1 when something set up is broken."
+        ),
+    )
+
+    serve = subparsers.add_parser(
+        "serve", parents=[output], help="start the HTTP API the web UI talks to"
+    )
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
     serve.add_argument("--port", type=int, default=8000, help="bind port (default: 8000)")
     serve.add_argument("--reload", action="store_true", help="reload on source changes")
@@ -399,14 +461,36 @@ def _check_required(args: argparse.Namespace) -> None:
         )
 
 
-def _check_remote(args: argparse.Namespace) -> None:
-    """``--remote`` and ``--detach`` only make sense together, and not with ``--db``."""
-    if args.command != "eval":
+#: The commands that run wherever the target is: a signed-in stack, or here.
+TARGETED = frozenset({"run", "eval", "runs", "show", "models", "tools"})
+
+
+def resolve_target(args: argparse.Namespace) -> None:
+    """Decide where this command runs: ``args.target`` is a login, or ``None`` for here.
+
+    Signed in to a stack, the stack is the default -- that is what signing in
+    is for, and it is what puts a run from the terminal in that stack's web UI.
+    ``--local`` and ``--db`` (a local history file) choose this machine for one
+    command. ``eval --remote`` insists on the stack: without a login it fails
+    rather than quietly running here.
+    """
+    args.target = None
+    if args.command not in TARGETED:
         return
-    if args.detach and not args.remote:
-        raise UsageError("--detach only applies to --remote: a local evaluation runs here")
-    if args.remote and args.db is not None:
+    wants_remote = getattr(args, "remote", False)
+    if wants_remote and args.local:
+        raise UsageError("--local and --remote contradict each other; pass one")
+    if wants_remote and args.db is not None:
         raise UsageError("--remote runs on the server and is stored there; --db is local only")
+    if not (args.local or args.db is not None):
+        login = remote.load_login()
+        if login is not None and login.signed_in:
+            args.target = login
+    if getattr(args, "detach", False) and args.target is None and not wants_remote:
+        raise UsageError(
+            "--detach needs a stack to leave the evaluation running on: sign in with "
+            "`nimbus login`; an evaluation on this machine ends when the command does"
+        )
 
 
 def prepare(args: argparse.Namespace, stdin: TextIO) -> None:
@@ -415,7 +499,7 @@ def prepare(args: argparse.Namespace, stdin: TextIO) -> None:
         # Prompts (email, password) read from here; the command runs later.
         args.stdin = stdin
         return
-    _check_remote(args)
+    resolve_target(args)
     _check_required(args)
     if args.command == "eval" and args.suite is not None:
         _prepare_suite(args)
@@ -429,6 +513,31 @@ def prepare(args: argparse.Namespace, stdin: TextIO) -> None:
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
+
+#: The handler the last ``main`` call installed, removed by the next one so
+#: repeated calls (the tests make thousands) never stack handlers.
+_log_handler: logging.Handler | None = None
+
+
+def configure_logging(err: TextIO, verbose: bool) -> None:
+    """Library logging, as a CLI should show it: errors only, unless ``--verbose``.
+
+    Without this, Python's last-resort handler prints every library warning --
+    a raw boto exception for each provider that is not set up -- on top of the
+    command's own, readable account of the same thing. ``serve`` is left alone:
+    uvicorn configures logging for the server it runs.
+    """
+    global _log_handler
+    root = logging.getLogger()
+    if _log_handler is not None:
+        root.removeHandler(_log_handler)
+    handler = logging.StreamHandler(err)
+    handler.setFormatter(logging.Formatter("| log %(levelname)s %(name)s: %(message)s"))
+    handler.setLevel(logging.INFO if verbose else logging.ERROR)
+    root.addHandler(handler)
+    if verbose and root.getEffectiveLevel() > logging.INFO:
+        root.setLevel(logging.INFO)
+    _log_handler = handler
 
 
 def main(
@@ -453,6 +562,9 @@ def main(
     if args.command is None:
         parser.print_help(err)
         return EXIT_USAGE
+
+    if args.command != "serve":
+        configure_logging(err, args.verbose)
 
     try:
         prepare(args, stdin)

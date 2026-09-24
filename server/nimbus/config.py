@@ -6,6 +6,7 @@ wins when both are set -- so an existing shell profile, ``.env`` file or
 deployed stack keeps working across the rename.
 """
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -20,9 +21,31 @@ from pydantic_settings import (
 
 #: The environment prefix before the rename; read after ``NIMBUS_``.
 LEGACY_ENV_PREFIX = "EVALHARNESS_"
-#: Where the local history lived before the rename.
-DEFAULT_DB_PATH = "./data/nimbus.db"
+#: History files kept in the working directory by earlier versions. When one
+#: exists where Nimbus is started, it stays the default: a repo checkout's
+#: ``server/data`` keeps its history, before and after the rename.
+LOCAL_DB_PATH = "./data/nimbus.db"
 LEGACY_DB_PATH = "./data/evalharness.db"
+#: The history file's name inside the user data directory.
+HISTORY_FILE_NAME = "history.db"
+
+
+def user_data_dir() -> Path:
+    """``$XDG_DATA_HOME/nimbus``, else ``~/.local/share/nimbus``.
+
+    Where an installed ``nimbus`` keeps its history, so every directory it is
+    run from shares one history instead of each growing its own ``./data``.
+    """
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "nimbus"
+
+
+def default_db_path() -> str:
+    """The history file used when none is named (``NIMBUS_DB_PATH`` / ``--db``)."""
+    for candidate in (LOCAL_DB_PATH, LEGACY_DB_PATH):
+        if Path(candidate).exists():
+            return candidate
+    return str(user_data_dir() / HISTORY_FILE_NAME)
 
 
 class Settings(BaseSettings):
@@ -50,7 +73,8 @@ class Settings(BaseSettings):
     )
 
     aws_region: str = "us-east-1"
-    db_path: str = DEFAULT_DB_PATH
+    #: Resolved by :func:`default_db_path` when not set.
+    db_path: str = ""
     cors_origins: list[str] = ["http://localhost:3000"]
     fake_model: bool = False
 
@@ -134,17 +158,10 @@ class Settings(BaseSettings):
         )
 
     @model_validator(mode="after")
-    def _keep_the_pre_rename_database(self) -> "Settings":
-        """Keep using ``evalharness.db`` when it holds the history and nothing is set.
-
-        Only the unset default moves; an explicit path is always taken as given.
-        """
-        if (
-            "db_path" not in self.model_fields_set
-            and not Path(DEFAULT_DB_PATH).exists()
-            and Path(LEGACY_DB_PATH).exists()
-        ):
-            self.db_path = LEGACY_DB_PATH
+    def _default_the_history_file(self) -> "Settings":
+        """Fill in the history file when none was named; a named one is taken as given."""
+        if not self.db_path:
+            self.db_path = default_db_path()
         return self
 
     @field_validator("anthropic_api_key", "openai_api_key", "auth_user_pool_id", "auth_client_id")

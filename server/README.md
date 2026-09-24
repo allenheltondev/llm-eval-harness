@@ -22,21 +22,21 @@ NIMBUS_FAKE_MODEL=1 uv run uvicorn nimbus.main:app --reload --port 8000
 AWS credentials come from the standard credential chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, an
 instance/task role, etc.).
 
-| Env var                          | Default                       | Description                          |
-| --------------------------------- | ------------------------------ | ------------------------------------ |
-| `NIMBUS_AWS_REGION`          | `us-east-1`                    | AWS region for SDK calls             |
-| `NIMBUS_DB_PATH`             | `./data/nimbus.db`        | SQLite database path                 |
-| `NIMBUS_CORS_ORIGINS`        | `["http://localhost:3000"]`    | Allowed CORS origins (JSON list)     |
-| `NIMBUS_FAKE_MODEL`          | `false`                        | Use a fake model instead of live LLM |
-| `NIMBUS_ANTHROPIC_API_KEY`   | `None`                         | Anthropic API key (falls back to `ANTHROPIC_API_KEY`) |
-| `NIMBUS_OPENAI_API_KEY`      | `None`                         | OpenAI API key (falls back to `OPENAI_API_KEY`) |
-| `NIMBUS_OLLAMA_BASE_URL`     | `None`                         | Ollama server base URL, e.g. `http://localhost:11434` (falls back to `OLLAMA_HOST`) |
-| `NIMBUS_EVAL_RUNTIME_ARN`    | `None`                         | AgentCore Runtime ARN for the cloud evaluation lane (stack output `EvalWorkerRuntimeArn`) |
-| `NIMBUS_EVAL_TABLE`          | `None`                         | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
-| `NIMBUS_HISTORY_BACKEND`     | `auto`                         | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda) |
-| `NIMBUS_LOCAL_EVALS`         | `auto`                         | `on` \| `off` \| `auto` (off inside Lambda) |
-| `NIMBUS_AUTH_USER_POOL_ID`   | `None`                         | Cognito pool to verify bearer tokens against; with the client id, gates every route but `/health` |
-| `NIMBUS_AUTH_CLIENT_ID`      | `None`                         | The pool's app client id |
+| Env var                    | Default                            | Description |
+| -------------------------- | ---------------------------------- | ----------- |
+| `NIMBUS_AWS_REGION`        | `us-east-1`                        | AWS region for SDK calls |
+| `NIMBUS_DB_PATH`           | `~/.local/share/nimbus/history.db` | SQLite database path |
+| `NIMBUS_CORS_ORIGINS`      | `["http://localhost:3000"]`        | Allowed CORS origins (JSON list) |
+| `NIMBUS_FAKE_MODEL`        | `false`                            | Use a fake model instead of live LLM |
+| `NIMBUS_ANTHROPIC_API_KEY` | `None`                             | Anthropic API key (falls back to `ANTHROPIC_API_KEY`) |
+| `NIMBUS_OPENAI_API_KEY`    | `None`                             | OpenAI API key (falls back to `OPENAI_API_KEY`) |
+| `NIMBUS_OLLAMA_BASE_URL`   | `None`                             | Ollama server base URL, e.g. `http://localhost:11434` (falls back to `OLLAMA_HOST`) |
+| `NIMBUS_EVAL_RUNTIME_ARN`  | `None`                             | AgentCore Runtime ARN for the cloud evaluation lane (stack output `EvalWorkerRuntimeArn`) |
+| `NIMBUS_EVAL_TABLE`        | `None`                             | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
+| `NIMBUS_HISTORY_BACKEND`   | `auto`                             | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda) |
+| `NIMBUS_LOCAL_EVALS`       | `auto`                             | `on` \| `off` \| `auto` (off inside Lambda) |
+| `NIMBUS_AUTH_USER_POOL_ID` | `None`                             | Cognito pool to verify bearer tokens against; with the client id, gates every route but `/health` |
+| `NIMBUS_AUTH_CLIENT_ID`    | `None`                             | The pool's app client id |
 
 ## Model providers
 
