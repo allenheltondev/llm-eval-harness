@@ -11,7 +11,16 @@
  */
 
 import { useCallback, useState, type MouseEvent, type ReactNode } from 'react'
-import { AppNav, readySetCloudServices, type AppNavItem, type AppTheme } from '@readysetcloud/ui'
+import {
+  AppNav,
+  Container,
+  PageHero,
+  PageHeroSubtitle,
+  PageHeroTitle,
+  readySetCloudServices,
+  type AppNavItem,
+  type AppTheme
+} from '@readysetcloud/ui'
 import { displayName, useSession } from './auth'
 import AboutPage from './features/about/AboutPage'
 import EvalsPage from './features/evals/EvalsPage'
@@ -51,6 +60,8 @@ interface TabDef {
   label: string
   /** The rail heading this section sits under; none for the standalone one. */
   section?: string
+  /** One line under the page title. */
+  description: string
   icon: ReactNode
 }
 
@@ -59,6 +70,8 @@ export const TABS: TabDef[] = [
     id: 'workbench',
     label: 'Workbench',
     section: 'Run',
+    description:
+      'Run a prompt against a model and watch the output, tool calls and metrics arrive.',
     icon: (
       <Icon>
         <path d="M4 17l6-6-6-6" />
@@ -70,6 +83,8 @@ export const TABS: TabDef[] = [
     id: 'evals',
     label: 'Evals',
     section: 'Run',
+    description:
+      'Launch evaluations and see how every case scored.',
     icon: (
       <Icon>
         <path d="M9 11l3 3 8-8" />
@@ -81,6 +96,8 @@ export const TABS: TabDef[] = [
     id: 'history',
     label: 'History',
     section: 'Review',
+    description:
+      'Every run, filterable, with its full detail, a side-by-side compare and an export.',
     icon: (
       <Icon>
         <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
@@ -93,6 +110,8 @@ export const TABS: TabDef[] = [
     id: 'guardrails',
     label: 'Guardrails',
     section: 'Manage',
+    description:
+      'Create and version Bedrock guardrails, and see what they catch.',
     icon: (
       <Icon>
         <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z" />
@@ -102,6 +121,8 @@ export const TABS: TabDef[] = [
   {
     id: 'about',
     label: 'About',
+    description:
+      'What Nimbus is for, and the principles it is built on.',
     icon: (
       <Icon>
         <circle cx="12" cy="12" r="9" />
@@ -175,6 +196,7 @@ export default function AppShell() {
     section: tab.section
   }))
 
+  const activeTab = TABS.find(tab => tab.id === route.tab) ?? TABS[0]
   const authState = !authRequired ? 'none' : signedIn ? 'authenticated' : 'anonymous'
 
   // AppNav keeps its mobile menu's open state to itself and does not close it
@@ -225,10 +247,16 @@ export default function AppShell() {
 
       <main
         id={`section-${route.tab}`}
-        aria-label={TABS.find(tab => tab.id === route.tab)?.label}
-        className="min-w-0 flex-1 px-4 sm:px-6 lg:px-8 py-6"
+        aria-label={activeTab.label}
+        className="min-w-0 flex-1 py-6"
       >
-        <TabPage route={route} navigate={navigate} />
+        <Container className="space-y-6">
+          <PageHero>
+            <PageHeroTitle>{activeTab.label}</PageHeroTitle>
+            <PageHeroSubtitle>{activeTab.description}</PageHeroSubtitle>
+          </PageHero>
+          <TabPage route={route} navigate={navigate} />
+        </Container>
       </main>
     </div>
   )

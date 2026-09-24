@@ -139,6 +139,21 @@ describe('AppShell', () => {
     expect(screen.getByRole('main', { name: 'About' })).toHaveAttribute('id', 'section-about')
   })
 
+  it.each(TABS.map(tab => [tab.id, tab]))(
+    'opens %s under a page hero naming it',
+    (_id, tab) => {
+      window.history.replaceState(null, '', `/#/${tab.id}`)
+      render(<AppShell />)
+
+      const main = screen.getByRole('main', { name: tab.label })
+      // The only h1 on the page, so every page has exactly one title.
+      const titles = within(main).getAllByRole('heading', { level: 1 })
+      expect(titles).toHaveLength(1)
+      expect(titles[0]).toHaveTextContent(tab.label)
+      expect(within(main).getByText(tab.description)).toBeInTheDocument()
+    }
+  )
+
   it('renders no mascot, companion or bring-back control', () => {
     render(<AppShell />)
 
