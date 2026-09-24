@@ -141,9 +141,6 @@ export default function EvalsPage({
 
   function handleSelectRow(row: EvaluationDetail) {
     setSelectedId(row.id)
-    if (isCancellable(row.status) && row.id !== activeEvaluationId) {
-      void followEvaluation(row.id)
-    }
   }
 
   async function handleCancelRow(row: EvaluationDetail, event: MouseEvent) {
@@ -154,6 +151,18 @@ export default function EvalsPage({
   }
 
   const selectedRow = listed ?? (linked?.id === selectedId ? linked : null)
+  const selectedStatus = selectedRow?.status ?? null
+
+  // An evaluation still in flight is followed live, however it was selected --
+  // a clicked row, or a link (the CLI prints one as it starts) that may only
+  // resolve once the row has been fetched. The active id is read at the time,
+  // not depended on: following sets it, and a newly launched evaluation
+  // replacing it must not pull the selection's stream back.
+  useEffect(() => {
+    if (selectedId === null || selectedStatus === null || !isCancellable(selectedStatus)) return
+    if (useEvalStore.getState().activeEvaluationId === selectedId) return
+    void followEvaluation(selectedId)
+  }, [selectedId, selectedStatus, followEvaluation])
   const isSelectedActive = selectedId !== null && selectedId === activeEvaluationId
   const showLiveProgress =
     isSelectedActive &&

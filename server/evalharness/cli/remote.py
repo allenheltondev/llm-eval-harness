@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
@@ -49,6 +50,16 @@ REFRESH_MARGIN_SECONDS = 60
 #: long evaluation's stream ends early.
 MAX_RECONNECTS = 10
 RECONNECT_BACKOFF_SECONDS = 1.0
+
+#: An AWS region name (``us-east-1``, ``eu-central-2``, ``us-gov-west-1``,
+#: ``cn-northwest-1``). The user pool's endpoint is built from it, and it comes
+#: from the server's ``/health`` -- so anything else (``us-east-1.evil.com#``)
+#: would point the password at a host of the server's choosing.
+_REGION = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}")
+#: A user pool id is ``<region>_<id>``: the cross-check that the region is the pool's.
+_USER_POOL_ID = re.compile(r"(?P<region>[a-z]{2}(?:-[a-z]+)+-\d{1,2})_[A-Za-z0-9]+")
+#: App client ids are short alphanumeric strings (sent in the body, never the URL).
+_CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 #: Hosts a login may be saved for over plain HTTP: this machine only.
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -254,6 +265,31 @@ class NewPasswordRequired:
     session: str
 
 
+def checked_pool(auth: dict[str, Any], url: str) -> dict[str, str]:
+    """The ``region`` and ``client_id`` of a ``/health`` auth block, or a refusal.
+
+    Only an AWS region name is accepted, and it must be the one the user pool
+    id names: the password is about to be sent to an endpoint built from it,
+    so it is checked against what a real pool looks like, not trusted.
+    """
+    region = auth.get("region")
+    client_id = auth.get("client_id")
+    pool = _USER_POOL_ID.fullmatch(str(auth.get("user_pool_id") or ""))
+    if (
+        not isinstance(region, str)
+        or not _REGION.fullmatch(region)
+        or not isinstance(client_id, str)
+        or not _CLIENT_ID.fullmatch(client_id)
+        or pool is None
+        or pool.group("region") != region
+    ):
+        raise RemoteError(
+            f"{url} published a sign-in configuration that is not a Cognito user pool; "
+            "refusing to send a password to it"
+        )
+    return {"region": region, "client_id": client_id}
+
+
 class Cognito:
     """The three user pool calls the CLI needs, over plain HTTPS.
 
@@ -263,6 +299,9 @@ class Cognito:
     """
 
     def __init__(self, http: httpx.AsyncClient, region: str, client_id: str) -> None:
+        # Checked here as well as at login: a saved login file is input too.
+        if not _REGION.fullmatch(region) or not _CLIENT_ID.fullmatch(client_id):
+            raise RemoteError("the saved sign-in names no valid user pool: run `evalharness login`")
         self._http = http
         self._endpoint = f"https://cognito-idp.{region}.amazonaws.com/"
         self._client_id = client_id

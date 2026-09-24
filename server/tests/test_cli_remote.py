@@ -99,6 +99,8 @@ class Harness:
         self.cloud = False
         self.local = True
         self.valid_tokens: set[str] = set()
+        #: Replaces fields of the published auth block (a hostile server).
+        self.auth_overrides: dict[str, Any] = {}
         self.requests: list[tuple[str, str, str | None]] = []
 
     def health(self) -> dict[str, Any]:
@@ -110,6 +112,7 @@ class Harness:
                 "region": "us-east-1",
                 "user_pool_id": "us-east-1_pool",
                 "client_id": "client-1",
+                **self.auth_overrides,
             }
         return {
             "status": "ok",
@@ -125,8 +128,10 @@ class Routed(httpx.AsyncBaseTransport):
     def __init__(self, app: FastAPI, cognito: FakeCognito) -> None:
         self._app = httpx.ASGITransport(app=app)
         self._pool = httpx.MockTransport(cognito.handle)
+        self.hosts: list[str] = []
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.hosts.append(request.url.host)
         if request.url.host == POOL_HOST:
             return await self._pool.handle_async_request(request)
         return await self._app.handle_async_request(request)
@@ -184,8 +189,10 @@ def app(harness, models) -> FastAPI:
 
 
 @pytest.fixture(autouse=True)
-def wired(app, cognito, monkeypatch):
-    monkeypatch.setattr(remote, "transport", Routed(app, cognito))
+def wired(app, cognito, monkeypatch) -> Routed:
+    routed = Routed(app, cognito)
+    monkeypatch.setattr(remote, "transport", routed)
+    return routed
 
 
 class Result(NamedTuple):
@@ -840,3 +847,69 @@ def test_the_config_directory_follows_xdg_then_home(monkeypatch, tmp_path):
 
 def test_clearing_a_login_that_is_not_there_says_so():
     assert remote.clear_login() is False
+
+
+# --------------------------------------------------------------------------- #
+# A server that lies about its user pool gets no password
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        # Would build https://cognito-idp.us-east-1.amazonaws.com.evil.com#.amazonaws.com/
+        {"region": "us-east-1.amazonaws.com.evil.com#"},
+        {"region": "evil.com/", "user_pool_id": "evil.com/_x"},
+        {"region": "us-east-1@evil.com"},
+        # A well-formed region that is not the pool's own.
+        {"region": "eu-west-1"},
+        {"user_pool_id": None},
+        {"client_id": "a b/c"},
+        {"region": None},
+    ],
+)
+def test_a_pool_that_is_not_a_cognito_pool_is_refused_before_the_password(
+    harness, cognito, wired, monkeypatch, overrides
+):
+    harness.auth_overrides = overrides
+
+    def no_password(*args, **kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("prompted for a password")
+
+    monkeypatch.setattr(commands.getpass, "getpass", no_password)
+
+    result = run_cli("login", "--url", URL, "--email", EMAIL, tty=True)
+
+    assert result.code == 1
+    assert "refusing to send a password" in result.err
+    assert cognito.calls == []
+    assert set(wired.hosts) == {"harness.example.com"}
+    assert remote.load_login() is None
+
+
+@pytest.mark.parametrize("region", ["us-gov-west-1", "cn-northwest-1", "ap-southeast-4"])
+def test_every_shape_of_aws_region_is_accepted(region):
+    pool = {"region": region, "client_id": "abc123", "user_pool_id": f"{region}_Abc"}
+
+    assert remote.checked_pool(pool, URL) == {"region": region, "client_id": "abc123"}
+
+
+def test_a_tampered_login_file_cannot_redirect_a_refresh(harness, cognito, wired):
+    sign_in(
+        harness,
+        expires_at=time.time() - 5,
+        auth={"region": "us-east-1.amazonaws.com.evil.com#", "client_id": "client-1"},
+    )
+
+    result = run_cli("eval", "--remote", "-m", "m1", "-p", "hi")
+
+    assert result.code == 1
+    assert "run `evalharness login`" in result.err
+    # The refresh token went nowhere: not to the pool, not to the injected host.
+    assert cognito.calls == []
+    assert all("evil" not in host for host in wired.hosts)
+
+
+def test_the_user_pool_client_itself_refuses_a_bad_region():
+    with pytest.raises(remote.RemoteError, match="names no valid user pool"):
+        remote.Cognito(httpx.AsyncClient(), "us-east-1.evil.com#", "client-1")

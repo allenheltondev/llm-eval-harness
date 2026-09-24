@@ -293,4 +293,44 @@ describe('EvalsPage', () => {
     expect(onSelectEvaluation).toHaveBeenLastCalledWith(null)
     expect(screen.queryByTestId('eval-detail')).not.toBeInTheDocument()
   })
+
+  it('follows a linked evaluation that is still running', () => {
+    render(<EvalsPage evaluationId="eval-running" />)
+
+    expect(followEvaluation).toHaveBeenCalledTimes(1)
+    expect(followEvaluation).toHaveBeenCalledWith('eval-running')
+  })
+
+  it('follows a linked running evaluation once it has been fetched', async () => {
+    getEvaluationMock.mockResolvedValue({ ...rows[1], id: 'eval-elsewhere', status: 'pending' })
+    render(<EvalsPage evaluationId="eval-elsewhere" />)
+
+    await waitFor(() => expect(followEvaluation).toHaveBeenCalledWith('eval-elsewhere'))
+    expect(followEvaluation).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not follow a linked evaluation that has finished', async () => {
+    getEvaluationMock.mockResolvedValue({ ...rows[0], id: 'eval-older' })
+    render(<EvalsPage evaluationId="eval-older" />)
+
+    await waitFor(() => expect(screen.getByTestId('eval-detail')).toBeInTheDocument())
+    expect(followEvaluation).not.toHaveBeenCalled()
+  })
+
+  it('does not re-attach to a linked evaluation it is already following', () => {
+    useEvalStore.setState({ activeEvaluationId: 'eval-running', status: 'running' })
+    render(<EvalsPage evaluationId="eval-running" />)
+
+    expect(followEvaluation).not.toHaveBeenCalled()
+  })
+
+  it('selecting the same running row twice follows it once', () => {
+    render(<EvalsPage />)
+    const row = screen.getByTestId('eval-row-eval-running')
+
+    fireEvent.click(row)
+    fireEvent.click(row)
+
+    expect(followEvaluation).toHaveBeenCalledTimes(1)
+  })
 })

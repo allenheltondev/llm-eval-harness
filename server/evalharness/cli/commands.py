@@ -448,6 +448,8 @@ async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: 
                 _write(out, render.dumps({"url": url, "email": None}) + "\n")
             return EXIT_OK
 
+        # Before anything is asked for: a pool this server made up gets no password.
+        pool = remote.checked_pool(auth, url)
         email = args.email or (previous.email if previous and previous.url == url else None)
         if not email:
             if not stdin.isatty():
@@ -462,7 +464,7 @@ async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: 
         if not email or not password:
             raise remote.RemoteError("an email and a password are required")
 
-        cognito = remote.Cognito(http, auth["region"], auth["client_id"])
+        cognito = remote.Cognito(http, pool["region"], pool["client_id"])
         outcome = await cognito.sign_in(email, password)
         if isinstance(outcome, remote.NewPasswordRequired):
             if not stdin.isatty():
@@ -479,7 +481,7 @@ async def login(args: argparse.Namespace, settings: Settings, out: TextIO, err: 
     remote.save_login(
         remote.Login(
             url=url,
-            auth={"region": auth["region"], "client_id": auth["client_id"]},
+            auth=pool,
             email=email,
             id_token=outcome.id_token,
             refresh_token=outcome.refresh_token,
