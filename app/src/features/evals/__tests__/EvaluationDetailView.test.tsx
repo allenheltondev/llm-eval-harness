@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import EvaluationDetailView, { sourceLabel } from '../EvaluationDetailView'
+import EvaluationDetailView, { batchSlots, sourceLabel } from '../EvaluationDetailView'
 import type { EvaluationDetail, EvaluationResult } from '../../../api'
 
 const JUDGE = { model_id: 'amazon.nova-pro-v1:0', system_prompt_used: false, rubric_used: true }
@@ -200,6 +200,62 @@ describe('EvaluationDetailView', () => {
     expect(screen.queryByTestId('eval-cases')).not.toBeInTheDocument()
     // Recorded before sources existed: no badge, rather than a guess.
     expect(screen.queryByTestId('eval-detail-source')).not.toBeInTheDocument()
+  })
+
+  it('links a failed run in its place in the batch, without renumbering the rest', () => {
+    const result: EvaluationResult = {
+      ...determinismEvaluation.result!,
+      run_ids: ['run-1', 'run-3'],
+      failed_runs: [
+        { index: 1, run_id: 'run-2', error: { code: 'internal_error', message: 'kaboom' } },
+        { index: 3, run_id: null, error: { code: 'model_throttled', message: 'slow down' } }
+      ]
+    }
+    render(<EvaluationDetailView evaluation={determinismEvaluation} result={result} />)
+
+    const runs = screen.getByTestId('eval-runs')
+    expect(within(runs).getByRole('link', { name: 'Run 1' })).toHaveAttribute(
+      'href',
+      '#/runs/run-1'
+    )
+    const failed = within(runs).getByRole('link', { name: 'Run 2' })
+    expect(failed).toHaveAttribute('href', '#/runs/run-2')
+    expect(failed).toHaveAttribute('title', expect.stringMatching(/^Failed run run-2/))
+    expect(within(runs).getByRole('link', { name: 'Run 3' })).toHaveAttribute(
+      'href',
+      '#/runs/run-3'
+    )
+    // Never recorded: numbered, but nothing to open.
+    expect(within(runs).queryByRole('link', { name: 'Run 4' })).not.toBeInTheDocument()
+    expect(within(runs).getByText('Run 4')).toHaveAttribute(
+      'title',
+      'Run 4 failed before it was recorded'
+    )
+  })
+
+  it('numbers failures stored without a run id, and lists odd indices after the successes', () => {
+    // Older results: no run_id on failures.
+    expect(
+      batchSlots(['a'], [{ index: 0, error: null }]).map(slot => [slot.label, slot.runId])
+    ).toEqual([
+      ['Run 1', null],
+      ['Run 2', 'a']
+    ])
+    // Indices that cannot all be placed: successes first, each failure by its own index.
+    expect(
+      batchSlots(
+        ['a', 'b'],
+        [
+          { index: 7, run_id: 'x', error: null },
+          { index: 7, run_id: 'y', error: null }
+        ]
+      ).map(slot => [slot.label, slot.runId, slot.failed])
+    ).toEqual([
+      ['Run 1', 'a', false],
+      ['Run 2', 'b', false],
+      ['Run 8', 'x', true],
+      ['Run 8', 'y', true]
+    ])
   })
 
   it('still links the runs of an evaluation with no result yet', () => {

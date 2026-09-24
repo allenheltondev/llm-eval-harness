@@ -155,7 +155,8 @@ bytes as stored), `repeats` (the same per-repeat list with each repeat's run:
 recorded, its link), `run_ids` (the successful runs), `runs: {total,
 succeeded}` and `error`; and at the top level
 `metrics.cases_total/passed/failed/errored`, `failed_runs` (each with its
-`case_id`), and `suite: {name, repeats, pass_threshold}`.
+`case_id`, and its `run_id` when the failed run was recorded, as in every
+evaluation's result), and `suite: {name, repeats, pass_threshold}`.
 
 Progress events are the same as any evaluation's, and each run event also
 carries the `case_id` it belongs to. Determinism and grade events do not carry

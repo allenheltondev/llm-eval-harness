@@ -299,6 +299,10 @@ async def test_a_case_whose_run_failed_is_an_error_not_a_pass(initialized_db):
     assert result["score"] == 90
     assert "did not run: store-hours" in result["reasoning"]
     assert [f["case_id"] for f in result["failed_runs"]] == ["store-hours"]
+    # A failed run names the same run (or none) as its case's repeat does.
+    assert [f["run_id"] for f in result["failed_runs"]] == [
+        repeat["run_id"] for repeat in hours["repeats"]
+    ]
     failed = next(e for e in recorder.events if e["type"] == "run_failed")
     assert failed["case_id"] == "store-hours"
 

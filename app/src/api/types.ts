@@ -425,6 +425,8 @@ export interface EvaluationResult {
   run_ids: string[]
   failed_runs: Array<{
     index: number
+    /** The failed run, when it got far enough to be recorded (absent on older results). */
+    run_id?: string | null
     error: Record<string, unknown> | null
     /** Suites only: the case the failed run belonged to. */
     case_id?: string

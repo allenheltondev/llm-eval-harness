@@ -341,6 +341,11 @@ async def test_a_permanently_failed_run_is_excluded_but_the_eval_completes(clien
     assert len(failed) == 1
     assert failed[0]["error"]["code"] == "internal_error"
     assert "kaboom" in failed[0]["error"]["message"]
+    # The failed run was recorded, so the result links to it.
+    assert failed[0]["run_id"] is not None
+    assert failed[0]["run_id"] not in finished["run_ids"]
+    stored = await client.get(f"/api/v1/runs/{failed[0]['run_id']}")
+    assert stored.status_code == 200
     # Only the surviving run was graded.
     assert finished["result"]["metrics"]["runs_analyzed"] == 1
 
@@ -563,6 +568,7 @@ async def test_a_stored_run_that_failed_is_excluded_from_grading(client):
     assert finished["status"] == "completed"
     assert finished["result"]["run_ids"] == [run_ids[0]]
     assert [failed["index"] for failed in finished["result"]["failed_runs"]] == [1]
+    assert [failed["run_id"] for failed in finished["result"]["failed_runs"]] == [run_ids[1]]
 
 
 # --------------------------------------------------------------------------- #

@@ -73,21 +73,51 @@ function CopyLinkButton({ evaluationId }: { evaluationId: string }) {
   )
 }
 
-function RunLinks({ runIds, label }: { runIds: string[]; label: (index: number) => string }) {
+/** One numbered run: a link when its run was recorded, red when it failed. */
+interface RunSlot {
+  label: string
+  runId: string | null
+  failed: boolean
+  /** Shown when there is no run to open. */
+  missing: string
+}
+
+function RunSlots({ slots }: { slots: RunSlot[] }) {
   return (
     <span className="flex flex-wrap gap-1">
-      {runIds.map((runId, index) => (
-        <a
-          key={runId}
-          href={runHref(runId)}
-          className="px-1.5 py-0.5 rounded bg-gray-100 text-xs text-primary-700 hover:bg-primary-50"
-          title={`Open run ${runId} in History`}
-        >
-          {label(index)}
-        </a>
-      ))}
+      {slots.map((slot, index) => {
+        const className = `px-1.5 py-0.5 rounded text-xs ${
+          slot.failed ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-primary-700'
+        }`
+        if (!slot.runId) {
+          return (
+            <span key={index} className={`${className} opacity-60`} title={slot.missing}>
+              {slot.label}
+            </span>
+          )
+        }
+        return (
+          <a
+            key={slot.runId}
+            href={runHref(slot.runId)}
+            className={`${className} hover:bg-primary-50`}
+            title={`${slot.failed ? 'Failed run' : 'Run'} ${slot.runId} — open in History`}
+          >
+            {slot.label}
+          </a>
+        )
+      })}
     </span>
   )
+}
+
+function successfulSlots(runIds: string[], label: (index: number) => string): RunSlot[] {
+  return runIds.map((runId, index) => ({
+    label: label(index),
+    runId,
+    failed: false,
+    missing: ''
+  }))
 }
 
 /**
@@ -96,42 +126,55 @@ function RunLinks({ runIds, label }: { runIds: string[]; label: (index: number) 
  * successful ones being renumbered around it. Results stored before `repeats`
  * existed only know their successful runs, so those are listed in order.
  */
-function RepeatLinks({ result }: { result: SuiteCaseResult }) {
-  if (!result.repeats) {
-    return <RunLinks runIds={result.run_ids} label={index => `#${index + 1}`} />
+function repeatSlots(result: SuiteCaseResult): RunSlot[] {
+  if (!result.repeats) return successfulSlots(result.run_ids, index => `#${index + 1}`)
+  return result.repeats.map((repeat, index) => ({
+    label: `#${index + 1}`,
+    runId: repeat.run_id,
+    failed: !repeat.ran,
+    missing: `Repeat ${index + 1} failed before a run was recorded`
+  }))
+}
+
+/**
+ * Every run of a non-suite evaluation, numbered by its place in the batch.
+ * `run_ids` holds the successful runs in order and each `failed_runs` entry
+ * names its own place, so the failures go back where they ran and the
+ * successes fill the rest. A failure keeps its link when its run was recorded
+ * (older results never stored one).
+ */
+export function batchSlots(
+  runIds: string[],
+  failedRuns: EvaluationResult['failed_runs']
+): RunSlot[] {
+  const total = runIds.length + failedRuns.length
+  const failedAt = new Map(failedRuns.map(failure => [failure.index, failure]))
+  const placeable =
+    failedAt.size === failedRuns.length &&
+    failedRuns.every(failure => failure.index >= 0 && failure.index < total)
+  const failedSlot = (index: number, runId: string | null | undefined): RunSlot => ({
+    label: `Run ${index + 1}`,
+    runId: runId ?? null,
+    failed: true,
+    missing: `Run ${index + 1} failed before it was recorded`
+  })
+  if (!placeable) {
+    return [
+      ...successfulSlots(runIds, index => `Run ${index + 1}`),
+      ...failedRuns.map(failure => failedSlot(failure.index, failure.run_id))
+    ]
   }
-  return (
-    <span className="flex flex-wrap gap-1">
-      {result.repeats.map((repeat, index) => {
-        const label = `#${index + 1}`
-        const failed = !repeat.ran
-        const className = `px-1.5 py-0.5 rounded text-xs ${
-          failed ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-primary-700'
-        }`
-        if (!repeat.run_id) {
-          return (
-            <span
-              key={index}
-              className={`${className} opacity-60`}
-              title={`Repeat ${index + 1} failed before a run was recorded`}
-            >
-              {label}
-            </span>
-          )
-        }
-        return (
-          <a
-            key={repeat.run_id}
-            href={runHref(repeat.run_id)}
-            className={`${className} hover:bg-primary-50`}
-            title={`${failed ? 'Failed run' : 'Run'} ${repeat.run_id} — open in History`}
-          >
-            {label}
-          </a>
-        )
-      })}
-    </span>
-  )
+  const successes = runIds[Symbol.iterator]()
+  return Array.from({ length: total }, (_, index) => {
+    const failure = failedAt.get(index)
+    if (failure) return failedSlot(index, failure.run_id)
+    return {
+      label: `Run ${index + 1}`,
+      runId: successes.next().value ?? null,
+      failed: false,
+      missing: ''
+    }
+  })
 }
 
 function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: StoredSuite }) {
@@ -204,7 +247,7 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
                     {result.reasoning && <p className="whitespace-pre-wrap">{result.reasoning}</p>}
                   </td>
                   <td className="py-2">
-                    <RepeatLinks result={result} />
+                    <RunSlots slots={repeatSlots(result)} />
                   </td>
                 </tr>
               )
@@ -287,7 +330,9 @@ interface EvaluationDetailViewProps {
 
 export default function EvaluationDetailView({ evaluation, result }: EvaluationDetailViewProps) {
   const source = sourceLabel(evaluation.source ?? evaluation.config.source)
-  const runIds = result?.run_ids ?? evaluation.run_ids
+  const runSlots = result
+    ? batchSlots(result.run_ids, result.failed_runs)
+    : successfulSlots(evaluation.run_ids, index => `Run ${index + 1}`)
   return (
     <section
       className="card space-y-5"
@@ -324,12 +369,12 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
 
       <Configuration config={evaluation.config} />
 
-      {!result?.cases && runIds.length > 0 && (
+      {!result?.cases && runSlots.length > 0 && (
         <section aria-labelledby="eval-runs-heading" data-testid="eval-runs">
           <h3 id="eval-runs-heading" className="text-sm font-semibold text-gray-900 mb-2">
             Runs
           </h3>
-          <RunLinks runIds={runIds} label={index => `Run ${index + 1}`} />
+          <RunSlots slots={runSlots} />
         </section>
       )}
     </section>
