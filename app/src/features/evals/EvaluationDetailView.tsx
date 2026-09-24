@@ -62,7 +62,7 @@ function CopyLinkButton({ evaluationId }: { evaluationId: string }) {
   return (
     <button
       type="button"
-      className="btn-secondary py-1 px-2 text-xs"
+      className="btn btn-secondary py-1 px-2 text-xs"
       data-testid="eval-copy-link"
       onClick={() => {
         void navigator.clipboard.writeText(shareableLink(evaluationId)).then(() => setCopied(true))
@@ -335,7 +335,7 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
     : successfulSlots(evaluation.run_ids, index => `Run ${index + 1}`)
   return (
     <section
-      className="card space-y-5"
+      className="card p-4 sm:p-6 space-y-5"
       aria-labelledby="eval-detail-heading"
       data-testid="eval-detail"
     >
@@ -346,7 +346,7 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
           </h2>
           {source && (
             <span
-              className="px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-800"
+              className="px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800"
               data-testid="eval-detail-source"
             >
               {source}

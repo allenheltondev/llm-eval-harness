@@ -38,7 +38,7 @@ const STATUS_CLASSES: Record<string, string> = {
 /** Lane badge classes — `local` is quiet grey, `cloud` stands out blue. */
 const EXECUTION_CLASSES: Record<EvaluationExecution, string> = {
   local: 'bg-gray-100 text-gray-600',
-  cloud: 'bg-sky-100 text-sky-800'
+  cloud: 'bg-primary-100 text-primary-800'
 }
 
 function statusLabel(status: string): string {
@@ -176,7 +176,7 @@ export default function EvalsPage({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
         <DeterminismLauncher onStarted={id => setSelectedId(id)} />
 
-        <section className="card" aria-labelledby="eval-results-heading">
+        <section className="card p-4 sm:p-6" aria-labelledby="eval-results-heading">
           <h2 id="eval-results-heading" className="text-base font-semibold text-gray-900 mb-3">
             Results
           </h2>
@@ -213,7 +213,7 @@ export default function EvalsPage({
 
       {selectedRow && <EvaluationDetailView evaluation={selectedRow} result={resultToShow} />}
 
-      <section className="card" aria-labelledby="eval-list-heading">
+      <section className="card p-4 sm:p-6" aria-labelledby="eval-list-heading">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h2 id="eval-list-heading" className="text-base font-semibold text-gray-900">
             Past evaluations
@@ -275,7 +275,7 @@ export default function EvalsPage({
                     </span>
                     {sourceLabel(row.source) && (
                       <span
-                        className="px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-800"
+                        className="px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800"
                         data-testid={`eval-source-${row.id}`}
                       >
                         {sourceLabel(row.source)}
@@ -301,7 +301,7 @@ export default function EvalsPage({
                     {isCancellable(row.status) && (
                       <button
                         type="button"
-                        className="btn-secondary py-1 px-2 text-xs"
+                        className="btn btn-secondary py-1 px-2 text-xs"
                         onClick={event => void handleCancelRow(row, event)}
                       >
                         Cancel
@@ -317,7 +317,7 @@ export default function EvalsPage({
         {nextCursor && (
           <button
             type="button"
-            className="btn-secondary mt-3 text-xs"
+            className="btn btn-secondary mt-3 text-xs"
             disabled={listLoading}
             onClick={() => void loadMoreEvaluations()}
           >

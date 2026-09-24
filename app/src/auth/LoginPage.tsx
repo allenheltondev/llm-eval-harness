@@ -146,10 +146,10 @@ export default function LoginPage({ notice = null }: LoginPageProps) {
 
   return (
     <div
-      className="min-h-screen bg-gradient-to-br from-tertiary-50 to-secondary-100 flex items-center justify-center px-4"
+      className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-100 flex items-center justify-center px-4"
       data-testid="login-page"
     >
-      <div className="w-full max-w-sm rounded-lg border border-secondary-200 bg-white p-6 shadow-md">
+      <div className="w-full max-w-sm rounded-lg border border-secondary-200 bg-surface p-6 shadow-md">
         <div className="mb-5">
           <h1 className="text-lg font-bold text-primary-700 leading-tight">Nimbus</h1>
           <p className="text-xs text-secondary-700">Sign in to continue</p>

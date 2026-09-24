@@ -53,7 +53,7 @@ export default function OutputPane() {
   }
 
   return (
-    <section className="card" aria-labelledby="output-pane-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="output-pane-heading">
       <div className="flex items-center justify-between mb-3">
         <h2 id="output-pane-heading" className="text-base font-semibold text-gray-900">
           Output
@@ -93,7 +93,7 @@ export default function OutputPane() {
           <summary className="cursor-pointer text-xs font-medium text-gray-700">
             Reasoning ({reasoningText.length} chars)
           </summary>
-          <div className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-gray-200 bg-white p-3 font-mono text-xs text-gray-600">
+          <div className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-gray-200 bg-surface p-3 font-mono text-xs text-gray-600">
             {reasoningText}
           </div>
         </details>

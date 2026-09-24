@@ -14,7 +14,7 @@ export default function GuardrailTraceView() {
   if (!guardrailTrace) return null
 
   return (
-    <section className="card" aria-labelledby="guardrail-trace-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="guardrail-trace-heading">
       <details>
         <summary
           id="guardrail-trace-heading"

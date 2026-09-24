@@ -147,12 +147,12 @@ function GuardrailList({
   onVersions: (guardrail: GuardrailSummary) => void
 }) {
   return (
-    <section className="card" aria-labelledby="guardrails-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="guardrails-heading">
       <div className="flex items-center justify-between mb-4">
         <h2 id="guardrails-heading" className="text-lg font-semibold text-gray-900">
           Guardrails
         </h2>
-        <button type="button" className="btn-primary" onClick={onNew}>
+        <button type="button" className="btn btn-primary" onClick={onNew}>
           New guardrail
         </button>
       </div>

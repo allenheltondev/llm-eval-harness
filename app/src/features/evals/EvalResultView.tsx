@@ -13,7 +13,7 @@ import type { EvaluationResult } from '../../api'
 /** A -> green ... F -> red. Anything else (a stray "Pass"/"Fail" grade) is neutral. */
 const GRADE_COLORS: Record<string, string> = {
   A: 'text-green-600',
-  B: 'text-lime-600',
+  B: 'text-success-600',
   C: 'text-yellow-600',
   D: 'text-orange-600',
   F: 'text-red-600'
@@ -64,7 +64,7 @@ export default function EvalResultView({ result }: EvalResultViewProps) {
   )
 
   return (
-    <section className="card" aria-labelledby="eval-result-heading" data-testid="eval-result">
+    <section className="card p-4 sm:p-6" aria-labelledby="eval-result-heading" data-testid="eval-result">
       <h3 id="eval-result-heading" className="sr-only">
         Evaluation result
       </h3>

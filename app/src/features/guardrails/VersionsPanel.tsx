@@ -58,13 +58,13 @@ export default function VersionsPanel({
   }
 
   return (
-    <div className="card max-w-3xl mx-auto" data-testid="versions-panel">
+    <div className="card p-4 sm:p-6 max-w-3xl mx-auto" data-testid="versions-panel">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Versions</h2>
           <p className="text-sm text-gray-600">{guardrailName}</p>
         </div>
-        <button type="button" className="btn-secondary" onClick={onClose}>
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
           Back
         </button>
       </div>
@@ -106,7 +106,7 @@ export default function VersionsPanel({
             <input
               id="publish-description"
               type="text"
-              className="input-field"
+              className="input"
               value={description}
               onChange={event => setDescription(event.target.value)}
               placeholder="What changed in this version?"
@@ -114,7 +114,7 @@ export default function VersionsPanel({
             <div className="flex gap-2">
               <button
                 type="button"
-                className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={saving}
                 onClick={() => void handlePublish()}
               >
@@ -122,7 +122,7 @@ export default function VersionsPanel({
               </button>
               <button
                 type="button"
-                className="btn-secondary"
+                className="btn btn-secondary"
                 disabled={saving}
                 onClick={() => {
                   setPublishing(false)
@@ -134,7 +134,7 @@ export default function VersionsPanel({
             </div>
           </div>
         ) : (
-          <button type="button" className="btn-primary" onClick={() => setPublishing(true)}>
+          <button type="button" className="btn btn-primary" onClick={() => setPublishing(true)}>
             Publish current DRAFT
           </button>
         )}

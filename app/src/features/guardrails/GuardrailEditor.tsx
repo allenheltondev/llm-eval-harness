@@ -335,7 +335,7 @@ export default function GuardrailEditor({
 
   if (guardrailId && detailLoading && !detail) {
     return (
-      <div className="card max-w-3xl mx-auto">
+      <div className="card p-4 sm:p-6 max-w-3xl mx-auto">
         <LoadingSpinner text="Loading guardrail…" />
       </div>
     )
@@ -351,12 +351,12 @@ export default function GuardrailEditor({
         <h2 className="text-lg font-semibold text-gray-900">
           {guardrailId ? 'Edit guardrail' : 'New guardrail'}
         </h2>
-        <button type="button" className="btn-secondary" onClick={onClose}>
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
           Back
         </button>
       </div>
 
-      <section className="card">
+      <section className="card p-4 sm:p-6">
         <h3 className="text-base font-semibold text-gray-900 mb-3">Basics</h3>
         <div className="space-y-3">
           <div>
@@ -369,7 +369,7 @@ export default function GuardrailEditor({
             <input
               id="guardrail-name"
               type="text"
-              className="input-field"
+              className="input"
               value={name}
               onChange={event => setName(event.target.value)}
             />
@@ -384,7 +384,7 @@ export default function GuardrailEditor({
             <input
               id="guardrail-description"
               type="text"
-              className="input-field"
+              className="input"
               value={description}
               onChange={event => setDescription(event.target.value)}
             />
@@ -399,7 +399,7 @@ export default function GuardrailEditor({
               </label>
               <textarea
                 id="blocked-input-message"
-                className="input-field"
+                className="input"
                 rows={2}
                 value={blockedInputMessage}
                 onChange={event => setBlockedInputMessage(event.target.value)}
@@ -414,7 +414,7 @@ export default function GuardrailEditor({
               </label>
               <textarea
                 id="blocked-output-message"
-                className="input-field"
+                className="input"
                 rows={2}
                 value={blockedOutputMessage}
                 onChange={event => setBlockedOutputMessage(event.target.value)}
@@ -424,7 +424,7 @@ export default function GuardrailEditor({
         </div>
       </section>
 
-      <section className="card">
+      <section className="card p-4 sm:p-6">
         <h3 className="text-base font-semibold text-gray-900 mb-3">Content filters</h3>
         <div className="space-y-3">
           {CONTENT_FILTER_TYPES.map(type => {
@@ -455,7 +455,7 @@ export default function GuardrailEditor({
                   </label>
                   <select
                     id={`filter-${type}-input`}
-                    className="select-field"
+                    className="input"
                     disabled={!filter.enabled}
                     value={filter.inputStrength}
                     onChange={event =>
@@ -480,7 +480,7 @@ export default function GuardrailEditor({
                   </label>
                   <select
                     id={`filter-${type}-output`}
-                    className="select-field"
+                    className="input"
                     disabled={!filter.enabled || isPromptAttack}
                     value={isPromptAttack ? 'NONE' : filter.outputStrength}
                     onChange={event =>
@@ -507,7 +507,7 @@ export default function GuardrailEditor({
         </div>
       </section>
 
-      <section className="card">
+      <section className="card p-4 sm:p-6">
         <h3 className="text-base font-semibold text-gray-900 mb-3">Denied topics</h3>
         <div className="space-y-3" data-testid="denied-topic-rows">
           {deniedTopics.map((row, index) => (
@@ -528,14 +528,14 @@ export default function GuardrailEditor({
               </div>
               <input
                 type="text"
-                className="input-field"
+                className="input"
                 placeholder="Name"
                 aria-label={`Denied topic ${index + 1} name`}
                 value={row.name}
                 onChange={event => updateDeniedTopic(index, { name: event.target.value })}
               />
               <textarea
-                className="input-field"
+                className="input"
                 rows={2}
                 placeholder="Definition"
                 aria-label={`Denied topic ${index + 1} definition`}
@@ -543,7 +543,7 @@ export default function GuardrailEditor({
                 onChange={event => updateDeniedTopic(index, { definition: event.target.value })}
               />
               <textarea
-                className="input-field"
+                className="input"
                 rows={2}
                 placeholder="Examples (comma or newline separated, up to 5)"
                 aria-label={`Denied topic ${index + 1} examples`}
@@ -552,20 +552,20 @@ export default function GuardrailEditor({
               />
             </div>
           ))}
-          <button type="button" className="btn-secondary" onClick={addDeniedTopic}>
+          <button type="button" className="btn btn-secondary" onClick={addDeniedTopic}>
             Add denied topic
           </button>
         </div>
       </section>
 
-      <section className="card">
+      <section className="card p-4 sm:p-6">
         <h3 className="text-base font-semibold text-gray-900 mb-3">Words</h3>
         <label htmlFor="denied-words" className="block text-xs font-medium text-gray-700 mb-1">
           Denied words (one per line)
         </label>
         <textarea
           id="denied-words"
-          className="input-field"
+          className="input"
           rows={4}
           value={words}
           onChange={event => setWords(event.target.value)}
@@ -581,7 +581,7 @@ export default function GuardrailEditor({
         </label>
       </section>
 
-      <section className="card">
+      <section className="card p-4 sm:p-6">
         <h3 className="text-base font-semibold text-gray-900 mb-3">PII</h3>
         <div className="space-y-3" data-testid="pii-rows">
           {piiRows.map((row, index) => (
@@ -596,7 +596,7 @@ export default function GuardrailEditor({
                 </label>
                 <select
                   id={`pii-type-${index}`}
-                  className="select-field"
+                  className="input"
                   value={row.type}
                   onChange={event =>
                     updatePiiRow(index, { type: event.target.value as PiiEntityType })
@@ -615,7 +615,7 @@ export default function GuardrailEditor({
                 </label>
                 <select
                   id={`pii-action-${index}`}
-                  className="select-field"
+                  className="input"
                   value={row.action}
                   onChange={event =>
                     updatePiiRow(index, {
@@ -636,13 +636,13 @@ export default function GuardrailEditor({
               </button>
             </div>
           ))}
-          <button type="button" className="btn-secondary" onClick={addPiiRow}>
+          <button type="button" className="btn btn-secondary" onClick={addPiiRow}>
             Add PII rule
           </button>
         </div>
       </section>
 
-      <section className="card">
+      <section className="card p-4 sm:p-6">
         <h3 className="text-base font-semibold text-gray-900 mb-3">Contextual grounding</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
@@ -658,7 +658,7 @@ export default function GuardrailEditor({
               step="0.05"
               min={0}
               max={1}
-              className="input-field"
+              className="input"
               value={groundingThreshold}
               onChange={event => setGroundingThreshold(event.target.value)}
             />
@@ -676,7 +676,7 @@ export default function GuardrailEditor({
               step="0.05"
               min={0}
               max={1}
-              className="input-field"
+              className="input"
               value={relevanceThreshold}
               onChange={event => setRelevanceThreshold(event.target.value)}
             />
@@ -699,12 +699,12 @@ export default function GuardrailEditor({
       <div className="flex gap-2">
         <button
           type="submit"
-          className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={saving}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
-        <button type="button" className="btn-secondary" onClick={onClose}>
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
           Cancel
         </button>
       </div>

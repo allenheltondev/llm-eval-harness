@@ -65,8 +65,8 @@ export default function AppShell() {
   const { required: authRequired, signedIn, user, signOut } = useAuth()
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-tertiary-50 to-secondary-100">
-      <header className="sticky top-0 z-40 border-b border-secondary-200 bg-gradient-to-br from-tertiary-50 to-secondary-100 shadow-sm">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-100">
+      <header className="sticky top-0 z-40 border-b border-secondary-200 bg-gradient-to-br from-primary-50 to-secondary-100 shadow-sm">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="text-center sm:text-left">
@@ -82,7 +82,7 @@ export default function AppShell() {
               <nav
                 role="tablist"
                 aria-label="Sections"
-                className="flex flex-wrap justify-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm"
+                className="flex flex-wrap justify-center rounded-lg border border-gray-200 bg-surface p-1 shadow-sm"
               >
                 {TABS.map(tab => {
                   const selected = tab.id === activeTab
@@ -112,7 +112,7 @@ export default function AppShell() {
                   type="button"
                   onClick={() => void signOut()}
                   title={typeof user.email === 'string' ? `Signed in as ${user.email}` : 'Sign out'}
-                  className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50 hover:text-gray-900"
+                  className="rounded-md border border-gray-200 bg-surface px-3 py-1.5 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50 hover:text-gray-900"
                 >
                   Sign out
                 </button>

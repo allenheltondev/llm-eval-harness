@@ -65,7 +65,7 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
           <select
             id="history-filter-model"
             data-testid="history-filter-model"
-            className="select-field"
+            className="input"
             value={filters.model_id ?? ''}
             onChange={event =>
               void setFilters({ model_id: event.target.value === '' ? null : event.target.value })
@@ -83,7 +83,7 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
             id="history-filter-model"
             data-testid="history-filter-model"
             type="text"
-            className="input-field"
+            className="input"
             placeholder="model id…"
             value={filters.model_id ?? ''}
             onChange={event =>
@@ -103,7 +103,7 @@ function FilterBar({ filters }: { filters: HistoryFilters }) {
         <select
           id="history-filter-status"
           data-testid="history-filter-status"
-          className="select-field"
+          className="input"
           value={filters.status ?? ''}
           onChange={event =>
             void setFilters({ status: event.target.value === '' ? null : event.target.value })
@@ -253,7 +253,7 @@ function ExportButton({ filters }: { filters: HistoryFilters }) {
     <div className="flex flex-col items-end gap-1">
       <button
         type="button"
-        className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
         data-testid="history-export-btn"
         disabled={exporting}
         onClick={() => void handleExport()}
@@ -325,7 +325,7 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
   }
 
   return (
-    <section className="card" aria-labelledby="cloud-runs-heading" data-testid="cloud-runs-panel">
+    <section className="card p-4 sm:p-6" aria-labelledby="cloud-runs-heading" data-testid="cloud-runs-panel">
       <h2 id="cloud-runs-heading" className="text-base font-semibold text-gray-900 mb-1">
         Cloud runs
       </h2>
@@ -393,7 +393,7 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
             <div className="mt-4 flex justify-center">
               <button
                 type="button"
-                className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="cloud-runs-load-more-btn"
                 disabled={loading}
                 onClick={() => void handleLoadMore()}
@@ -466,7 +466,7 @@ export default function HistoryPage({ runId = null, onSelectRun }: HistoryPagePr
 
   return (
     <div className="space-y-4" data-testid="history-page">
-      <section className="card" aria-labelledby="history-heading">
+      <section className="card p-4 sm:p-6" aria-labelledby="history-heading">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h2 id="history-heading" className="text-lg font-semibold text-gray-900">
             Run history
@@ -484,7 +484,7 @@ export default function HistoryPage({ runId = null, onSelectRun }: HistoryPagePr
             </label>
             <button
               type="button"
-              className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="history-refresh-btn"
               disabled={loading}
               onClick={() => void loadFirstPage()}
@@ -547,7 +547,7 @@ export default function HistoryPage({ runId = null, onSelectRun }: HistoryPagePr
               <div className="mt-4 flex justify-center">
                 <button
                   type="button"
-                  className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   data-testid="history-load-more-btn"
                   disabled={loading}
                   onClick={() => void loadMore()}

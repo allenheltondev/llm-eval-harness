@@ -33,7 +33,7 @@ function ToolRow({ entry }: { entry: ToolEventEntry }) {
   const input = entry.input !== undefined ? entry.input : entry.inputJson
 
   return (
-    <li className="rounded-lg border border-gray-200 bg-white p-3" data-testid="tool-event">
+    <li className="rounded-lg border border-gray-200 bg-surface p-3" data-testid="tool-event">
       <div className="flex items-center justify-between gap-2 mb-2">
         <span className="font-mono text-sm font-medium text-gray-900">
           {entry.name || 'unnamed tool'}
@@ -87,7 +87,7 @@ export default function ToolTimeline() {
   const toolEvents = useRunStore(state => state.toolEvents)
 
   return (
-    <section className="card" aria-labelledby="tool-timeline-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="tool-timeline-heading">
       <h2 id="tool-timeline-heading" className="text-base font-semibold text-gray-900 mb-3">
         Tool calls{toolEvents.length > 0 && ` (${toolEvents.length})`}
       </h2>

@@ -26,7 +26,7 @@ function LoadingSpinner({
 
   const colorClasses = {
     primary: 'border-primary-600',
-    white: 'border-white',
+    white: 'border-surface',
     gray: 'border-gray-600'
   }
 

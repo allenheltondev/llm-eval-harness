@@ -79,7 +79,7 @@ function MetricStat({ label, value, highlighted }: MetricStatProps) {
 function ToolTranscriptRow({ entry }: { entry: ToolTranscriptEntry }) {
   return (
     <li
-      className="rounded-lg border border-gray-200 bg-white p-3"
+      className="rounded-lg border border-gray-200 bg-surface p-3"
       data-testid="run-detail-tool-row"
     >
       <div className="flex items-center justify-between gap-2 mb-2">
@@ -128,7 +128,7 @@ export default function RunDetailView({ runId, highlight, className = '' }: RunD
 
   if (!detail) {
     return (
-      <div className={`card ${className}`} data-testid="run-detail-view">
+      <div className={`card p-4 sm:p-6 ${className}`} data-testid="run-detail-view">
         <LoadingSpinner text="Loading run…" />
         {error && (
           <p className="mt-3 text-xs text-red-600" role="alert">
@@ -155,7 +155,7 @@ function RunDetailBody({
 
   return (
     <div
-      className={`card space-y-4 ${className}`}
+      className={`card p-4 sm:p-6 space-y-4 ${className}`}
       data-testid="run-detail-view"
       data-run-id={detail.id}
     >

@@ -87,7 +87,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-gradient-to-br from-red-50 to-red-100 flex items-center justify-center p-4">
-          <div className="max-w-2xl w-full bg-white rounded-lg shadow-lg p-8">
+          <div className="max-w-2xl w-full bg-surface rounded-lg shadow-lg p-8">
             <div className="text-center mb-6">
               <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-red-100 mb-4">
                 <svg
@@ -119,7 +119,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
                     <span className="font-medium">Error ID:</span> {this.state.errorId}
                   </div>
                 )}
-                <div className="text-sm text-gray-700 font-mono bg-white p-3 rounded border overflow-auto max-h-32">
+                <div className="text-sm text-gray-700 font-mono bg-surface p-3 rounded border overflow-auto max-h-32">
                   {this.state.error.toString()}
                 </div>
                 {this.state.errorInfo && (
@@ -127,7 +127,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
                     <summary className="text-sm font-medium text-gray-700 cursor-pointer">
                       Component Stack
                     </summary>
-                    <div className="mt-2 text-xs text-gray-600 font-mono bg-white p-3 rounded border overflow-auto max-h-32">
+                    <div className="mt-2 text-xs text-gray-600 font-mono bg-surface p-3 rounded border overflow-auto max-h-32">
                       {this.state.errorInfo.componentStack}
                     </div>
                   </details>

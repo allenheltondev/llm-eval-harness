@@ -93,7 +93,7 @@ export default function RunControls() {
   }
 
   return (
-    <section className="card" aria-labelledby="run-controls-heading">
+    <section className="card p-4 sm:p-6" aria-labelledby="run-controls-heading">
       <h2 id="run-controls-heading" className="text-base font-semibold text-gray-900 mb-3">
         Run
       </h2>
@@ -105,7 +105,7 @@ export default function RunControls() {
           </label>
           <select
             id="toolset-select"
-            className="select-field"
+            className="input"
             value={toolset ?? ''}
             onChange={event => setToolset(event.target.value === '' ? null : event.target.value)}
           >
@@ -142,7 +142,7 @@ export default function RunControls() {
             type="number"
             min={1}
             max={100}
-            className="input-field"
+            className="input"
             disabled={!toolsEnabled}
             value={maxToolIterations}
             onChange={event => setMaxToolIterations(Number(event.target.value) || 1)}
@@ -158,7 +158,7 @@ export default function RunControls() {
           </label>
           <select
             id="guardrail-select"
-            className="select-field disabled:opacity-50 disabled:cursor-not-allowed"
+            className="input disabled:opacity-50 disabled:cursor-not-allowed"
             value={guardrail?.id ?? ''}
             disabled={guardrailBlocked}
             title={guardrailBlocked ? guardrailHint : undefined}
@@ -204,7 +204,7 @@ export default function RunControls() {
                   step="0.1"
                   min={0}
                   max={1}
-                  className="input-field"
+                  className="input"
                   value={inference.temperature ?? ''}
                   onChange={event =>
                     setInference({ temperature: toOptionalNumber(event.target.value) })
@@ -221,7 +221,7 @@ export default function RunControls() {
                   step="0.05"
                   min={0}
                   max={1}
-                  className="input-field"
+                  className="input"
                   value={inference.top_p ?? ''}
                   onChange={event => setInference({ top_p: toOptionalNumber(event.target.value) })}
                 />
@@ -234,7 +234,7 @@ export default function RunControls() {
                   id="max-tokens"
                   type="number"
                   min={1}
-                  className="input-field"
+                  className="input"
                   value={inference.max_tokens ?? ''}
                   onChange={event =>
                     setInference({ max_tokens: toOptionalNumber(event.target.value) })
@@ -248,7 +248,7 @@ export default function RunControls() {
         <div className="flex gap-2 pt-1">
           <button
             type="button"
-            className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={!canRun || isRunning}
             onClick={handleRun}
           >
@@ -256,7 +256,7 @@ export default function RunControls() {
           </button>
           <button
             type="button"
-            className="btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={!isRunning}
             onClick={() => cancelRun()}
           >
