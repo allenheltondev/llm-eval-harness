@@ -150,8 +150,10 @@ Two headline numbers, answering different questions:
 The full result on stdout (and from `GET /evaluations/{id}`) adds, per case,
 `score`, `scores` (one per repeat, in run order: `0.0` for a repeat that failed
 to run, `null` for one that was not judged), `reasoning` (clipped to 1,000
-bytes as stored),
-`run_ids`, `runs: {total, succeeded}` and `error`; and at the top level
+bytes as stored), `repeats` (the same per-repeat list with each repeat's run:
+`{run_id, ran, score}`, so a failed repeat keeps its place and, when its run was
+recorded, its link), `run_ids` (the successful runs), `runs: {total,
+succeeded}` and `error`; and at the top level
 `metrics.cases_total/passed/failed/errored`, `failed_runs` (each with its
 `case_id`), and `suite: {name, repeats, pass_threshold}`.
 

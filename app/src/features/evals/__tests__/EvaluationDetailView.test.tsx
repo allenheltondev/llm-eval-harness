@@ -241,4 +241,35 @@ describe('EvaluationDetailView', () => {
     expect(sourceLabel(null)).toBeNull()
     expect(sourceLabel('cron')).toBe('cron')
   })
+
+  it('labels and links runs by repeat, so a failed repeat does not renumber the rest', () => {
+    const cases = [
+      {
+        ...suiteResult.cases![1],
+        id: 'flaky',
+        scores: [0, 0.8, 0],
+        run_ids: ['r-2'],
+        repeats: [
+          { run_id: 'r-1', ran: false, score: 0 },
+          { run_id: 'r-2', ran: true, score: 0.8 },
+          { run_id: null, ran: false, score: 0 }
+        ]
+      }
+    ]
+    render(<EvaluationDetailView evaluation={suiteEvaluation} result={{ ...suiteResult, cases }} />)
+
+    const row = screen.getByTestId('eval-case-flaky')
+    expect(within(row).getByRole('link', { name: '#1' })).toHaveAttribute('href', '#/runs/r-1')
+    expect(within(row).getByRole('link', { name: '#1' })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Failed run r-1/)
+    )
+    expect(within(row).getByRole('link', { name: '#2' })).toHaveAttribute('href', '#/runs/r-2')
+    // No run was recorded for the third: numbered, but nothing to open.
+    expect(within(row).queryByRole('link', { name: '#3' })).not.toBeInTheDocument()
+    expect(within(row).getByText('#3')).toHaveAttribute(
+      'title',
+      'Repeat 3 failed before a run was recorded'
+    )
+  })
 })

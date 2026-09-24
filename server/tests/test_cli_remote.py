@@ -913,3 +913,46 @@ def test_a_tampered_login_file_cannot_redirect_a_refresh(harness, cognito, wired
 def test_the_user_pool_client_itself_refuses_a_bad_region():
     with pytest.raises(remote.RemoteError, match="names no valid user pool"):
         remote.Cognito(httpx.AsyncClient(), "us-east-1.evil.com#", "client-1")
+
+
+def test_concurrent_saves_never_share_a_temporary_file():
+    """Two `eval --remote` refreshing at once: every read sees a whole login."""
+    import threading
+
+    errors: list[BaseException] = []
+
+    def save(n: int) -> None:
+        try:
+            for i in range(50):
+                remote.save_login(remote.Login(url=URL, email=f"user{n}-{i}@example.com"))
+                if remote.load_login() is None:
+                    raise AssertionError("read a torn login file")
+        except BaseException as exc:  # a thread's failure must fail the test
+            errors.append(exc)
+
+    threads = [threading.Thread(target=save, args=(n,)) for n in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert remote.load_login().url == URL
+    assert stat.S_IMODE(os.stat(remote.login_path()).st_mode) == 0o600
+    # No temporary file is left behind.
+    assert [path.name for path in remote.config_dir().iterdir()] == ["login.json"]
+
+
+def test_a_save_that_fails_leaves_no_temporary_file(monkeypatch):
+    remote.save_login(remote.Login(url=URL, email="before@example.com"))
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(remote.os, "replace", fail)
+    with pytest.raises(OSError, match="disk full"):
+        remote.save_login(remote.Login(url=URL, email="after@example.com"))
+
+    assert remote.load_login().email == "before@example.com"
+    assert [path.name for path in remote.config_dir().iterdir()] == ["login.json"]
+

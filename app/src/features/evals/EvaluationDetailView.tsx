@@ -90,6 +90,50 @@ function RunLinks({ runIds, label }: { runIds: string[]; label: (index: number) 
   )
 }
 
+/**
+ * A case's runs, one per repeat and labelled by repeat: a failed repeat keeps
+ * its number (and its link, when its run was recorded) rather than the
+ * successful ones being renumbered around it. Results stored before `repeats`
+ * existed only know their successful runs, so those are listed in order.
+ */
+function RepeatLinks({ result }: { result: SuiteCaseResult }) {
+  if (!result.repeats) {
+    return <RunLinks runIds={result.run_ids} label={index => `#${index + 1}`} />
+  }
+  return (
+    <span className="flex flex-wrap gap-1">
+      {result.repeats.map((repeat, index) => {
+        const label = `#${index + 1}`
+        const failed = !repeat.ran
+        const className = `px-1.5 py-0.5 rounded text-xs ${
+          failed ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-primary-700'
+        }`
+        if (!repeat.run_id) {
+          return (
+            <span
+              key={index}
+              className={`${className} opacity-60`}
+              title={`Repeat ${index + 1} failed before a run was recorded`}
+            >
+              {label}
+            </span>
+          )
+        }
+        return (
+          <a
+            key={repeat.run_id}
+            href={runHref(repeat.run_id)}
+            className={`${className} hover:bg-primary-50`}
+            title={`${failed ? 'Failed run' : 'Run'} ${repeat.run_id} — open in History`}
+          >
+            {label}
+          </a>
+        )
+      })}
+    </span>
+  )
+}
+
 function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: StoredSuite }) {
   const definitions = new Map((suite?.cases ?? []).map(definition => [definition.id, definition]))
   return (
@@ -160,7 +204,7 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
                     {result.reasoning && <p className="whitespace-pre-wrap">{result.reasoning}</p>}
                   </td>
                   <td className="py-2">
-                    <RunLinks runIds={result.run_ids} label={index => `#${index + 1}`} />
+                    <RepeatLinks result={result} />
                   </td>
                 </tr>
               )

@@ -384,7 +384,13 @@ export interface SuiteCaseResult {
   scores: Array<number | null>
   reasoning: string | null
   error: Record<string, unknown> | null
+  /** The successful runs only. */
   run_ids: string[]
+  /**
+   * One per repeat, in run order (aligned with `scores`): its run, if one was
+   * recorded, and whether it answered. Absent on results stored before it existed.
+   */
+  repeats?: Array<{ run_id: string | null; ran: boolean; score: number | null }>
   runs: { total: number; succeeded: number }
 }
 

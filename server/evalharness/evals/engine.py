@@ -565,6 +565,11 @@ def _suite_case_result(
     only the answers that came back would let one good answer in ten attempts
     pass -- exactly the flakiness repeats exist to expose.
 
+    ``repeats`` is the same list with each repeat's run attached --
+    ``{"run_id", "ran", "score"}`` in run order -- so a failed repeat keeps its
+    place (and its run, when one was recorded) instead of the successful ones
+    being renumbered. ``run_ids`` stays the successful runs only.
+
     ``status`` is ``passed`` / ``failed`` when every repeat has a score,
     ``error`` when no repeat produced an answer at all, and ``judge_error`` when
     any answer went unjudged: that evidence is missing, and it is neither a pass
@@ -578,6 +583,14 @@ def _suite_case_result(
     entry: dict[str, Any] = {
         "id": case_id,
         "run_ids": [outcome.run_id for outcome in succeeded],
+        "repeats": [
+            {
+                "run_id": outcome.run_id,
+                "ran": outcome.succeeded,
+                "score": None if score is None else round(score, 4),
+            }
+            for outcome, score in zip(ordered, scores, strict=True)
+        ],
         "runs": {"total": len(runs), "succeeded": len(succeeded)},
         "passed": False,
         "score": None,

@@ -23,6 +23,7 @@ import contextlib
 import json
 import os
 import re
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
@@ -143,17 +144,23 @@ def load_login() -> Login | None:
 def save_login(login: Login) -> None:
     """Write the login readable by its owner alone.
 
-    Created with mode 0600 from the first byte (not chmod-ed afterwards), and
-    replaced atomically so a crash mid-write cannot leave half a credential.
+    Written to a temporary file of its own -- ``mkstemp`` creates it ``0600``
+    with a unique name -- and moved into place with ``os.replace``. Unique
+    matters: two ``eval --remote`` commands refreshing at once must not share
+    (and truncate) one temporary file, and a crash mid-write must never leave
+    half a credential where the login is read from.
     """
     directory = config_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    target = login_path()
-    temporary = target.with_suffix(".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(asdict(login), handle, indent=2)
-    os.replace(temporary, target)
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".login-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(asdict(login), handle, indent=2)
+        os.replace(temporary, login_path())
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
 
 
 def clear_login() -> bool:

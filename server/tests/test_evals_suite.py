@@ -624,6 +624,25 @@ async def test_a_repeat_that_failed_to_run_counts_as_zero(initialized_db):
     assert case["runs"] == {"total": 2, "succeeded": 1}
 
 
+async def test_each_repeat_keeps_its_place_and_its_run(initialized_db):
+    """A failed repeat must not renumber the ones after it: the UI labels and
+    links runs by repeat, so the n-th entry has to be the n-th repeat."""
+    answers = FlakyAnswers({REFUND["input"]: "Within 30 days."}, failures=1)
+    judge = RoutingJudge([], default=0.9)
+
+    terminal, _ = await run_suite(suite_request([REFUND], repeats=3), answers, judge)
+
+    case = terminal["result"]["cases"][0]
+    repeats = case["repeats"]
+    assert len(repeats) == 3
+    assert [repeat["score"] for repeat in repeats] == case["scores"]
+    failed = [repeat for repeat in repeats if not repeat["ran"]]
+    assert len(failed) == 1 and failed[0]["score"] == 0.0
+    # The runs that answered are exactly the successful run ids, in order.
+    assert [repeat["run_id"] for repeat in repeats if repeat["ran"]] == case["run_ids"]
+    assert all(repeat["run_id"] for repeat in repeats if repeat["ran"])
+
+
 async def test_nine_failed_repeats_and_one_good_one_is_not_a_pass(initialized_db):
     answers = FlakyAnswers({REFUND["input"]: "Within 30 days."}, failures=9)
 
