@@ -147,31 +147,9 @@ def test_no_setting_is_given_under_its_pre_rename_name(resources: dict, logical_
 
 
 def test_the_worker_handler_is_the_nimbus_worker(resources: dict) -> None:
+    """The pre-rename ``evalharness`` shim is gone, so nothing else would import."""
     assert (
         resources["EvalWorkerFunction"]["Properties"]["Handler"]
         == "nimbus.worker.lambda_app.handler"
     )
 
-
-def test_the_pre_rename_handler_still_resolves_for_this_deploy(monkeypatch) -> None:
-    """The handler changes in this deploy, so the old name must work in the new zip.
-
-    CloudFormation may land the new code before the new ``Handler``; until it
-    does, Lambda still imports ``evalharness.worker.lambda_app``. Remove this
-    test with the shim, in the release after this one.
-    """
-    import importlib
-    import sys
-
-    from nimbus.worker import lambda_app
-
-    compat = TEMPLATE.parent.parent / "server" / "compat"
-    monkeypatch.syspath_prepend(str(compat))
-    for name in [key for key in sys.modules if key.split(".")[0] == "evalharness"]:
-        monkeypatch.delitem(sys.modules, name)
-
-    shim = importlib.import_module("evalharness.worker.lambda_app")
-
-    assert shim.handler is lambda_app.handler
-    script = (TEMPLATE.parent.parent / "scripts" / "package-eval-worker.sh").read_text()
-    assert 'cp -R "${SERVER}/compat/evalharness" "${STAGING}/evalharness"' in script
