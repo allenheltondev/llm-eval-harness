@@ -33,6 +33,10 @@ def instant_retries(monkeypatch):
     monkeypatch.setattr(evals_engine, "RETRY_BACKOFF_SECONDS", (0.0, 0.0))
 
 
+def _job(evaluation_request, index: int = 0):
+    """The single job a one-run determinism request makes."""
+    return evals_engine._Job(index, evaluation_request.run_config)
+
 def deps(factory) -> evals_engine.EvalDeps:
     return evals_engine.EvalDeps(
         settings=Settings(),
@@ -72,7 +76,7 @@ class SequencedModels:
 async def test_a_run_that_throttles_twice_then_succeeds(initialized_db):
     models = SequencedModels(THROTTLE, THROTTLE, [Text("finally")])
 
-    outcome = await evals_engine._execute_with_retries(0, request(), deps(models))
+    outcome = await evals_engine._execute_with_retries(_job(request()), deps(models))
 
     assert models.calls == 3
     assert outcome.succeeded
@@ -90,7 +94,7 @@ async def test_a_run_that_throttles_twice_then_succeeds(initialized_db):
 async def test_a_run_that_never_stops_throttling_gives_up_after_two_retries(initialized_db):
     models = SequencedModels(THROTTLE)
 
-    outcome = await evals_engine._execute_with_retries(0, request(), deps(models))
+    outcome = await evals_engine._execute_with_retries(_job(request()), deps(models))
 
     assert models.calls == 3
     assert not outcome.succeeded
@@ -101,7 +105,7 @@ async def test_a_run_that_never_stops_throttling_gives_up_after_two_retries(init
 async def test_a_non_throttle_failure_is_not_retried(initialized_db):
     models = SequencedModels([Error(RuntimeError("kaboom"))])
 
-    outcome = await evals_engine._execute_with_retries(0, request(), deps(models))
+    outcome = await evals_engine._execute_with_retries(_job(request()), deps(models))
 
     assert models.calls == 1
     assert outcome.error["code"] == "internal_error"
@@ -117,7 +121,7 @@ async def test_backoff_is_actually_awaited_between_attempts(initialized_db, monk
     monkeypatch.setattr(evals_engine.asyncio, "sleep", record)
     models = SequencedModels(THROTTLE, THROTTLE, [Text("finally")])
 
-    await evals_engine._execute_with_retries(0, request(), deps(models))
+    await evals_engine._execute_with_retries(_job(request()), deps(models))
 
     assert slept == [5.0, 10.0]
 
@@ -141,7 +145,7 @@ async def test_a_setup_failure_before_run_start_is_reported_as_the_outcomes_erro
         }
     )
 
-    outcome = await evals_engine._execute_once(0, bad_request, deps(models))
+    outcome = await evals_engine._execute_once(_job(bad_request), deps(models))
 
     assert not outcome.succeeded
     assert outcome.run_id is None
@@ -155,7 +159,7 @@ async def test_a_setup_failure_before_run_start_is_reported_as_the_outcomes_erro
 async def test_a_completed_run_reports_its_summary(initialized_db):
     models = SequencedModels([Text("hello")])
 
-    outcome = await evals_engine._execute_with_retries(0, request(), deps(models))
+    outcome = await evals_engine._execute_with_retries(_job(request()), deps(models))
 
     assert outcome.summary()["output_chars"] == 5
     assert outcome.summary()["tool_calls"] == 0

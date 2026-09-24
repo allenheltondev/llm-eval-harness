@@ -57,12 +57,22 @@ from evalharness.evals import rubrics
 from evalharness.evals.judge import JudgeFactory, call_judge_factory
 from evalharness.evals.metrics import modal_value, tool_signature
 from evalharness.evals.outcomes import RunOutcome
-from evalharness.evals.schemas import GraderConfig
+from evalharness.evals.schemas import GraderConfig, Suite
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_EVALUATOR_NAME = "OutputEvaluator"
 TRAJECTORY_EVALUATOR_NAME = "TrajectoryEvaluator"
+#: Set explicitly on the suite's evaluator. Report rows are tagged with the
+#: evaluator's *instance* name, falling back to its class name -- so without
+#: this a subclass reports as ``CaseCriteriaOutputEvaluator``, a filter on
+#: ``OutputEvaluator`` matches nothing, and every suite would read as "the judge
+#: produced no results".
+SUITE_EVALUATOR_NAME = "SuiteCaseEvaluator"
+#: At most this many judge calls at once for a suite. A determinism batch caps
+#: out at 25 cases; a suite can be 200, and firing every judge call at once is a
+#: throttle, not a speed-up.
+MAX_SUITE_JUDGE_CONCURRENCY = 8
 
 _EVALUATOR_ERROR_PREFIX = "Evaluator error:"
 
@@ -238,3 +248,120 @@ async def judge(
         reasoning=reasoning or None,
         metrics=metrics,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Test suites
+# --------------------------------------------------------------------------- #
+
+
+class CaseCriteriaOutputEvaluator(OutputEvaluator):
+    """An ``OutputEvaluator`` that also shows the judge this case's own criteria.
+
+    ``OutputEvaluator`` takes one rubric for the whole experiment and ignores
+    ``expected_assertion``, but a test suite's cases each carry requirements of
+    their own. They travel on the case as ``expected_assertion`` -- the field
+    ``strands_evals`` defines for human-authored success assertions -- and are
+    appended after the rubric. ``_build_prompt`` is the library's documented
+    override point for exactly this.
+    """
+
+    def _build_prompt(self, evaluation_case: Any) -> str | list:
+        prompt = super()._build_prompt(evaluation_case)
+        criteria = evaluation_case.expected_assertion
+        if criteria and isinstance(prompt, str):
+            prompt += f"\n<CaseCriteria>{criteria}</CaseCriteria>"
+        return prompt
+
+
+@dataclass
+class CaseVerdict:
+    """What the judge said about each repeat of one case, keyed by run index.
+
+    Per repeat, not pooled: a case's score has to account for every repeat --
+    one that failed to run, one the judge never scored -- and a pooled list of
+    the scores that happened to come back cannot tell which ones are missing.
+    """
+
+    scores: dict[int, float] = field(default_factory=dict)
+    reasons: list[str] = field(default_factory=list)
+    judge_errors: dict[int, str] = field(default_factory=dict)
+
+
+@dataclass
+class SuiteJudgement:
+    """Per-case verdicts, keyed by case id, plus a failure of the judge as a whole."""
+
+    verdicts: dict[str, CaseVerdict] = field(default_factory=dict)
+    error: str | None = None
+
+
+def _suite_case_name(outcome: RunOutcome) -> str:
+    # `#` cannot appear in a case id (see SuiteCase.id), so this splits cleanly.
+    return f"{outcome.case_id}#{outcome.index}"
+
+
+async def judge_suite(
+    outcomes: list[RunOutcome],
+    *,
+    suite: Suite,
+    rubric: str | None,
+    grader: GraderConfig,
+    judge_factory: JudgeFactory,
+) -> SuiteJudgement:
+    """Grade each successful run against *its own case*; never raises.
+
+    Unlike determinism there is no reference run to manufacture: every case
+    brings its own ``expected`` answer and ``criteria``. A judge failure on one
+    row is that row's ``judge_error``, not an F.
+    """
+    if not outcomes:
+        return SuiteJudgement(error="No successful runs to grade")
+    cases_by_id = {case.id: case for case in suite.cases}
+
+    try:
+        model = call_judge_factory(judge_factory, grader.model_id, grader.provider)
+        evaluator = CaseCriteriaOutputEvaluator(
+            rubric=rubric or rubrics.SUITE_RUBRIC,
+            model=model,
+            system_prompt=grader.system_prompt or rubrics.SUITE_SYSTEM_PROMPT,
+            include_inputs=True,
+            name=SUITE_EVALUATOR_NAME,
+        )
+        cases = []
+        for outcome in outcomes:
+            case = cases_by_id[str(outcome.case_id)]
+            cases.append(
+                Case(
+                    name=_suite_case_name(outcome),
+                    input=case.input,
+                    expected_output=case.expected,
+                    expected_assertion=case.criteria,
+                    metadata={
+                        "run_id": outcome.run_id,
+                        "index": outcome.index,
+                        "output": outcome.output,
+                        "trajectory": _trajectory(outcome),
+                    },
+                )
+            )
+        experiment = Experiment(cases=cases, evaluators=[evaluator])
+        report = await experiment.run_evaluations_async(
+            _task, max_workers=min(len(cases), MAX_SUITE_JUDGE_CONCURRENCY)
+        )
+    except Exception as exc:  # the judge is best-effort; the runs still stand
+        logger.warning("suite judge failed: %s", exc, exc_info=True)
+        return SuiteJudgement(error=str(exc) or exc.__class__.__name__)
+
+    rows = _rows_for(report, SUITE_EVALUATOR_NAME)
+    judgement = SuiteJudgement(error=_judge_failure(rows))
+    for score, reason, name in rows:
+        case_id, _, index = name.rpartition("#")
+        verdict = judgement.verdicts.setdefault(case_id, CaseVerdict())
+        if reason.startswith(_EVALUATOR_ERROR_PREFIX):
+            verdict.judge_errors[int(index)] = reason[len(_EVALUATOR_ERROR_PREFIX) :].strip()
+        else:
+            verdict.scores[int(index)] = score
+            if reason:
+                verdict.reasons.append(reason)
+    return judgement

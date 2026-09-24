@@ -33,9 +33,13 @@ from evalharness.errors import NotFoundError
 from evalharness.evals.engine import EvalDeps, LocalEvalStore, execute_evaluation_with_seam
 from evalharness.evals.jobs import to_json_line
 from evalharness.evals.judge import build_judge_model
-from evalharness.evals.schemas import EvaluationRequest, GraderConfig
+from evalharness.evals.schemas import (
+    DEFAULT_DETERMINISM_RUNS,
+    EvaluationRequest,
+    GraderConfig,
+)
 from evalharness.models_catalog import ProviderCatalog
-from evalharness.providers import PROVIDERS, is_configured
+from evalharness.providers import DEFAULT_PROVIDER, PROVIDERS, is_configured
 from evalharness.schemas.runs import EvaluationDetail, RunDetail
 from evalharness.store.repo import HistoryRepo, get_history_repo
 from evalharness.tools.registry import list_handlers
@@ -94,7 +98,7 @@ def build_run_request(args: argparse.Namespace) -> RunRequest:
     )
     return RunRequest(
         model_id=args.model,
-        provider=args.provider,
+        provider=args.provider or DEFAULT_PROVIDER,
         system_prompt=args.system or "",
         user_prompt=args.prompt,
         inference=InferenceConfig(
@@ -103,7 +107,11 @@ def build_run_request(args: argparse.Namespace) -> RunRequest:
             max_tokens=args.max_tokens,
         ),
         toolset=args.toolset,
-        max_tool_iterations=args.max_tool_iterations,
+        **(
+            {"max_tool_iterations": args.max_tool_iterations}
+            if args.max_tool_iterations is not None
+            else {}
+        ),
         guardrail=guardrail,
         # A CLI run is always consumed as a stream: that is what makes the text
         # appear as it is generated rather than in one lump at the end.
@@ -111,17 +119,89 @@ def build_run_request(args: argparse.Namespace) -> RunRequest:
     )
 
 
+def _run_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """The run settings actually given on the command line, as run_config fields.
+
+    Only what was passed: every run option defaults to ``None`` precisely so
+    this can tell "not given" from "given the default", and a suite file's own
+    choice is never overridden by a flag nobody typed.
+    """
+    overrides: dict[str, Any] = {}
+    for field, value in (
+        ("model_id", args.model),
+        ("provider", args.provider),
+        ("system_prompt", args.system),
+        ("toolset", args.toolset),
+        ("max_tool_iterations", args.max_tool_iterations),
+    ):
+        if value is not None:
+            overrides[field] = value
+    inference = {
+        name: value
+        for name, value in (
+            ("temperature", args.temperature),
+            ("top_p", args.top_p),
+            ("max_tokens", args.max_tokens),
+        )
+        if value is not None
+    }
+    if inference:
+        overrides["inference"] = inference
+    if args.guardrail_id:
+        overrides["guardrail"] = {"id": args.guardrail_id, "version": args.guardrail_version}
+    return overrides
+
+
+def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
+    """The ``kind="suite"`` request for ``eval --suite FILE``.
+
+    The file supplies the suite; flags override it. ``rubric`` and ``grader``
+    live at the file's top level (they are the request's, not the suite's), and
+    ``--rubric`` / ``--grader-*`` override those. Validation is the same model
+    ``POST /evaluations`` uses, so a file that works here works over HTTP.
+    """
+    spec = dict(args.suite_spec)
+    rubric = spec.pop("rubric", None)
+    grader = dict(spec.pop("grader", None) or {})
+
+    run_config = dict(spec.get("run_config") or {})
+    overrides = _run_overrides(args)
+    if "inference" in overrides:
+        overrides["inference"] = {**(run_config.get("inference") or {}), **overrides["inference"]}
+    spec["run_config"] = {**run_config, **overrides}
+
+    for field, value in (
+        ("model_id", args.grader_model),
+        ("provider", args.grader_provider),
+        ("system_prompt", args.grader_system),
+    ):
+        if value is not None:
+            grader[field] = value
+
+    return EvaluationRequest.model_validate(
+        {
+            "kind": "suite",
+            "suite": spec,
+            "rubric": args.rubric if args.rubric is not None else rubric,
+            "grader": grader,
+        }
+    )
+
+
 def build_eval_request(args: argparse.Namespace) -> EvaluationRequest:
     """The ``EvaluationRequest`` these arguments describe.
 
-    ``--run`` (repeatable) selects ``kind="grade"`` over already-stored runs;
-    without it this is a determinism experiment over ``-n`` fresh repeats.
+    ``--suite FILE`` runs a test suite; ``--run`` (repeatable) selects
+    ``kind="grade"`` over already-stored runs; otherwise this is a determinism
+    experiment over ``-n`` fresh repeats.
     """
+    if getattr(args, "suite_spec", None) is not None:
+        return build_suite_request(args)
     # `model_id` is only passed when it was actually given: GraderConfig's own
     # default is the built-in judge model, and handing it an explicit None
     # would fail validation rather than fall back to it.
     grader = GraderConfig(
-        provider=args.grader_provider,
+        provider=args.grader_provider or DEFAULT_PROVIDER,
         system_prompt=args.grader_system,
         **({"model_id": args.grader_model} if args.grader_model else {}),
     )
@@ -135,7 +215,7 @@ def build_eval_request(args: argparse.Namespace) -> EvaluationRequest:
     return EvaluationRequest(
         kind="determinism",
         run_config=build_run_request(args),
-        n=args.n,
+        n=args.n if args.n is not None else DEFAULT_DETERMINISM_RUNS,
         rubric=args.rubric,
         grader=grader,
     )

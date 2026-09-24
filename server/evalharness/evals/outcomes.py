@@ -24,6 +24,8 @@ class RunOutcome:
     duration_ms: int = 0
     attempts: int = 1
     error: dict[str, Any] | None = None
+    #: The suite case this run answered; ``None`` outside a suite.
+    case_id: str | None = None
 
     @property
     def succeeded(self) -> bool:

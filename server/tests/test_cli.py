@@ -15,6 +15,7 @@ import inspect
 import io
 import json
 import os
+import re
 import sys
 import types
 
@@ -22,6 +23,7 @@ import pytest
 
 from evalharness.cli import commands
 from evalharness.cli.main import COMMANDS, main
+from evalharness.engine.fake_model import FakeModel, Text
 from evalharness.errors import AppError, NotFoundError
 from evalharness.models_catalog import CatalogResult
 from evalharness.store import db as store_db
@@ -627,3 +629,271 @@ def test_the_module_entry_point_exposes_the_same_main():
     from evalharness.cli import __main__
 
     assert __main__.main is main
+
+
+# --------------------------------------------------------------------------- #
+# eval --suite
+# --------------------------------------------------------------------------- #
+
+SUITE_YAML = """\
+name: support
+run_config:
+  model_id: fake.model
+  system_prompt: You are a support agent.
+  inference:
+    temperature: 0.2
+cases:
+  - id: refund-window
+    input: Can I return shoes after 45 days?
+    expected: No. Returns are accepted within 30 days.
+    criteria: Must state the 30-day window.
+  - id: store-hours
+    input: When do you open on Sunday?
+"""
+
+
+@pytest.fixture
+def suite_file(tmp_path):
+    def write(text: str = SUITE_YAML, name: str = "suite.yaml"):
+        path = tmp_path / name
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    return write
+
+
+@pytest.fixture
+def captured_runs(monkeypatch):
+    """The RunRequest of every run the CLI executes."""
+    seen: list = []
+
+    def capture(request, settings):
+        seen.append(request)
+        return FakeModel([Text("We accept returns within 30 days.")])
+
+    # `eval` builds its models through commands.build_model (`run` goes through
+    # runner.build_model instead), so that is the seam to watch.
+    monkeypatch.setattr(commands, "build_model", capture)
+    return seen
+
+
+class TestSuite:
+    def test_a_suite_file_runs_every_case_and_reports_each(self, cli, suite_file):
+        result = cli("eval", "--suite", suite_file())
+
+        assert result.code == 0, result.err
+        payload = json.loads(result.out)
+        assert payload["status"] == "completed"
+        assert [case["id"] for case in payload["result"]["cases"]] == [
+            "refund-window",
+            "store-hours",
+        ]
+        assert "2/2 cases passed" in result.err
+        assert re.search(r"PASS\s+0\.95\s+refund-window", result.err)
+        assert "run 0 [refund-window] started" in result.err
+
+    def test_json_suite_files_work_too(self, cli, suite_file):
+        text = json.dumps(
+            {
+                "run_config": {"model_id": "fake.model"},
+                "cases": [{"id": "only", "input": "hi?"}],
+            }
+        )
+
+        result = cli("eval", "--suite", suite_file(text, "suite.json"))
+
+        assert result.code == 0, result.err
+        assert json.loads(result.out)["result"]["cases"][0]["id"] == "only"
+
+    def test_each_case_is_run_with_the_files_config_and_its_own_input(
+        self, cli, suite_file, captured_runs
+    ):
+        result = cli("eval", "--suite", suite_file())
+
+        assert result.code == 0, result.err
+        assert sorted(run.user_prompt for run in captured_runs) == [
+            "Can I return shoes after 45 days?",
+            "When do you open on Sunday?",
+        ]
+        assert {run.system_prompt for run in captured_runs} == {"You are a support agent."}
+        assert {run.inference.temperature for run in captured_runs} == {0.2}
+
+    def test_flags_given_override_the_file_and_only_those(self, cli, suite_file, captured_runs):
+        """`-m other` is how you run the same suite on another model."""
+        text = SUITE_YAML.replace(
+            "model_id: fake.model", "model_id: fake.model\n  provider: openai"
+        )
+
+        result = cli(
+            "eval", "--suite", suite_file(text), "-m", "other.model", "--max-tokens", "50"
+        )
+
+        assert result.code == 0, result.err
+        run = captured_runs[0]
+        assert run.model_id == "other.model"  # overridden
+        assert run.inference.max_tokens == 50  # added
+        assert run.inference.temperature == 0.2  # kept: inference merges, not replaces
+        # Not passed, so the file's choice stands -- even though --provider has
+        # a default. This is why the run options default to None.
+        assert run.provider == "openai"
+
+    def test_the_files_rubric_is_used_and_rubric_overrides_it(self, cli, suite_file, monkeypatch):
+        from evalharness.evals import engine as evals_engine
+
+        seen: list = []
+        real = evals_engine.execute_evaluation_with_seam
+
+        async def spy(request, *args, **kwargs):
+            seen.append(request.rubric)
+            return await real(request, *args, **kwargs)
+
+        monkeypatch.setattr(commands, "execute_evaluation_with_seam", spy)
+        path = suite_file(SUITE_YAML + "rubric: From the file.\n")
+
+        assert cli("eval", "--suite", path).code == 0
+        assert cli("eval", "--suite", path, "--rubric", "From the flag.").code == 0
+        assert seen == ["From the file.", "From the flag."]
+
+    def test_json_mode_streams_events_that_name_their_case(self, cli, suite_file):
+        result = cli("--json", "eval", "--suite", suite_file())
+
+        assert result.code == 0, result.err
+        events = [json.loads(line) for line in result.out.splitlines()]
+        runs = [e for e in events if e["type"] == "run_completed"]
+        assert {e["case_id"] for e in runs} == {"refund-window", "store-hours"}
+
+    @pytest.mark.parametrize(
+        ("extra", "message"),
+        [
+            (["--run", "abc"], "--suite and --run are different evaluations"),
+            (["-p", "hello"], "each case's `input` is the prompt"),
+            (["-n", "5"], "set in the suite file"),
+        ],
+    )
+    def test_flags_that_cannot_apply_are_rejected_not_ignored(
+        self, cli, suite_file, extra, message
+    ):
+        result = cli("eval", "--suite", suite_file(), *extra)
+
+        assert result.code == 2
+        assert message in result.err
+        assert result.out == ""
+
+    @pytest.mark.parametrize(
+        ("text", "message"),
+        [
+            ("cases: [unclosed", "not valid YAML or JSON at line 1"),
+            ("- just\n- a list\n", "expected a mapping at the top level"),
+            (
+                "run_config: {model_id: m}\ncases:\n  - id: a\n",
+                "cases.0.input: Field required",
+            ),
+            (
+                "run_config: {model_id: m}\n"
+                "cases:\n  - {id: a, input: x}\n  - {id: a, input: y}\n",
+                "Case ids must be unique within a suite; repeated: a",
+            ),
+            # No run_config means no model: the message names the field that matters.
+            ("cases:\n  - {id: a, input: x}\n", "run_config.model_id: Field required"),
+            (
+                "run_config: {model_id: m, user_prompt: hi}\ncases:\n  - {id: a, input: x}\n",
+                "each case's `input` is the prompt",
+            ),
+        ],
+    )
+    def test_a_bad_suite_file_is_one_line_naming_the_file_and_the_field(
+        self, cli, suite_file, text, message
+    ):
+        path = suite_file(text)
+
+        result = cli("eval", "--suite", path)
+
+        assert result.code == 2
+        assert result.err.count("\n") == 1, result.err
+        assert result.err.startswith(f"evalharness: --suite {path}")
+        assert message in result.err
+
+    def test_a_missing_suite_file_is_a_usage_error(self, cli, tmp_path):
+        result = cli("eval", "--suite", str(tmp_path / "nope.yaml"))
+
+        assert result.code == 2
+        assert "--suite: No such file or directory" in result.err
+
+
+class TestSuiteOverrides:
+    """Every override path, down to the request the engine receives."""
+
+    def _request(self, suite_file, *argv):
+        import argparse  # noqa: F401 - mirrors how main builds the namespace
+
+        from evalharness.cli.main import build_parser, prepare
+
+        args = build_parser().parse_args(["eval", "--suite", suite_file(), *argv])
+        prepare(args, _Stdin("", tty=True))
+        return commands.build_eval_request(args)
+
+    def test_grader_flags_override_the_files_grader(self, suite_file):
+        text = SUITE_YAML + "grader:\n  model_id: file.judge\n  system_prompt: from the file\n"
+        path_writer = lambda: suite_file(text)  # noqa: E731
+
+        request = self._request(
+            path_writer, "--grader-provider", "openai", "--grader-model", "gpt-judge"
+        )
+
+        assert request.grader.provider == "openai"
+        assert request.grader.model_id == "gpt-judge"
+        assert request.grader.system_prompt == "from the file"  # not passed, so kept
+
+    def test_a_guardrail_flag_applies_to_every_case(self, suite_file):
+        request = self._request(suite_file, "--guardrail-id", "g-1", "--guardrail-version", "3")
+
+        run = request.suite.run_config.for_case(request.suite.cases[0])
+        assert (run.guardrail.id, run.guardrail.version) == ("g-1", "3")
+
+    def test_a_system_file_overrides_the_files_system_prompt(self, suite_file, tmp_path):
+        system = tmp_path / "system.txt"
+        system.write_text("From a file of its own.", encoding="utf-8")
+
+        request = self._request(suite_file, "--system-file", str(system))
+
+        assert request.suite.run_config.system_prompt == "From a file of its own."
+
+    def test_a_non_bedrock_file_judge_without_a_model_is_a_usage_error(self, cli, suite_file):
+        result = cli("eval", "--suite", suite_file(SUITE_YAML + "grader:\n  provider: openai\n"))
+
+        assert result.code == 2
+        assert "needs an explicit grader.model_id" in result.err
+
+    def test_grader_provider_alone_uses_the_files_judge_model(self, suite_file):
+        text = SUITE_YAML + "grader:\n  model_id: gpt-judge\n"
+
+        request = self._request(lambda: suite_file(text), "--grader-provider", "openai")
+
+        assert (request.grader.provider, request.grader.model_id) == ("openai", "gpt-judge")
+
+    def test_grader_provider_alone_without_any_judge_model_is_a_usage_error(self, cli, suite_file):
+        result = cli("eval", "--suite", suite_file(), "--grader-provider", "openai")
+
+        assert result.code == 2
+        assert "--suite" in result.err
+        assert "needs an explicit grader.model_id" in result.err
+
+
+def test_the_documented_example_suite_is_valid(cli):
+    """docs/examples/support-suite.yaml is what people will copy; it must work."""
+    example = next(
+        parent / "docs" / "examples" / "support-suite.yaml"
+        for parent in __import__("pathlib").Path(__file__).resolve().parents
+        if (parent / "docs" / "examples" / "support-suite.yaml").is_file()
+    )
+
+    result = cli("eval", "--suite", str(example), "-m", "fake.model")
+
+    assert result.code == 0, result.err
+    cases = json.loads(result.out)["result"]["cases"]
+    assert [case["id"] for case in cases] == [
+        "refund-window",
+        "sunday-hours",
+        "late-return",
+        "off-topic",
+    ]

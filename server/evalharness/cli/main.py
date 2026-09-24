@@ -31,6 +31,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TextIO
 
+import yaml
 from pydantic import ValidationError
 
 from evalharness.cli import commands
@@ -100,10 +101,14 @@ def _run_options() -> argparse.ArgumentParser:
     """
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument("-m", "--model", help="model id, as listed by `evalharness models`")
+    # Options below default to None, with the real default applied when the
+    # request is built, so "was this passed?" is answerable: `eval --suite`
+    # overrides the file's run_config with exactly the options given, and a
+    # non-None default would silently override a file's own choice.
     parent.add_argument(
         "--provider",
         choices=PROVIDERS,
-        default="bedrock",
+        default=None,
         help="which SDK executes the run (default: bedrock)",
     )
     parent.add_argument(
@@ -121,7 +126,7 @@ def _run_options() -> argparse.ArgumentParser:
     parent.add_argument(
         "--max-tool-iterations",
         type=int,
-        default=10,
+        default=None,
         help="cap on agent loop turns (default: 10)",
     )
     parent.add_argument("--temperature", type=float, help="sampling temperature")
@@ -160,18 +165,28 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = subparsers.add_parser(
         "eval",
         parents=[run_options, output],
-        help="run a determinism experiment, or grade stored runs",
+        help="run a determinism experiment, grade stored runs, or run a test suite",
         description=(
-            "Repeat a prompt N times and grade the batch for determinism, or -- with "
-            "--run -- grade runs that are already stored."
+            "Repeat a prompt N times and grade the batch for determinism; with --run, "
+            "grade runs that are already stored; with --suite, run a file of test cases "
+            "and grade each one."
         ),
     )
     evaluate.add_argument(
         "-n",
         type=int,
-        default=10,
+        default=None,
         dest="n",
         help="repeats for a determinism experiment, 2-25 (default: 10)",
+    )
+    evaluate.add_argument(
+        "--suite",
+        type=Path,
+        metavar="FILE",
+        help=(
+            "run a test suite from a YAML or JSON file (see docs/suites.md); "
+            "run options given here override the file's run_config"
+        ),
     )
     evaluate.add_argument(
         "--run",
@@ -188,7 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--grader-provider",
         choices=PROVIDERS,
-        default="bedrock",
+        default=None,
         help="which SDK runs the judge (default: bedrock)",
     )
     evaluate.add_argument("--grader-system", help="override the judge's system prompt")
@@ -223,6 +238,14 @@ def build_parser() -> argparse.ArgumentParser:
 # --------------------------------------------------------------------------- #
 
 
+def _read_system_file(args: argparse.Namespace) -> None:
+    if args.system_file is not None:
+        try:
+            args.system = args.system_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise UsageError(f"--system-file: {exc.strerror}: {args.system_file}") from None
+
+
 def resolve_prompts(args: argparse.Namespace, stdin: TextIO) -> None:
     """Fill in ``prompt`` and ``system`` from stdin and ``--system-file``.
 
@@ -232,11 +255,7 @@ def resolve_prompts(args: argparse.Namespace, stdin: TextIO) -> None:
     invisible read is the single most confusing thing a CLI can do -- there the
     missing prompt is reported as the usage error it is.
     """
-    if args.system_file is not None:
-        try:
-            args.system = args.system_file.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise UsageError(f"--system-file: {exc.strerror}: {args.system_file}") from None
+    _read_system_file(args)
 
     if args.prompt is not None and args.prompt != "-":
         return
@@ -254,15 +273,85 @@ def resolve_prompts(args: argparse.Namespace, stdin: TextIO) -> None:
     args.prompt = piped
 
 
+def load_suite_file(path: Path) -> dict:
+    """Read a suite file: YAML, which makes JSON work too (JSON is valid YAML).
+
+    Only the *shape* is checked here -- that it is a mapping. What goes in it is
+    ``EvaluationRequest``'s to decide, so the CLI and ``POST /evaluations``
+    accept exactly the same suites.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise UsageError(f"--suite: {exc.strerror}: {path}") from None
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+        raise UsageError(f"--suite {path}: not valid YAML or JSON{where}") from None
+    if not isinstance(data, dict):
+        raise UsageError(
+            f"--suite {path}: expected a mapping at the top level "
+            "(name, run_config, cases, ...), not a list or a scalar"
+        )
+    return data
+
+
+def _suite_problem(path: Path, exc: Exception) -> UsageError:
+    """One line naming the file and every field that is wrong in it."""
+    if isinstance(exc, ValidationError):
+        problems = []
+        for error in exc.errors():
+            location = [str(part) for part in error["loc"]]
+            if location[:1] == ["suite"]:
+                location = location[1:]  # the file *is* the suite
+            problems.append(f"{'.'.join(location) or '(top level)'}: {error['msg']}")
+        return UsageError(f"--suite {path}: " + "; ".join(problems))
+    assert isinstance(exc, AppError)
+    return UsageError(f"--suite {path}: {exc.message}")
+
+
+def _prepare_suite(args: argparse.Namespace) -> None:
+    """Reject what does not apply to a suite, then load and validate the file.
+
+    Validated here, in the usage phase, so a bad file is a one-line exit-2
+    error naming the file and the field -- not a failure halfway into a run.
+    Flags that cannot apply are rejected rather than ignored: silently dropping
+    -n or --prompt would run something other than what was asked for.
+    """
+    if args.run:
+        raise UsageError("--suite and --run are different evaluations; pass one or the other")
+    if args.prompt is not None:
+        raise UsageError("--suite brings its own prompts: each case's `input` is the prompt")
+    if args.n is not None:
+        raise UsageError(
+            "-n repeats a determinism experiment; a suite repeats each case `repeats` "
+            "times, set in the suite file"
+        )
+    _read_system_file(args)
+    args.suite_spec = load_suite_file(args.suite)
+    try:
+        commands.build_suite_request(args)
+    except (ValidationError, AppError) as exc:
+        raise _suite_problem(args.suite, exc) from None
+
+
 def _check_required(args: argparse.Namespace) -> None:
     """The requirements that depend on other arguments."""
     if args.command == "run" and not args.model:
         raise UsageError("run needs a model: pass --model (see `evalharness models`)")
-    if args.command == "eval" and not args.run and not args.model:
+    if args.command == "eval" and not (args.run or args.model or args.suite):
         raise UsageError(
-            "eval needs either --model (to execute new runs) or --run (to grade stored ones)"
+            "eval needs --model (to execute new runs), --run (to grade stored ones), "
+            "or --suite (to run a test suite)"
         )
-    if args.command == "eval" and args.grader_provider != "bedrock" and not args.grader_model:
+    if (
+        args.command == "eval"
+        and args.suite is None  # a suite file may name the model; checked once merged
+        and args.grader_provider not in (None, "bedrock")
+        and not args.grader_model
+    ):
         # `GraderConfig` enforces this same invariant for every caller, so the
         # rule has one home and the HTTP API cannot drift from it. This check
         # is not that rule: it is the *invocation* shape, caught early so the
@@ -277,6 +366,9 @@ def _check_required(args: argparse.Namespace) -> None:
 def prepare(args: argparse.Namespace, stdin: TextIO) -> None:
     """Resolve and validate everything argparse could not decide on its own."""
     _check_required(args)
+    if args.command == "eval" and args.suite is not None:
+        _prepare_suite(args)
+        return
     # `eval --run` grades stored runs, so it needs no prompt of its own; every
     # other run-shaped invocation does.
     if args.command == "run" or (args.command == "eval" and not args.run):

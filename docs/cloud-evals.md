@@ -68,15 +68,17 @@ The invoke is asynchronous, so AWS queues the event and answers immediately
 while the worker runs the whole evaluation inside one invocation: FastAPI never
 holds a connection open for it.
 
-**The payload is capped at 1,000,000 bytes.** An asynchronous `lambda:Invoke`
-accepts at most 1 MB [aws: raised from 256 KB in October 2025], and
-`EvaluationRequest` bounds none of the prompts, the rubric or `run_ids`, while
-the Function URL accepts bodies up to 6 MB. So the server serializes the worker
-payload and measures it *before* writing anything, and a request over the limit
-is a `413 evaluation_too_large` with `detail: {bytes, limit_bytes}` — no
-`pending` row is created and nothing is invoked. The limit sits at 10^6 rather
-than 2^20 so it can never admit a payload AWS counts as over. A local-lane
-evaluation has no such limit, and the error says so. Any other refusal from
+**A cloud request is capped at 200,000 bytes.** Two limits apply and the
+tighter one binds. An asynchronous `lambda:Invoke` accepts at most 1 MB [aws:
+raised from 256 KB in October 2025] — but the request is also stored, whole, as
+`config` on the evaluation's `META` item, and that same item receives the
+`result` at the end: two large attributes in one DynamoDB item, capped at
+400 KB [aws]. So the request may use at most half. The server serializes the
+worker payload and measures it *before* writing anything; over the limit is a
+`413 evaluation_too_large` with `detail: {bytes, limit_bytes}` — no `pending`
+row, nothing invoked. (The first version of this check enforced the 1 MB invoke
+limit, which let a 300 KB request through to fail at DynamoDB.) The local lane
+has no such limit, and the error says so. Any other refusal from
 `lambda:Invoke` (throttling, access denied, an unreachable endpoint) is a
 `502 eval_worker_unavailable` naming the AWS error, never a bare 500.
 

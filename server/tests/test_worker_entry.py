@@ -1045,3 +1045,47 @@ def test_a_failing_dispose_still_restores_the_previous_engine(monkeypatch, tmp_p
         monkeypatch.setattr(scoped, "dispose", failing_dispose)
 
     assert db.get_engine() is outer
+
+
+async def test_a_suite_runs_on_the_cloud_lane(real_engine, client, store_factory):
+    """The worker needs nothing suite-specific: the seam dispatches on kind, and
+    the per-case result and `case_id` events land in DynamoDB like any other."""
+    from evalharness.evals import cloud
+    from evalharness.evals.schemas import EvaluationRequest
+
+    real_engine()
+    # Exactly what the server would send -- serialized and parsed back -- not a
+    # hand-written dict. A hand-written one is how a serialization bug in
+    # SuiteRunConfig (an unset field dumped as `user_prompt: ""`) hid here.
+    request = EvaluationRequest.model_validate(
+        {
+            "kind": "suite",
+            "execution": "cloud",
+            "suite": {
+                "run_config": {"model_id": "fake.model"},
+                "cases": [
+                    {"id": "first", "input": "one?", "expected": "done"},
+                    {"id": "second", "input": "two?", "criteria": "Says done."},
+                ],
+            },
+        }
+    )
+    suite_request = json.loads(cloud.encode_payload(cloud.worker_payload(EVAL_ID, request)))[
+        "request"
+    ]
+    store = store_factory(EVAL_ID)
+    store.begin(suite_request)
+    store.mark_running()
+
+    status = await lambda_app.execute(EVAL_ID, suite_request, store, None)
+
+    assert status == "completed"
+    item = meta(client)
+    assert item["status"] == {"S": "completed"}
+    result = json.loads(item["result"]["S"])
+    assert [case["id"] for case in result["cases"]] == ["first", "second"]
+    assert all(case["status"] == "passed" for case in result["cases"])
+    run_events = [e for e in collected(client) if e["type"] == "run_completed"]
+    assert sorted(e["case_id"] for e in run_events) == ["first", "second"]
+    # Each case's run was mirrored to its own RUN# item.
+    assert len(json.loads(item["run_ids"]["S"])) == 2

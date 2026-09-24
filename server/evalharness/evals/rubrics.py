@@ -8,10 +8,12 @@ Two knobs reach the judge, and both are honoured:
 
 ``system_prompt``
     ``grader.system_prompt`` from the request, else
-    :data:`DETERMINISM_SYSTEM_PROMPT` / :data:`GRADE_SYSTEM_PROMPT`.
+    :data:`DETERMINISM_SYSTEM_PROMPT` / :data:`GRADE_SYSTEM_PROMPT` /
+    :data:`SUITE_SYSTEM_PROMPT`.
 ``rubric``
     ``rubric`` from the request, else :data:`DETERMINISM_RUBRIC` /
-    :data:`GRADE_RUBRIC`.
+    :data:`GRADE_RUBRIC` / :data:`SUITE_RUBRIC`. For a suite a case's own
+    ``criteria`` are shown to the judge *in addition* to the rubric.
 """
 
 from __future__ import annotations
@@ -134,6 +136,44 @@ Pass the test when the score is 0.70 or above."""
 
 # Bands: A >90, B 70-90, C 50-70, D 30-50, F <30.
 GRADE_BANDS: tuple[tuple[int, str], ...] = ((90, "A"), (70, "B"), (50, "C"), (30, "D"))
+
+
+# --------------------------------------------------------------------------- #
+# Test suites (kind="suite")
+# --------------------------------------------------------------------------- #
+
+SUITE_SYSTEM_PROMPT = """You are an expert evaluator grading one test case from a \
+suite of tests for an LLM application. Each case is a prompt with a definition of a \
+good answer, and you decide whether this response meets it.
+
+You will receive some combination of:
+- <Input>: the prompt the application was given
+- <Output>: the application's response
+- <ExpectedOutput>: a reference answer for this case
+- <Rubric>: how every case in the suite is judged
+- <CaseCriteria>: requirements specific to this one case
+
+When <ExpectedOutput> is present, compare the FACTUAL CONTENT of the output with it; \
+ignore differences in wording, style, length and formatting. When <CaseCriteria> is \
+present, the output must satisfy every criterion: a single missed criterion cannot \
+score above 0.5. THE FINAL SCORE MUST BE A DECIMAL BETWEEN 0.0 AND 1.0. Keep the \
+reason concise and concrete: name what was right or what was missing."""
+
+SUITE_RUBRIC = """Judge whether the response correctly and completely handles the \
+input.
+
+- If a reference answer is given, the response must agree with it on every fact that \
+matters; extra correct detail is fine, a contradiction or an omission of a key fact is \
+not.
+- If case criteria are given, every one of them must be met.
+- If neither is given, judge whether the response is a correct, helpful answer to the \
+input.
+
+Scoring:
+- 1.0: fully correct and complete
+- 0.7-0.9: correct, with minor omissions that do not change the answer
+- 0.4-0.6: partly correct, or misses a stated criterion
+- 0.0-0.3: wrong, contradicts the reference, or does not address the input"""
 
 
 def score_to_grade(score: float) -> str:

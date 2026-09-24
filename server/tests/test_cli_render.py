@@ -242,3 +242,107 @@ class TestTable:
 
 def test_dumps_stringifies_values_json_cannot_encode():
     assert render.dumps({"ts": TS}) == '{\n  "ts": "2026-01-02 03:04:05+00:00"\n}'
+
+
+# --------------------------------------------------------------------------- #
+# Suites
+# --------------------------------------------------------------------------- #
+
+
+def _suite_result(*cases: dict, judge_error: str | None = None) -> dict:
+    result = {
+        "grade": "C",
+        "score": 72,
+        "metrics": {
+            "cases_total": len(cases),
+            "cases_passed": sum(1 for c in cases if c["status"] == "passed"),
+        },
+        "cases": list(cases),
+    }
+    if judge_error:
+        result["judge_error"] = judge_error
+    return result
+
+
+def test_a_suite_prints_its_totals_then_a_line_per_case():
+    lines = render.eval_result_lines(
+        _suite_result(
+            {"id": "a", "status": "passed", "score": 0.95, "reasoning": "fine", "error": None},
+            {"id": "b", "status": "failed", "score": 0.2, "reasoning": "said 9am", "error": None},
+        )
+    )
+
+    assert lines[0] == f"{render.MARKER} grade C  score=72  1/2 cases passed"
+    # A pass is one line; its reasoning is not repeated -- nothing went wrong.
+    assert lines[1] == f"{render.MARKER}   PASS  0.95  a"
+    # A failure says why, because that is the reason to look.
+    assert lines[2] == f"{render.MARKER}   FAIL  0.20  b  said 9am"
+
+
+def test_a_case_without_a_score_says_why_instead():
+    lines = render.suite_result_lines(
+        _suite_result(
+            {"id": "c", "status": "error", "score": None, "error": {"message": "model down"}},
+            {"id": "d", "status": "judge_error", "score": None, "error": {"code": "judge_error"}},
+        )
+    )
+
+    assert lines[1] == f"{render.MARKER}   ERR     -   c  model down"
+    assert lines[2] == f"{render.MARKER}   ????    -   d  judge_error"
+
+
+def test_case_ids_line_up_whatever_the_status():
+    """Fixed-width label and score columns: the ids form one column to scan."""
+    lines = render.suite_result_lines(
+        _suite_result(
+            {"id": "passed-case", "status": "passed", "score": 1.0},
+            {"id": "errored-case", "status": "error", "score": None, "error": {"message": "x"}},
+            {"id": "unjudged-case", "status": "judge_error", "score": None},
+        )
+    )
+
+    columns = {line.index(case) for line, case in zip(
+        lines[1:], ("passed-case", "errored-case", "unjudged-case"), strict=True
+    )}
+    assert len(columns) == 1
+
+
+def test_a_suite_the_judge_could_not_grade_has_no_grade_and_says_so():
+    result = _suite_result(
+        {"id": "a", "status": "judge_error", "score": None, "error": {"message": "x"}},
+        judge_error="no credentials",
+    )
+    result["grade"] = None
+    result["score"] = None
+
+    lines = render.suite_result_lines(result)
+
+    assert lines[0] == f"{render.MARKER} grade -  score=None  0/1 cases passed"
+    assert lines[-1] == f"{render.MARKER} judge error: no credentials"
+
+
+def test_an_unknown_case_status_still_renders():
+    lines = render.suite_result_lines(_suite_result({"id": "z", "status": "new", "score": None}))
+
+    assert lines[1] == f"{render.MARKER}   ?       -   z"
+
+
+def test_a_failed_case_without_reasoning_prints_just_its_line():
+    lines = render.suite_result_lines(
+        _suite_result({"id": "b", "status": "failed", "score": 0.1, "reasoning": None})
+    )
+
+    assert lines[1] == f"{render.MARKER}   FAIL  0.10  b"
+
+
+def test_run_progress_names_the_case_when_there_is_one():
+    assert render.eval_progress_line({"type": "run_started", "index": 3, "case_id": "k"}) == (
+        f"{render.MARKER} run 3 [k] started"
+    )
+    assert render.eval_progress_line(
+        {"type": "run_failed", "index": 3, "case_id": "k", "error": {"message": "boom"}}
+    ) == f"{render.MARKER} run 3 [k] failed: boom"
+    # ...and does not invent one when there is none.
+    assert render.eval_progress_line({"type": "run_started", "index": 3}) == (
+        f"{render.MARKER} run 3 started"
+    )

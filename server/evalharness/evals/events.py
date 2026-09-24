@@ -32,7 +32,24 @@ class EvalStartEvent(_Event):
     n: int
 
 
-class RunStartedEvent(_Event):
+class _RunEvent(_Event):
+    """A per-run event. ``case_id`` names the suite case the run belongs to.
+
+    Omitted from the wire form entirely -- not sent as ``null`` -- when there is
+    no case, so a determinism or grade evaluation's events are byte-for-byte
+    what they were before suites existed.
+    """
+
+    case_id: str | None = None
+
+    def as_log_entry(self) -> dict[str, Any]:
+        entry = super().as_log_entry()
+        if entry.get("case_id") is None:
+            entry.pop("case_id", None)
+        return entry
+
+
+class RunStartedEvent(_RunEvent):
     type: Literal["run_started"] = "run_started"
     index: int
 
@@ -43,7 +60,7 @@ class RunSummary(BaseModel):
     duration_ms: int = 0
 
 
-class RunCompletedEvent(_Event):
+class RunCompletedEvent(_RunEvent):
     type: Literal["run_completed"] = "run_completed"
     index: int
     run_id: str
@@ -51,7 +68,7 @@ class RunCompletedEvent(_Event):
     summary: RunSummary = Field(default_factory=RunSummary)
 
 
-class RunFailedEvent(_Event):
+class RunFailedEvent(_RunEvent):
     type: Literal["run_failed"] = "run_failed"
     index: int
     error: Any = None

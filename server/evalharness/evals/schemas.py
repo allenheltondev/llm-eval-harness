@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -13,6 +14,16 @@ from evalharness.providers import DEFAULT_PROVIDER, Provider
 
 MIN_RUNS = 2
 MAX_RUNS = 25
+DEFAULT_DETERMINISM_RUNS = 10
+
+#: Bounds on a test suite. Rejected when exceeded, never clamped: silently
+#: dropping cases from a suite would report a pass rate for tests nobody ran.
+MAX_SUITE_CASES = 100
+MAX_SUITE_REPEATS = 10
+MAX_SUITE_RUNS = 200
+#: A case passes when its mean judge score (0-1) reaches this, unless the suite
+#: sets its own ``pass_threshold``.
+DEFAULT_PASS_THRESHOLD = 0.7
 
 
 class GraderConfig(BaseModel):
@@ -57,6 +68,101 @@ class GraderConfig(BaseModel):
         return self
 
 
+class SuiteRunConfig(RunRequest):
+    """What every case in a suite runs with: a ``RunRequest`` minus the prompt.
+
+    A subclass rather than a copy of the fields, so a setting added to runs is
+    automatically a setting suites accept -- and the guardrail/provider rule
+    and every other ``RunRequest`` validator apply here too.
+
+    ``user_prompt`` is each case's ``input``. Setting it here is rejected rather
+    than ignored: a suite file that sets one is written by someone who thinks it
+    does something.
+
+    It is excluded from serialization *at the field*, not at each call site.
+    Otherwise every ``model_dump()`` carries the default ``user_prompt: ""``,
+    and whatever re-validates that dump -- the cloud worker, parsing the payload
+    the server sent -- sees the field as set and rejects the suite. Excluding it
+    here means no serialization path can leak it.
+    """
+
+    user_prompt: str = Field(default="", exclude=True)
+
+    @model_validator(mode="after")
+    def _prompt_comes_from_the_cases(self) -> SuiteRunConfig:
+        if "user_prompt" in self.model_fields_set:
+            raise BadRequestError(
+                "A suite's run_config cannot set user_prompt: each case's `input` is the prompt",
+                code="suite_user_prompt",
+            )
+        return self
+
+    def for_case(self, case: SuiteCase) -> RunRequest:
+        """The run one execution of ``case`` performs. Never streamed."""
+        settings = self.model_dump(exclude={"user_prompt", "stream"})
+        return RunRequest(**settings, user_prompt=case.input, stream=False)
+
+
+class SuiteCase(BaseModel):
+    """One test: a prompt, and what a good answer looks like.
+
+    ``expected`` is a reference answer the judge compares against (facts, not
+    wording). ``criteria`` is what *this* case must satisfy, in plain language,
+    added to the suite's rubric for this case alone. Either, both, or neither --
+    a case with neither is judged on the rubric by itself.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    input: str = Field(min_length=1)
+    expected: str | None = None
+    criteria: str | None = None
+
+
+class Suite(BaseModel):
+    """A named set of cases, run against one shared configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    run_config: SuiteRunConfig
+    cases: list[SuiteCase] = Field(min_length=1)
+    #: How many times each case runs. More than one exposes a case that passes
+    #: only some of the time; the case's score is the mean across repeats.
+    repeats: int = Field(default=1, ge=1, le=MAX_SUITE_REPEATS)
+    pass_threshold: float = Field(default=DEFAULT_PASS_THRESHOLD, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _cases_are_distinct_and_bounded(self) -> Suite:
+        counts = Counter(case.id for case in self.cases)
+        duplicates = sorted(case_id for case_id, count in counts.items() if count > 1)
+        if duplicates:
+            raise BadRequestError(
+                f"Case ids must be unique within a suite; repeated: {', '.join(duplicates)}",
+                detail={"duplicates": duplicates},
+                code="suite_duplicate_case",
+            )
+        if len(self.cases) > MAX_SUITE_CASES:
+            raise BadRequestError(
+                f"A suite may have at most {MAX_SUITE_CASES} cases; this one has {len(self.cases)}",
+                detail={"cases": len(self.cases), "max_cases": MAX_SUITE_CASES},
+                code="suite_too_large",
+            )
+        if self.planned_runs > MAX_SUITE_RUNS:
+            raise BadRequestError(
+                f"{len(self.cases)} cases x {self.repeats} repeats is {self.planned_runs} runs; "
+                f"a suite may make at most {MAX_SUITE_RUNS}",
+                detail={"runs": self.planned_runs, "max_runs": MAX_SUITE_RUNS},
+                code="suite_too_large",
+            )
+        return self
+
+    @property
+    def planned_runs(self) -> int:
+        return len(self.cases) * self.repeats
+
+
 class EvaluationRequest(BaseModel):
     """Body of ``POST /api/v1/evaluations``.
 
@@ -64,6 +170,9 @@ class EvaluationRequest(BaseModel):
         Execute ``run_config`` ``n`` times and grade the batch for determinism.
     ``kind="grade"``
         Grade the already-stored runs named by ``run_ids``.
+    ``kind="suite"``
+        Run every case of ``suite`` (``repeats`` times each) and grade each
+        answer against that case's expectations. See ``docs/suites.md``.
 
     Unknown fields are ignored (same policy as ``RunRequest``), and ``n`` is
     clamped into ``[2, 25]`` rather than rejected.
@@ -71,9 +180,10 @@ class EvaluationRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    kind: Literal["determinism", "grade"]
+    kind: Literal["determinism", "grade", "suite"]
     run_config: RunRequest | None = None
-    n: int = 10
+    suite: Suite | None = None
+    n: int = DEFAULT_DETERMINISM_RUNS
     run_ids: list[str] = Field(default_factory=list)
     rubric: str | None = None
     grader: GraderConfig = Field(default_factory=GraderConfig)
@@ -89,21 +199,34 @@ class EvaluationRequest(BaseModel):
             # The runs are consumed internally, never streamed to a client.
             self.run_config = self.run_config.model_copy(update={"stream": False})
             self.n = max(MIN_RUNS, min(self.n, MAX_RUNS))
+        elif self.kind == "suite":
+            if self.suite is None:
+                raise BadRequestError("suite is required when kind is 'suite'")
         elif not self.run_ids:
             raise BadRequestError("run_ids is required when kind is 'grade'")
         return self
 
     def stored_config(self) -> dict:
         """The ``config`` JSON persisted on the evaluation row."""
-        return {
+        config = {
             "kind": self.kind,
-            "n": self.n if self.kind == "determinism" else len(self.run_ids),
+            "n": self.planned_runs,
             "run_config": self.run_config.model_dump() if self.run_config else None,
             "rubric": self.rubric,
             "grader": self.grader.model_dump(),
         }
+        if self.suite is not None:
+            # The whole suite, so a stored evaluation says exactly what was tested.
+            config["suite"] = self.suite.model_dump()
+            config["run_config"] = config["suite"]["run_config"]
+        return config
 
     @property
     def planned_runs(self) -> int:
         """How many runs this evaluation will report on."""
-        return self.n if self.kind == "determinism" else len(self.run_ids)
+        if self.kind == "determinism":
+            return self.n
+        if self.kind == "suite":
+            assert self.suite is not None
+            return self.suite.planned_runs
+        return len(self.run_ids)
