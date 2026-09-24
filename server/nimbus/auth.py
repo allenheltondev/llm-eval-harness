@@ -21,7 +21,17 @@ server and are simply absent locally::
     NIMBUS_AUTH_USER_POOL_ID   e.g. us-east-1_AbCdEfGhI
     NIMBUS_AUTH_CLIENT_ID      the app client id
 
-With either unset :func:`auth_enabled` is false and :func:`require_auth` is a
+A third, optional setting authorizes as well as authenticates::
+
+    NIMBUS_AUTH_REQUIRED_GROUP   e.g. nimbus
+
+With it set, a valid token is not enough: its ``cognito:groups`` must include
+this group, or the request is refused with ``403 forbidden``. That is what
+makes a *shared* pool safe -- one that several apps use and that anyone can
+sign up to -- because signing up proves who someone is, not that they may run
+evaluations on this stack's AWS bill.
+
+With either of the first two unset :func:`auth_enabled` is false and :func:`require_auth` is a
 no-op -- ``make dev``, the fake-model mode and the E2E suite run exactly as
 before. With both set every router except ``/health`` requires a valid token
 (``/health`` is where the SPA learns *that* auth is required, and which pool
@@ -63,6 +73,13 @@ _ALGORITHMS = ["RS256"]
 _CLIENT_CLAIM_BY_TOKEN_USE = {"id": "aud", "access": "client_id"}
 
 
+class ForbiddenError(AppError):
+    """A valid token for someone who has not been granted this stack."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "forbidden"
+
+
 class UnauthorizedError(AppError):
     """The request carried no usable bearer token.
 
@@ -81,6 +98,8 @@ class AuthConfig:
     region: str
     user_pool_id: str
     client_id: str
+    #: The group a token must carry in ``cognito:groups``; ``None`` for any.
+    required_group: str | None = None
 
     @property
     def issuer(self) -> str:
@@ -99,6 +118,7 @@ def auth_config(settings: Settings) -> AuthConfig | None:
         region=settings.aws_region,
         user_pool_id=settings.auth_user_pool_id,
         client_id=settings.auth_client_id,
+        required_group=settings.auth_required_group,
     )
 
 
@@ -111,19 +131,27 @@ def health_block(settings: Settings) -> dict[str, Any]:
     """The ``auth`` object ``GET /health`` publishes.
 
     ``required`` tells the SPA whether to show a sign-in screen at all; the
-    other three are exactly the inputs its Cognito calls need. None of them is
-    a secret -- a user pool id and a public app client id are visible to every
-    browser that signs in anyway.
+    pool fields are exactly the inputs its Cognito calls need, and
+    ``required_group`` names the group access takes. None of them is a secret --
+    a user pool id and a public app client id are visible to every browser that
+    signs in anyway.
+
+    ``supports_required_group`` says this server *enforces* a required group
+    when one is configured. A deploy that moves the stack to a shared pool
+    checks it on the live server first (scripts/check-deploy-prerequisites.sh):
+    code that predates the check would accept any account in that pool.
     """
     config = auth_config(settings)
     if config is None:
-        return {"required": False}
+        return {"required": False, "supports_required_group": True}
     return {
         "required": True,
         "provider": "cognito",
         "region": config.region,
         "user_pool_id": config.user_pool_id,
         "client_id": config.client_id,
+        "required_group": config.required_group,
+        "supports_required_group": True,
     }
 
 
@@ -232,9 +260,11 @@ async def verify_token(token: str, config: AuthConfig) -> dict[str, Any]:
 async def require_auth(request: Request, settings: Settings = Depends(get_settings)) -> None:
     """Router-level dependency: reject the request unless it carries a valid token.
 
-    A no-op when auth is not configured. On success the verified claims are
-    left on ``request.state.user`` for any handler that wants the caller's
-    identity (nothing does yet -- the harness is single-tenant).
+    A no-op when auth is not configured. With a required group, a valid token
+    whose ``cognito:groups`` lacks it is ``403`` -- signed in, but not granted
+    this stack. On success the verified claims are left on
+    ``request.state.user`` for any handler that wants the caller's identity
+    (nothing does yet -- the harness is single-tenant).
     """
     config = auth_config(settings)
     if config is None:
@@ -242,4 +272,13 @@ async def require_auth(request: Request, settings: Settings = Depends(get_settin
     token = bearer_token(request)
     if token is None:
         raise UnauthorizedError("A valid bearer token is required")
-    request.state.user = await verify_token(token, config)
+    claims = await verify_token(token, config)
+    if config.required_group is not None:
+        groups = claims.get("cognito:groups")
+        if not isinstance(groups, list) or config.required_group not in groups:
+            logger.info("Refused %s: not in group %s", claims.get("sub"), config.required_group)
+            raise ForbiddenError(
+                "This account has not been granted access to this Nimbus stack",
+                detail={"required_group": config.required_group},
+            )
+    request.state.user = claims

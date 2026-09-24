@@ -119,6 +119,10 @@ def history_check(settings: Settings) -> Check:
     return Check("history", "ok", str(path))
 
 
+#: What to do when the stack refuses a signed-in account.
+_GRANT_FIX = "ask the stack's owner to grant you access (`make grant-access EMAIL=...`)"
+
+
 async def stack_checks(login: remote.Login | None) -> list[Check]:
     """The signed-in stack: reachable, still accepting the sign-in, and what it offers."""
     if login is None or not login.signed_in:
@@ -139,6 +143,8 @@ async def stack_checks(login: remote.Login | None) -> list[Check]:
             listed = await api.get("/models")
     except remote.NotSignedInError as exc:
         return [Check("stack", "fail", exc.message, "`nimbus login` to sign in again")]
+    except remote.RemoteForbiddenError as exc:
+        return [Check("stack", "fail", f"{login.url}{who}: {exc.message}", _GRANT_FIX)]
     except remote.RemoteError as exc:
         return [Check("stack", "fail", exc.message, f"check that {login.url} is up")]
     lane = "cloud" if (health.get("cloud_evals") or {}).get("configured") else "server"
