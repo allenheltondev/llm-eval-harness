@@ -15,7 +15,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { InferenceConfig, ModelSource, RunGuardrailConfig, RunRequest } from '../api'
 
-/** localStorage key. */
+/** localStorage key. Named before the rename to Nimbus, and kept so saved state survives it. */
 export const RUN_CONFIG_STORAGE_KEY = 'evalharness.run-config'
 
 /** The serializable half of the store (this is exactly what is persisted). */

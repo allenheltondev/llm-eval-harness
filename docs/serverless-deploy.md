@@ -28,7 +28,7 @@ distribution-wide `CustomErrorResponses` (which would corrupt the API's own
 | Piece | Deployed as |
 |---|---|
 | FastAPI server | One Lambda function (zip, arm64, Python 3.12) running the UNCHANGED
-  `evalharness.main:app` behind the **AWS Lambda Web Adapter** layer, exposed via a
+  `nimbus.main:app` behind the **AWS Lambda Web Adapter** layer, exposed via a
   **Function URL with `InvokeMode: RESPONSE_STREAM`** so `POST /runs` and the
   evaluation event streams keep their NDJSON semantics. `AWS_LWA_INVOKE_MODE=response_stream`. |
 | React SPA | Static build in S3 behind CloudFront. `VITE_API_URL` baked at build
@@ -41,12 +41,12 @@ Memory 1024MB default, parameterized.
 
 ## History backend
 
-`EVALHARNESS_HISTORY_BACKEND: "sqlite" | "dynamodb" | "auto"` (default `auto`:
+`NIMBUS_HISTORY_BACKEND: "sqlite" | "dynamodb" | "auto"` (default `auto`:
 dynamodb when running inside Lambda — detect via `AWS_LAMBDA_FUNCTION_NAME` —
 else sqlite).
 
 The DynamoDB backend implements the SAME repository surface as
-`evalharness/store/history.py` (create_run/update_run/get_run/delete_run/
+`nimbus/store/history.py` (create_run/update_run/get_run/delete_run/
 list_runs/iter_runs_export/create_evaluation/update_evaluation/get_evaluation/
 list_evaluations, identical signatures and cursor semantics) against the
 stack's `EvalTable`, REUSING the cloud-eval item shapes verbatim
@@ -60,7 +60,7 @@ post-page like the existing cloud listing. TTL: history is kept for
 Evaluations in the deployed server are cloud-lane only:
 - `POST /evaluations` with `execution: "local"` → 400
   `{"error": {"code": "local_lane_unavailable", ...}}` when the local lane is off.
-- Local lane availability is a setting: `EVALHARNESS_LOCAL_EVALS: bool` default
+- Local lane availability is a setting: `NIMBUS_LOCAL_EVALS: bool` default
   `auto` semantics — disabled when running in Lambda, enabled otherwise.
 - Health gains `"local_evals": {"available": bool}`; the UI's "This machine"
   option disables (with hint) when false, and the default flips to cloud.
@@ -83,8 +83,8 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
   `UserPoolClient` (`USER_PASSWORD_AUTH` + `REFRESH_TOKEN_AUTH`, no secret,
   1h id/access tokens, 30-day refresh). Outputs `UserPoolId`,
   `UserPoolClientId`. The server function gets
-  `EVALHARNESS_AUTH_USER_POOL_ID` / `EVALHARNESS_AUTH_CLIENT_ID`.
-- **Server** (`evalharness/auth.py`): with both settings present, every router
+  `NIMBUS_AUTH_USER_POOL_ID` / `NIMBUS_AUTH_CLIENT_ID`.
+- **Server** (`nimbus/auth.py`): with both settings present, every router
   except `/health` carries a `require_auth` dependency. It accepts
   `Authorization: Bearer <jwt>` where the JWT is an ID token (`aud` = client)
   or an access token (`client_id` = client), RS256-signed by the pool's JWKS
@@ -119,7 +119,7 @@ the SAM template, the browser calling `cognito-idp` directly, no Hosted UI):
   `AppBucket`.
 - IAM for the server function role: Bedrock invoke + guardrails, DynamoDB on the
   table, `lambda:InvokeFunction` on the worker function. The
-  template injects EVALHARNESS_EVAL_TABLE / EVAL_FUNCTION_NAME / AUTH_* directly
+  template injects NIMBUS_EVAL_TABLE / EVAL_FUNCTION_NAME / AUTH_* directly
   from `!Ref`/`!GetAtt`; there is no runtime discovery of anything.
 
 ## Out of scope (documented, not built)

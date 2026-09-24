@@ -21,8 +21,8 @@ import time
 
 import pytest
 
-from evalharness.worker import interfaces, lambda_app
-from evalharness.worker.ddb import DynamoEvalStore
+from nimbus.worker import interfaces, lambda_app
+from nimbus.worker.ddb import DynamoEvalStore
 from tests.fake_dynamodb import FakeDynamoDBClient
 
 TABLE = "llm-eval-harness-ScenariosTable-TEST"
@@ -529,7 +529,7 @@ async def test_build_store_reads_the_runtime_environment(monkeypatch):
 
 async def test_build_store_applies_the_stacks_history_retention(monkeypatch):
     monkeypatch.setenv("TABLE_NAME", "some-table")
-    monkeypatch.setenv("EVALHARNESS_HISTORY_RETENTION_DAYS", "14")
+    monkeypatch.setenv("NIMBUS_HISTORY_RETENTION_DAYS", "14")
 
     store = lambda_app.build_store(EVAL_ID)
 
@@ -661,12 +661,12 @@ def real_engine(tmp_path, monkeypatch):
     `stall=True` makes every model call block inside `stream`, which is a real
     in-flight call the engine cannot poll `cancelled` during.
     """
-    from evalharness.config import Settings
-    from evalharness.engine.fake_model import FakeModel, Text
-    from evalharness.evals import engine as evals_engine
-    from evalharness.evals.judge import FakeJudgeModel
-    from evalharness.store import db
-    from evalharness.store import repo as store_repo
+    from nimbus.config import Settings
+    from nimbus.engine.fake_model import FakeModel, Text
+    from nimbus.evals import engine as evals_engine
+    from nimbus.evals.judge import FakeJudgeModel
+    from nimbus.store import db
+    from nimbus.store import repo as store_repo
 
     db.init_db(str(tmp_path / "worker.db"))
     store_repo.reset_cache()
@@ -1001,7 +1001,7 @@ def test_a_killed_invocations_leftovers_are_cleared_on_the_next(tmp_path):
 
 def test_the_previous_engine_is_restored_afterwards(tmp_path):
     """Scoping must not strand the process on a disposed engine for a deleted file."""
-    from evalharness.store import db
+    from nimbus.store import db
 
     outer = db.init_db(str(tmp_path / "outer.db"))
 
@@ -1043,7 +1043,7 @@ def test_a_scratch_setup_failure_happens_before_the_claim(monkeypatch, client, s
 def test_a_failing_dispose_still_restores_the_previous_engine(monkeypatch, tmp_path):
     """Restore first: a dispose that raises must not strand the process on a
     scratch engine whose file is about to be deleted."""
-    from evalharness.store import db
+    from nimbus.store import db
 
     outer = db.init_db(str(tmp_path / "outer.db"))
 
@@ -1062,8 +1062,8 @@ def test_a_failing_dispose_still_restores_the_previous_engine(monkeypatch, tmp_p
 async def test_a_suite_runs_on_the_cloud_lane(real_engine, client, store_factory):
     """The worker needs nothing suite-specific: the seam dispatches on kind, and
     the per-case result and `case_id` events land in DynamoDB like any other."""
-    from evalharness.evals import cloud
-    from evalharness.evals.schemas import EvaluationRequest
+    from nimbus.evals import cloud
+    from nimbus.evals.schemas import EvaluationRequest
 
     real_engine()
     # Exactly what the server would send -- serialized and parsed back -- not a

@@ -14,18 +14,18 @@ from typing import Any
 
 import pytest
 
-from evalharness.config import Settings
-from evalharness.engine.fake_model import FakeModel, Text
-from evalharness.errors import BadRequestError
-from evalharness.evals import engine as evals_engine
-from evalharness.evals import grader, rubrics
-from evalharness.evals.judge import FakeJudgeModel
-from evalharness.evals.schemas import (
+from nimbus.config import Settings
+from nimbus.engine.fake_model import FakeModel, Text
+from nimbus.errors import BadRequestError
+from nimbus.evals import engine as evals_engine
+from nimbus.evals import grader, rubrics
+from nimbus.evals.judge import FakeJudgeModel
+from nimbus.evals.schemas import (
     MAX_SUITE_CASES,
     MAX_SUITE_RUNS,
     EvaluationRequest,
 )
-from evalharness.store import db
+from nimbus.store import db
 from tests.test_evals_seam import Recorder, RecordingStore
 
 # --------------------------------------------------------------------------- #
@@ -567,8 +567,8 @@ def test_a_suite_survives_the_round_trip_to_the_cloud_worker():
     """
     import json
 
-    from evalharness.evals import cloud
-    from evalharness.worker import interfaces
+    from nimbus.evals import cloud
+    from nimbus.worker import interfaces
 
     request = suite_request([REFUND, HOURS], repeats=2)
     request = request.model_copy(update={"execution": "cloud"})

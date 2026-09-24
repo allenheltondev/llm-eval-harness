@@ -71,7 +71,7 @@ export default function AppShell() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="text-center sm:text-left">
               <h1 className="text-xl md:text-2xl font-bold text-primary-700 leading-tight">
-                LLM Eval Harness
+                Nimbus
               </h1>
               <p className="text-xs md:text-sm text-secondary-700">
                 Building enterprise-grade AI agents before it was cool

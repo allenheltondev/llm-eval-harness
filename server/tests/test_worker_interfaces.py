@@ -13,14 +13,14 @@ import sys
 
 import pytest
 
-from evalharness.worker import interfaces
+from nimbus.worker import interfaces
 
 
 def test_importing_the_worker_does_not_import_the_evals_engine():
     """The seam is resolved at call time, never at import time.
 
     Two things depend on this. The evals refactor is concurrent with this
-    package, so a module-scope import of ``evalharness.evals.engine`` would make
+    package, so a module-scope import of ``nimbus.evals.engine`` would make
     the whole worker un-importable until the seam lands; and a Lambda cold start
     should not pay for the run engine (boto3 clients, strands, the SQLite store)
     before an invocation has even arrived.
@@ -29,14 +29,14 @@ def test_importing_the_worker_does_not_import_the_evals_engine():
     interpreter's module table, which this one has already polluted.
     """
     probe = (
-        "import sys; import evalharness.worker.lambda_app;"
-        " assert 'evalharness.evals.engine' not in sys.modules, sorted(sys.modules)"
+        "import sys; import nimbus.worker.lambda_app;"
+        " assert 'nimbus.evals.engine' not in sys.modules, sorted(sys.modules)"
     )
     subprocess.run([sys.executable, "-c", probe], check=True)
 
 
 def test_load_seam_raises_when_the_engine_has_not_exposed_it(monkeypatch):
-    import evalharness.evals.engine as engine
+    import nimbus.evals.engine as engine
 
     monkeypatch.delattr(engine, interfaces.SEAM_FUNCTION_NAME, raising=False)
 
@@ -45,7 +45,7 @@ def test_load_seam_raises_when_the_engine_has_not_exposed_it(monkeypatch):
 
 
 def test_load_seam_finds_the_function_once_the_engine_exposes_it(monkeypatch):
-    import evalharness.evals.engine as engine
+    import nimbus.evals.engine as engine
 
     def seam(request, emit, store, cancelled=None):  # pragma: no cover - never called
         return {}
@@ -169,8 +169,8 @@ def test_normalize_carries_an_error_outcome_through():
 
 def test_the_dynamodb_store_satisfies_both_store_protocols():
     """The worker's restated protocol and the engine's real one must agree."""
-    from evalharness.evals.engine import EvalStore
-    from evalharness.worker.ddb import DynamoEvalStore
+    from nimbus.evals.engine import EvalStore
+    from nimbus.worker.ddb import DynamoEvalStore
 
     store = DynamoEvalStore("table", "eval-1", client=object())
     assert isinstance(store, interfaces.RunStore)

@@ -36,7 +36,7 @@ field existed). Nothing branches on it; the web UI labels its history with it.
 TTL (`expiresAt`, epoch seconds) depends on what the item is:
 
 - **History** — evaluation `META` and run items — is kept for the stack's
-  `HistoryRetentionDays` (`EVALHARNESS_HISTORY_RETENTION_DAYS`). `0`, the
+  `HistoryRetentionDays` (`NIMBUS_HISTORY_RETENTION_DAYS`). `0`, the
   default, keeps it forever: no `expiresAt` at all. An evaluation's `META` is
   re-stamped when it settles, so a row begun under an older rule takes the
   current one.
@@ -112,14 +112,14 @@ grading when the hard bound is reached, and settled as `error` with code
 `deadline_exceeded`, keeping whatever runs finished. See
 `docs/cloud-evals-infra.md`.
 
-The worker reuses `evalharness`'s existing engine/evals/tools code; the ONLY
+The worker reuses `nimbus`'s existing engine/evals/tools code; the ONLY
 behavioral difference is the emitter (DDB writes instead of asyncio queue) and
 the store (DDB items instead of SQLite). The eval engine gets an emitter/store
 seam to make that swap injectable.
 
 ## Configuration
 
-Server (pydantic-settings, `EVALHARNESS_` prefix):
+Server (pydantic-settings, `NIMBUS_` prefix):
 - `eval_function_name: str | None` — worker Lambda name; None = cloud lane unavailable.
 - `eval_table: str | None` — DynamoDB table name (the stack's `TableName` output; also
   the deployed server's history store).

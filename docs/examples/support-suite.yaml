@@ -1,7 +1,7 @@
 # A test suite for a customer-support prompt.
 #
-#   evalharness eval --suite docs/examples/support-suite.yaml
-#   evalharness eval --suite docs/examples/support-suite.yaml -m <another-model>
+#   nimbus eval --suite docs/examples/support-suite.yaml
+#   nimbus eval --suite docs/examples/support-suite.yaml -m <another-model>
 #
 # Reference: docs/suites.md
 

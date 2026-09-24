@@ -1,6 +1,6 @@
 """Which backend and which lanes a process resolves to, and what it refuses.
 
-Covers ``evalharness.deployment`` (the resolution matrix from
+Covers ``nimbus.deployment`` (the resolution matrix from
 ``docs/serverless-deploy.md``), the repository provider built on it, the startup
 behaviour of ``main.lifespan``, and the ``POST /evaluations`` local-lane gate
 plus its health flag.
@@ -18,17 +18,17 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from evalharness import deployment, main
-from evalharness.config import Settings, get_settings
-from evalharness.errors import register_exception_handlers
-from evalharness.evals import cloud as evals_cloud
-from evalharness.evals import jobs as evals_jobs
-from evalharness.routers import health as health_router
-from evalharness.routers import runs
-from evalharness.store import db
-from evalharness.store import repo as store_repo
-from evalharness.store.ddb_history import DynamoHistoryRepo
-from evalharness.store.repo import SqliteHistoryRepo
+from nimbus import deployment, main
+from nimbus.config import Settings, get_settings
+from nimbus.errors import register_exception_handlers
+from nimbus.evals import cloud as evals_cloud
+from nimbus.evals import jobs as evals_jobs
+from nimbus.routers import health as health_router
+from nimbus.routers import runs
+from nimbus.store import db
+from nimbus.store import repo as store_repo
+from nimbus.store.ddb_history import DynamoHistoryRepo
+from nimbus.store.repo import SqliteHistoryRepo
 from tests.fake_table import FakeTable
 
 TABLE_NAME = "llm-eval-harness-store"
@@ -91,8 +91,8 @@ def test_local_evals_resolution(monkeypatch, configured, lambda_, expected):
 
 
 def test_the_settings_come_from_prefixed_env_vars(monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_HISTORY_BACKEND", "dynamodb")
-    monkeypatch.setenv("EVALHARNESS_LOCAL_EVALS", "off")
+    monkeypatch.setenv("NIMBUS_HISTORY_BACKEND", "dynamodb")
+    monkeypatch.setenv("NIMBUS_LOCAL_EVALS", "off")
 
     settings = Settings()
 
@@ -109,7 +109,7 @@ def test_history_table_uses_the_resolved_eval_table():
 
 
 def test_a_dynamodb_backend_without_a_table_is_a_configuration_error():
-    with pytest.raises(deployment.HistoryBackendMisconfiguredError, match="EVALHARNESS_EVAL_TABLE"):
+    with pytest.raises(deployment.HistoryBackendMisconfiguredError, match="NIMBUS_EVAL_TABLE"):
         deployment.history_table(Settings())
 
 
@@ -125,7 +125,7 @@ def test_the_provider_returns_the_sqlite_repository_by_default():
 def test_the_provider_returns_the_dynamodb_repository_in_lambda(monkeypatch, in_lambda):
     table = FakeTable()
     monkeypatch.setattr(
-        "evalharness.evals.ddb_reader.build_table", lambda name, region: table
+        "nimbus.evals.ddb_reader.build_table", lambda name, region: table
     )
 
     built = store_repo.get_history_repo(Settings(eval_table=TABLE_NAME))
@@ -166,7 +166,7 @@ async def test_lifespan_never_touches_sqlite_for_the_dynamodb_backend(monkeypatc
     """A deployed server has a read-only filesystem; creating ./data would fail."""
     table = FakeTable()
     monkeypatch.setattr(
-        "evalharness.evals.ddb_reader.build_table", lambda name, region: table
+        "nimbus.evals.ddb_reader.build_table", lambda name, region: table
     )
     monkeypatch.setattr(main, "init_db", lambda path: pytest.fail("init_db was called"))
     monkeypatch.setattr(

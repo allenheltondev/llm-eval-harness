@@ -14,7 +14,7 @@ const PREINSTALLED_CHROMIUM = '/opt/pw-browsers/chromium'
  *
  * `/api/v1/models` fails in this environment (no AWS credentials), so specs
  * must not depend on catalog data — the Workbench's manual model-id fallback
- * is what they drive. `EVALHARNESS_FAKE_MODEL=1` gives full run/eval
+ * is what they drive. `NIMBUS_FAKE_MODEL=1` gives full run/eval
  * functionality with zero AWS calls (a scripted model *and* judge).
  *
  * Chromium is preinstalled in this environment at a revision `@playwright/test`
@@ -72,11 +72,11 @@ export default defineConfig({
       // open connections — a later pooled connection would reopen the
       // (now-recreated-empty) path and see "no such table". Deleting before
       // `uv run` even starts is the only ordering that is actually hermetic.
-      command: `rm -f ${E2E_DB_PATH} ${E2E_DB_PATH}-wal ${E2E_DB_PATH}-shm && uv run uvicorn evalharness.main:app --port 8000`,
+      command: `rm -f ${E2E_DB_PATH} ${E2E_DB_PATH}-wal ${E2E_DB_PATH}-shm && uv run uvicorn nimbus.main:app --port 8000`,
       cwd: '../server',
       env: {
-        EVALHARNESS_FAKE_MODEL: '1',
-        EVALHARNESS_DB_PATH: E2E_DB_PATH
+        NIMBUS_FAKE_MODEL: '1',
+        NIMBUS_DB_PATH: E2E_DB_PATH
       },
       url: 'http://localhost:8000/api/v1/health',
       reuseExistingServer: false,

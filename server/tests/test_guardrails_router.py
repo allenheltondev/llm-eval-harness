@@ -1,8 +1,8 @@
-"""Tests for evalharness.routers.guardrails: envelope shapes and status codes.
+"""Tests for nimbus.routers.guardrails: envelope shapes and status codes.
 
 Builds a standalone FastAPI app wiring only the guardrails router and the
 shared error handlers (register_exception_handlers), per the shared-tree
-testing convention -- it does not depend on evalharness.main.create_app.
+testing convention -- it does not depend on nimbus.main.create_app.
 """
 
 from collections.abc import AsyncIterator
@@ -12,15 +12,15 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from evalharness.errors import NotFoundError, register_exception_handlers
-from evalharness.guardrails.schemas import (
+from nimbus.errors import NotFoundError, register_exception_handlers
+from nimbus.guardrails.schemas import (
     ContentFilter,
     ContentPolicy,
     GuardrailDetail,
     GuardrailSummary,
     GuardrailVersionSummary,
 )
-from evalharness.routers import guardrails
+from nimbus.routers import guardrails
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

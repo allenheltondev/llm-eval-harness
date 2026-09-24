@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from evalharness.tools import registry
+from nimbus.tools import registry
 
 FRAUD_TOOL_NAMES = [
     "freeze_account",

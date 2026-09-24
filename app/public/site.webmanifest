@@ -1,6 +1,6 @@
 {
-  "name": "LLM Eval Harness",
-  "short_name": "Eval Harness",
+  "name": "Nimbus",
+  "short_name": "Nimbus",
   "description": "Bedrock LLM Analyzer - Test and compare AI models",
   "icons": [
     {

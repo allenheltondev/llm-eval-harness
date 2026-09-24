@@ -1,4 +1,4 @@
-"""Tests for the run/evaluation history read-side REST API (evalharness.routers.runs).
+"""Tests for the run/evaluation history read-side REST API (nimbus.routers.runs).
 
 Builds its own standalone FastAPI app (per shared-tree test conventions): includes
 only ``runs.router``, wires up the existing error handlers, and points the store at
@@ -13,10 +13,10 @@ import pytest
 from fastapi import FastAPI
 from sqlmodel import Session
 
-from evalharness.errors import register_exception_handlers
-from evalharness.routers import runs
-from evalharness.schemas.runs import RunDetail
-from evalharness.store import db, history
+from nimbus.errors import register_exception_handlers
+from nimbus.routers import runs
+from nimbus.schemas.runs import RunDetail
+from nimbus.store import db, history
 
 
 @pytest.fixture

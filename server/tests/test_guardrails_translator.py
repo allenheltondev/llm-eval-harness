@@ -1,4 +1,4 @@
-"""Tests for evalharness.guardrails.translator: schema <-> Bedrock shape mapping.
+"""Tests for nimbus.guardrails.translator: schema <-> Bedrock shape mapping.
 
 Verifies the ported mapping tables against botocore's actual CreateGuardrail
 service model (exact key names/casing) and round-trips full-featured and
@@ -8,7 +8,7 @@ minimal (single-policy) simplified configs through to_bedrock/from_bedrock.
 import boto3
 import pytest
 
-from evalharness.guardrails.schemas import (
+from nimbus.guardrails.schemas import (
     ContentFilter,
     ContentPolicy,
     ContextualGrounding,
@@ -18,7 +18,7 @@ from evalharness.guardrails.schemas import (
     PiiPolicy,
     WordPolicy,
 )
-from evalharness.guardrails.translator import from_bedrock, to_bedrock
+from nimbus.guardrails.translator import from_bedrock, to_bedrock
 
 # ---------------------------------------------------------------------------
 # botocore service-model ground truth

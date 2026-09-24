@@ -1,4 +1,4 @@
-"""Tests for the command-line interface (evalharness.cli).
+"""Tests for the command-line interface (nimbus.cli).
 
 These drive the real entry point -- ``main(argv, stdin=, stdout=, stderr=)`` --
 against the scripted fake model and a tmp_path sqlite file, so a passing test
@@ -21,13 +21,13 @@ import types
 
 import pytest
 
-from evalharness.cli import commands
-from evalharness.cli.main import COMMANDS, main
-from evalharness.engine.fake_model import FakeModel, Text
-from evalharness.errors import AppError, NotFoundError
-from evalharness.models_catalog import CatalogResult
-from evalharness.store import db as store_db
-from evalharness.store import repo as store_repo
+from nimbus.cli import commands
+from nimbus.cli.main import COMMANDS, main
+from nimbus.engine.fake_model import FakeModel, Text
+from nimbus.errors import AppError, NotFoundError
+from nimbus.models_catalog import CatalogResult
+from nimbus.store import db as store_db
+from nimbus.store import repo as store_repo
 
 FAKE_PREFIX = "[fake-model]"
 
@@ -70,7 +70,7 @@ def db_path(tmp_path):
 @pytest.fixture(autouse=True)
 def fake_model(monkeypatch):
     """Every run in this module goes through the scripted model, never AWS."""
-    monkeypatch.setenv("EVALHARNESS_FAKE_MODEL", "1")
+    monkeypatch.setenv("NIMBUS_FAKE_MODEL", "1")
     # The sqlite engine is a module-level singleton that outlives a test, so a
     # test asserting on *which* database was opened has to start from unset.
     monkeypatch.setattr(store_db, "_engine", None)
@@ -113,7 +113,7 @@ class TestUsage:
         result = cli()
         assert result.code == 2
         assert result.out == ""
-        assert "usage: evalharness" in result.err
+        assert "usage: nimbus" in result.err
 
     def test_run_without_a_model_is_a_usage_error(self, cli):
         result = cli("run", "-p", "hi")
@@ -143,8 +143,8 @@ class TestUsage:
         trimming here would make one prompt mean two things depending on how it
         arrived.
         """
-        from evalharness.engine import runner
-        from evalharness.engine.fake_model import FakeModel, Text
+        from nimbus.engine import runner
+        from nimbus.engine.fake_model import FakeModel, Text
 
         seen = {}
 
@@ -234,8 +234,8 @@ class TestRun:
         redirected file, which is exactly what the documented
         answer-plus-one-newline contract promises not to do.
         """
-        from evalharness.engine import runner
-        from evalharness.engine.fake_model import FakeModel, Text
+        from nimbus.engine import runner
+        from nimbus.engine.fake_model import FakeModel, Text
 
         monkeypatch.setattr(
             runner, "build_model", lambda request, settings: FakeModel([Text(script_text)])
@@ -243,8 +243,8 @@ class TestRun:
         assert cli("run", "-m", "m1", "-p", "hi").out == expected
 
     def test_a_run_that_produces_no_text_writes_nothing_to_stdout(self, cli, monkeypatch):
-        from evalharness.engine import runner
-        from evalharness.engine.fake_model import FakeModel
+        from nimbus.engine import runner
+        from nimbus.engine.fake_model import FakeModel
 
         monkeypatch.setattr(runner, "build_model", lambda request, settings: FakeModel([]))
         assert cli("run", "-m", "m1", "-p", "hi").out == ""
@@ -286,8 +286,8 @@ class TestRun:
         """
         from strands.types.exceptions import ModelThrottledException
 
-        from evalharness.engine import runner
-        from evalharness.engine.fake_model import Error, FakeModel, Text
+        from nimbus.engine import runner
+        from nimbus.engine.fake_model import Error, FakeModel, Text
 
         script = [Text("partial answer"), Error(ModelThrottledException("slow down"))]
         monkeypatch.setattr(runner, "build_model", lambda request, settings: FakeModel(script))
@@ -329,7 +329,7 @@ class TestEval:
 
     def test_json_lines_are_the_same_bytes_the_events_endpoint_serves(self, cli):
         """One wire format, whichever door you came through."""
-        from evalharness.evals.jobs import to_json_line
+        from nimbus.evals.jobs import to_json_line
 
         lines = cli("eval", "--json", "-m", "m1", "-p", "hi", "-n", "2").out.splitlines(
             keepends=True
@@ -496,7 +496,7 @@ class TestRunsAndShow:
     def test_an_id_that_is_neither_names_both_possibilities(self, cli):
         result = cli("show", "nope")
         assert result.code == 1
-        assert result.err == "evalharness: No run or evaluation with id 'nope'\n"
+        assert result.err == "nimbus: No run or evaluation with id 'nope'\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -509,7 +509,7 @@ def test_serve_is_not_a_coroutine():
 
     uvicorn.run() calls asyncio.run() itself and, with --reload, forks a
     supervisor. If this were a coroutine the dispatcher would drive it inside
-    a running loop and `evalharness serve` would die with "asyncio.run()
+    a running loop and `nimbus serve` would die with "asyncio.run()
     cannot be called from a running event loop" instead of serving.
     """
     assert not inspect.iscoroutinefunction(commands.serve)
@@ -537,7 +537,7 @@ def test_serve_starts_uvicorn_outside_any_running_event_loop(cli, monkeypatch):
     result = cli("serve", "--host", "0.0.0.0", "--port", "9999")
 
     assert result.code == 0
-    assert calls["target"] == "evalharness.main:app"
+    assert calls["target"] == "nimbus.main:app"
     assert calls["host"] == "0.0.0.0"
     assert calls["port"] == 9999
     assert calls["reload"] is False
@@ -551,10 +551,10 @@ def test_serve_exports_the_db_override_so_the_served_app_sees_it(cli, monkeypatc
     override held only in our Settings object would leave the CLI and the
     server it just started reading different history stores.
     """
-    monkeypatch.delenv("EVALHARNESS_DB_PATH", raising=False)
+    monkeypatch.delenv("NIMBUS_DB_PATH", raising=False)
     monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: None))
     assert cli("serve").code == 0
-    assert os.environ["EVALHARNESS_DB_PATH"] == db_path
+    assert os.environ["NIMBUS_DB_PATH"] == db_path
 
 
 def test_db_pins_the_backend_to_sqlite_not_just_the_path(cli, monkeypatch, db_path):
@@ -564,19 +564,19 @@ def test_db_pins_the_backend_to_sqlite_not_just_the_path(cli, monkeypatch, db_pa
     `history_backend`, so an environment carrying dynamodb created the file and
     then wrote every run to DynamoDB anyway.
     """
-    from evalharness.config import Settings
-    from evalharness.store.repo import SqliteHistoryRepo, get_history_repo
+    from nimbus.config import Settings
+    from nimbus.store.repo import SqliteHistoryRepo, get_history_repo
 
-    monkeypatch.setenv("EVALHARNESS_HISTORY_BACKEND", "dynamodb")
-    monkeypatch.setenv("EVALHARNESS_EVAL_TABLE", "some-table")
+    monkeypatch.setenv("NIMBUS_HISTORY_BACKEND", "dynamodb")
+    monkeypatch.setenv("NIMBUS_EVAL_TABLE", "some-table")
 
     assert cli("runs").code == 0
     assert isinstance(get_history_repo(Settings()), SqliteHistoryRepo)
-    assert os.environ["EVALHARNESS_HISTORY_BACKEND"] == "sqlite"
+    assert os.environ["NIMBUS_HISTORY_BACKEND"] == "sqlite"
 
 
 def test_a_malformed_setting_is_a_diagnostic_not_a_traceback(cli, monkeypatch):
-    """Settings() parses the whole EVALHARNESS_ environment and raises on a bad value.
+    """Settings() parses the whole NIMBUS_ environment and raises on a bad value.
 
     Built outside the guarded block it took down even `tools`, which never
     touches the setting, with a raw pydantic traceback.
@@ -585,10 +585,10 @@ def test_a_malformed_setting_is_a_diagnostic_not_a_traceback(cli, monkeypatch):
     always passes) deliberately overrides the latter, so a bad value there
     never reaches validation.
     """
-    monkeypatch.setenv("EVALHARNESS_LOCAL_EVALS", "maybe")
+    monkeypatch.setenv("NIMBUS_LOCAL_EVALS", "maybe")
     result = cli("tools")
     assert result.code == 2
-    assert result.err.startswith("evalharness: local_evals: ")
+    assert result.err.startswith("nimbus: local_evals: ")
     assert "Traceback" not in result.err
 
 
@@ -609,14 +609,14 @@ def test_an_application_error_is_one_line_not_a_traceback(cli, monkeypatch):
     monkeypatch.setitem(COMMANDS, "tools", boom)
     result = cli("tools")
     assert result.code == 1
-    assert result.err == "evalharness: nothing here\n"
+    assert result.err == "nimbus: nothing here\n"
     assert isinstance(NotFoundError("x"), AppError)
 
 
 def test_the_default_database_is_used_when_no_db_is_passed(monkeypatch, tmp_path):
     """--db is an override; without it the store follows the environment."""
-    monkeypatch.setenv("EVALHARNESS_FAKE_MODEL", "1")
-    monkeypatch.setenv("EVALHARNESS_DB_PATH", str(tmp_path / "from-env.db"))
+    monkeypatch.setenv("NIMBUS_FAKE_MODEL", "1")
+    monkeypatch.setenv("NIMBUS_DB_PATH", str(tmp_path / "from-env.db"))
     monkeypatch.setattr(store_db, "_engine", None)
     store_repo.reset_cache()
     out, err = io.StringIO(), io.StringIO()
@@ -625,8 +625,8 @@ def test_the_default_database_is_used_when_no_db_is_passed(monkeypatch, tmp_path
 
 
 def test_the_module_entry_point_exposes_the_same_main():
-    """`python -m evalharness.cli` and the console script are one entry point."""
-    from evalharness.cli import __main__
+    """`python -m nimbus.cli` and the console script are one entry point."""
+    from nimbus.cli import __main__
 
     assert __main__.main is main
 
@@ -738,7 +738,7 @@ class TestSuite:
         assert run.provider == "openai"
 
     def test_the_files_rubric_is_used_and_rubric_overrides_it(self, cli, suite_file, monkeypatch):
-        from evalharness.evals import engine as evals_engine
+        from nimbus.evals import engine as evals_engine
 
         seen: list = []
         real = evals_engine.execute_evaluation_with_seam
@@ -810,7 +810,7 @@ class TestSuite:
 
         assert result.code == 2
         assert result.err.count("\n") == 1, result.err
-        assert result.err.startswith(f"evalharness: --suite {path}")
+        assert result.err.startswith(f"nimbus: --suite {path}")
         assert message in result.err
 
     def test_a_missing_suite_file_is_a_usage_error(self, cli, tmp_path):
@@ -826,7 +826,7 @@ class TestSuiteOverrides:
     def _request(self, suite_file, *argv):
         import argparse  # noqa: F401 - mirrors how main builds the namespace
 
-        from evalharness.cli.main import build_parser, prepare
+        from nimbus.cli.main import build_parser, prepare
 
         args = build_parser().parse_args(["eval", "--suite", suite_file(), *argv])
         prepare(args, _Stdin("", tty=True))
@@ -887,7 +887,7 @@ class TestSuiteOverrides:
     ],
 )
 def test_every_cli_evaluation_says_it_came_from_the_cli(argv):
-    from evalharness.cli.main import build_parser, prepare
+    from nimbus.cli.main import build_parser, prepare
 
     args = build_parser().parse_args(argv)
     prepare(args, _Stdin("", tty=True))
@@ -896,7 +896,7 @@ def test_every_cli_evaluation_says_it_came_from_the_cli(argv):
 
 
 def test_a_cli_suite_says_it_came_from_the_cli(suite_file):
-    from evalharness.cli.main import build_parser, prepare
+    from nimbus.cli.main import build_parser, prepare
 
     args = build_parser().parse_args(["eval", "--suite", suite_file()])
     prepare(args, _Stdin("", tty=True))

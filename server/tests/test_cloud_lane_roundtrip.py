@@ -1,7 +1,7 @@
 """Cross-implementation round trip: the worker's DynamoDB writer feeding the
 server's DynamoDB reader.
 
-The writer (``evalharness.worker.ddb``) and the reader (``evalharness.evals``)
+The writer (``nimbus.worker.ddb``) and the reader (``nimbus.evals``)
 were built independently against ``docs/cloud-evals.md``. Each has its own fake
 and its own unit suite; this module is the seam test that proves the items one
 side writes are the items the other side expects — attribute names, JSON-string
@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from evalharness.evals import cloud
-from evalharness.evals.ddb_reader import EvalTable
-from evalharness.worker.ddb import DynamoEvalStore, unwrap
+from nimbus.evals import cloud
+from nimbus.evals.ddb_reader import EvalTable
+from nimbus.worker.ddb import DynamoEvalStore, unwrap
 from tests.fake_dynamodb import FakeDynamoDBClient
 from tests.test_evals_cloud import FakeTable
 

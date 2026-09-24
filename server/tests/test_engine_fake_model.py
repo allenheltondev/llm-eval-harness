@@ -3,7 +3,7 @@
 import pytest
 from strands import Agent
 
-from evalharness.engine.fake_model import (
+from nimbus.engine.fake_model import (
     Error,
     FakeModel,
     GuardrailTrace,
@@ -11,7 +11,7 @@ from evalharness.engine.fake_model import (
     Text,
     ToolUseStep,
 )
-from evalharness.engine.mapper import EventMapper
+from nimbus.engine.mapper import EventMapper
 
 
 async def _chunks(model: FakeModel, messages=None, **kwargs):

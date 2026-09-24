@@ -1,4 +1,4 @@
-"""``evalharness login`` / ``logout`` / ``whoami`` and ``eval --remote``.
+"""``nimbus login`` / ``logout`` / ``whoami`` and ``eval --remote``.
 
 The "remote" harness is the real evaluations API (``runs.router`` and the real
 engine, with scripted models) served in-process over ``httpx.ASGITransport``,
@@ -23,16 +23,16 @@ import httpx
 import pytest
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-from evalharness.cli import commands, remote
-from evalharness.cli.main import main
-from evalharness.errors import register_exception_handlers
-from evalharness.evals import engine as evals_engine
-from evalharness.evals import jobs as evals_jobs
-from evalharness.evals.judge import FakeJudgeModel, get_judge_factory
-from evalharness.routers import runs
-from evalharness.store import db, history
-from evalharness.store import db as store_db
-from evalharness.store import repo as store_repo
+from nimbus.cli import commands, remote
+from nimbus.cli.main import main
+from nimbus.errors import register_exception_handlers
+from nimbus.evals import engine as evals_engine
+from nimbus.evals import jobs as evals_jobs
+from nimbus.evals.judge import FakeJudgeModel, get_judge_factory
+from nimbus.routers import runs
+from nimbus.store import db, history
+from nimbus.store import db as store_db
+from nimbus.store import repo as store_repo
 from tests.test_cli import _Stdin
 from tests.test_evals_router import GatedModels, ScriptedModels
 
@@ -139,7 +139,8 @@ class Routed(httpx.AsyncBaseTransport):
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("NIMBUS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.delenv("EVALHARNESS_CONFIG_DIR", raising=False)
     monkeypatch.setattr(store_db, "_engine", None)
     store_repo.reset_cache()
     monkeypatch.setattr(evals_engine, "RETRY_BACKOFF_SECONDS", (0.0, 0.0))
@@ -208,7 +209,7 @@ def run_cli(*argv: str, stdin: str = "", tty: bool = False) -> Result:
 
 
 def sign_in(harness: Harness, **overrides: Any) -> remote.Login:
-    """Save a login as `evalharness login` would, and make the server accept it."""
+    """Save a login as `nimbus login` would, and make the server accept it."""
     login = remote.Login(
         url=URL,
         auth={"region": "us-east-1", "client_id": "client-1"},
@@ -230,7 +231,7 @@ def stored_evaluations() -> list[history.EvaluationRecord]:
 
 
 def _settings():
-    from evalharness.config import Settings
+    from nimbus.config import Settings
 
     return Settings()
 
@@ -334,7 +335,7 @@ class TestLogin:
         )
 
         assert result.code == 1
-        assert "is not an eval harness" in result.err
+        assert "is not a Nimbus server" in result.err
 
     def test_without_a_terminal_the_password_must_come_on_stdin(self):
         result = run_cli("login", "--url", URL, "--email", EMAIL)
@@ -531,14 +532,14 @@ class TestRemoteEval:
         result = run_cli("eval", "--remote", "-m", "m1", "-p", "hi")
 
         assert result.code == 1
-        assert "has expired: run `evalharness login`" in result.err
+        assert "has expired: run `nimbus login`" in result.err
         assert stored_evaluations() == []
 
     def test_signed_out_is_a_failure_with_directions(self):
         result = run_cli("eval", "--remote", "-m", "m1", "-p", "hi")
 
         assert result.code == 1
-        assert "evalharness login --url" in result.err
+        assert "nimbus login --url" in result.err
 
     def test_the_servers_own_error_is_what_the_user_reads(self, harness):
         sign_in(harness)
@@ -590,7 +591,7 @@ class TestRemoteEval:
 
 
 def _eval_args(*argv: str):
-    from evalharness.cli.main import build_parser, prepare
+    from nimbus.cli.main import build_parser, prepare
 
     args = build_parser().parse_args(list(argv))
     prepare(args, _Stdin("", tty=True))
@@ -761,7 +762,7 @@ class TestWhatGoesWrong:
         result = run_cli("login", "--url", URL)
 
         assert result.code == 1
-        assert "is not an eval harness" in result.err
+        assert "is not a Nimbus server" in result.err
         assert reason in result.err
 
     def test_an_unreachable_user_pool_is_named(self, app, monkeypatch):
@@ -796,7 +797,7 @@ class TestWhatGoesWrong:
         result = run_cli("eval", "--remote", "-m", "m1", "-p", "hi")
 
         assert result.code == 1
-        assert "has expired: run `evalharness login`" in result.err
+        assert "has expired: run `nimbus login`" in result.err
 
     def test_a_token_refused_even_after_a_refresh_is_reported(self, harness):
         sign_in(harness)
@@ -836,13 +837,13 @@ class TestWhatGoesWrong:
 
 
 def test_the_config_directory_follows_xdg_then_home(monkeypatch, tmp_path):
-    monkeypatch.delenv("EVALHARNESS_CONFIG_DIR")
+    monkeypatch.delenv("NIMBUS_CONFIG_DIR")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    assert remote.config_dir() == tmp_path / "xdg" / "evalharness"
+    assert remote.config_dir() == tmp_path / "xdg" / "nimbus"
 
     monkeypatch.delenv("XDG_CONFIG_HOME")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    assert remote.config_dir() == tmp_path / "home" / ".config" / "evalharness"
+    assert remote.config_dir() == tmp_path / "home" / ".config" / "nimbus"
 
 
 def test_clearing_a_login_that_is_not_there_says_so():
@@ -904,7 +905,7 @@ def test_a_tampered_login_file_cannot_redirect_a_refresh(harness, cognito, wired
     result = run_cli("eval", "--remote", "-m", "m1", "-p", "hi")
 
     assert result.code == 1
-    assert "run `evalharness login`" in result.err
+    assert "run `nimbus login`" in result.err
     # The refresh token went nowhere: not to the pool, not to the injected host.
     assert cognito.calls == []
     assert all("evil" not in host for host in wired.hosts)

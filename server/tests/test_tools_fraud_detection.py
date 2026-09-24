@@ -2,14 +2,14 @@
 
 None of the four legacy JS handlers (createAlert.js, flagTransaction.js,
 freezeAccount.js, updateRisk.js) perform explicit input validation -- see
-the module docstring in evalharness/tools/fraud_detection.py -- so there is
+the module docstring in nimbus/tools/fraud_detection.py -- so there is
 no "validation error" case to reproduce here; these tests cover happy-path
 shape/value parity with the JS handlers' documented computed fields instead.
 """
 
 from __future__ import annotations
 
-from evalharness.tools import fraud_detection as fd
+from nimbus.tools import fraud_detection as fd
 
 
 class TestFreezeAccount:
@@ -178,7 +178,7 @@ class TestCreateFraudAlert:
         # alert_type is a Literal in the tool signature, but the JS handler's
         # team lookup itself falls back to 'General Fraud Team' for any
         # unrecognized key -- exercise that fallback directly.
-        from evalharness.tools.fraud_detection import _investigation_team
+        from nimbus.tools.fraud_detection import _investigation_team
 
         assert _investigation_team("unmapped_type", "low") == "General Fraud Team"
 

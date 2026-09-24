@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the evalharness test suite."""
+"""Shared pytest fixtures for the nimbus test suite."""
 
 from collections.abc import AsyncIterator
 
@@ -6,26 +6,35 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from evalharness import auth, models_catalog
-from evalharness.errors import BadRequestError
-from evalharness.main import create_app
+from nimbus import auth, models_catalog
+from nimbus.errors import BadRequestError
+from nimbus.main import create_app
 
 #: Every env var that can switch a non-Bedrock provider on. Cleared for every
 #: test so the suite behaves identically on a laptop that happens to export
 #: ANTHROPIC_API_KEY or run an Ollama -- no test may reach the network.
 PROVIDER_ENV_VARS = (
-    "EVALHARNESS_ANTHROPIC_API_KEY",
+    "NIMBUS_ANTHROPIC_API_KEY",
     "ANTHROPIC_API_KEY",
-    "EVALHARNESS_OPENAI_API_KEY",
+    "NIMBUS_OPENAI_API_KEY",
     "OPENAI_API_KEY",
-    "EVALHARNESS_OLLAMA_BASE_URL",
+    "NIMBUS_OLLAMA_BASE_URL",
     "OLLAMA_HOST",
+    # The pre-rename names, still read (nimbus.config).
+    "EVALHARNESS_ANTHROPIC_API_KEY",
+    "EVALHARNESS_OPENAI_API_KEY",
+    "EVALHARNESS_OLLAMA_BASE_URL",
 )
 
-#: The two settings that switch bearer-token auth on (evalharness.auth). Also
+#: The two settings that switch bearer-token auth on (nimbus.auth). Also
 #: cleared per test: a developer with a deployed stack's values exported must
 #: not see every router test fail with 401.
-AUTH_ENV_VARS = ("EVALHARNESS_AUTH_USER_POOL_ID", "EVALHARNESS_AUTH_CLIENT_ID")
+AUTH_ENV_VARS = (
+    "NIMBUS_AUTH_USER_POOL_ID",
+    "NIMBUS_AUTH_CLIENT_ID",
+    "EVALHARNESS_AUTH_USER_POOL_ID",
+    "EVALHARNESS_AUTH_CLIENT_ID",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +64,7 @@ def isolated_tool_state():
     the same literal id. Clearing both before every test removes the
     dependency on process lifetime entirely.
     """
-    from evalharness.tools import fraud_detection
+    from nimbus.tools import fraud_detection
 
     fraud_detection._ACCOUNT_RISK.clear()
     yield

@@ -1,4 +1,4 @@
-"""Tests for evalharness.guardrails.schemas validation rules.
+"""Tests for nimbus.guardrails.schemas validation rules.
 
 Field-level constraints (lengths, patterns, ranges) are enforced by pydantic
 directly. Cross-field business rules are enforced by the standalone
@@ -10,7 +10,7 @@ validation_exception_handler; see the module docstring in schemas.py.
 import pydantic
 import pytest
 
-from evalharness.guardrails.schemas import (
+from nimbus.guardrails.schemas import (
     ContentFilter,
     ContentPolicy,
     ContextualGrounding,

@@ -17,7 +17,7 @@
  * calls `configureAuth` with it before anything else runs.
  */
 
-/** localStorage key for the session document. */
+/** localStorage key for the session document. Named before the rename to Nimbus, and kept so saved state survives it. */
 export const AUTH_STORAGE_KEY = 'evalharness.auth'
 
 export interface AuthConfig {

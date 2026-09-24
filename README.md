@@ -1,4 +1,4 @@
-# LLM Eval Harness
+# Nimbus
 
 An evaluation harness for LLM prompts and agents, built on the
 [Strands Agents SDK](https://strandsagents.com/). Run a prompt against a model with streaming
@@ -9,8 +9,8 @@ Evaluations are the product. A run is one execution of a prompt; an evaluation r
 (or grades runs you already have) and scores the batch with `strands-agents-evals`. Everything
 runs local-first; a serverless deployment (Lambda + CloudFront + Cognito) is optional.
 
-The `evalharness` command line is the primary interface — see **[docs/cli.md](docs/cli.md)**. The
-HTTP API and the web UI are the same engine behind a different door, and `evalharness serve`
+The `nimbus` command line is the primary interface — see **[docs/cli.md](docs/cli.md)**. The
+HTTP API and the web UI are the same engine behind a different door, and `nimbus serve`
 starts them.
 
 ## Architecture
@@ -74,7 +74,7 @@ This exists so CI and the E2E suite run free and hermetically; it is test infras
 usage mode.
 
 ```bash
-EVALHARNESS_FAKE_MODEL=1 make dev
+NIMBUS_FAKE_MODEL=1 make dev
 ```
 
 ### Real mode — live model calls
@@ -85,29 +85,29 @@ OLLAMA_HOST=localhost:11434 make dev       # or a local model, no cloud account 
 ```
 
 The app opens at `http://localhost:3000` and talks to the server at `http://localhost:8000`.
-History lives in `server/data/evalharness.db`.
+History lives in `server/data/nimbus.db`.
 
 ## Command line
 
-`make install` installs the console script into `server/.venv`, so it is `uv run evalharness`
-from `server/` — or plain `evalharness` once that venv is active, which is how the examples below
+`make install` installs the console script into `server/.venv`, so it is `uv run nimbus`
+from `server/` — or plain `nimbus` once that venv is active, which is how the examples below
 are written. The full reference is **[docs/cli.md](docs/cli.md)**; the shape of it:
 
 ```bash
-evalharness models                               # what can I run against?
-evalharness run -m <model-id> -p 'your prompt'   # one run, streamed
-evalharness eval -m <model-id> -p '...' -n 10    # determinism experiment, graded
-evalharness eval --run <id> --run <id>           # grade runs you already have
-evalharness runs                                 # history, newest first
-evalharness show <id>                            # one run or evaluation, as JSON
-evalharness serve                                # the HTTP API the web UI talks to
-evalharness login --url https://<your-stack>     # then, on the deployed stack:
-evalharness eval --remote --suite cases.yaml     #   runs there, shows in its web UI
+nimbus models                                    # what can I run against?
+nimbus run -m <model-id> -p 'your prompt'        # one run, streamed
+nimbus eval -m <model-id> -p '...' -n 10         # determinism experiment, graded
+nimbus eval --run <id> --run <id>                # grade runs you already have
+nimbus runs                                      # history, newest first
+nimbus show <id>                                 # one run or evaluation, as JSON
+nimbus serve                                     # the HTTP API the web UI talks to
+nimbus login --url https://<your-stack>          # then, on the deployed stack:
+nimbus eval --remote --suite cases.yaml          #   runs there, shows in its web UI
 ```
 
 Two conventions worth knowing up front:
 
-- **stdout is the product, stderr is the commentary.** `evalharness run ... > answer.txt` gets
+- **stdout is the product, stderr is the commentary.** `nimbus run ... > answer.txt` gets
   you the model's answer and nothing else, while token counts and tool calls still scroll past
   on the terminal. `--json` puts the NDJSON event stream on stdout instead — the same bytes the
   API serves, so scripts and wrappers read one format.
@@ -126,7 +126,7 @@ the model can call during the run. `GET /api/v1/tools` lists what is registered.
 ships; add your own next to it:
 
 ```python
-# server/evalharness/tools/support.py
+# server/nimbus/tools/support.py
 from strands import tool
 
 @tool(name="escalate_ticket")
@@ -142,7 +142,7 @@ def escalate_ticket(ticket_id: str, priority: str, reason: str) -> dict:
 ```
 
 ```python
-# server/evalharness/tools/registry.py
+# server/nimbus/tools/registry.py
 _REGISTRY["support"] = [support.escalate_ticket]
 ```
 
@@ -156,7 +156,7 @@ LLM-as-judge (`strands-agents-evals`):
 - **`grade`** — grades a set of already-executed runs (`run_ids`) against a rubric.
 - **`suite`** — runs a file of test cases, each an input plus an `expected` answer and/or
   `criteria`, and grades every answer against its own case: which cases pass, and why the others
-  did not. `evalharness eval --suite cases.yaml`. See **[docs/suites.md](docs/suites.md)** and
+  did not. `nimbus eval --suite cases.yaml`. See **[docs/suites.md](docs/suites.md)** and
   the commented example **[docs/examples/support-suite.yaml](docs/examples/support-suite.yaml)**.
 
 The grader model, rubric, and system prompt are all configurable per request
@@ -185,8 +185,8 @@ worker Lambda zip alongside the server zip and deploys both. It prints the two v
 local server needs to use the deployed lane:
 
 ```bash
-EVALHARNESS_EVAL_FUNCTION_NAME=llm-eval-harness-EvalWorker... # stack output EvalWorkerFunctionName
-EVALHARNESS_EVAL_TABLE=llm-eval-harness-EvalTable-...         # stack output TableName
+NIMBUS_EVAL_FUNCTION_NAME=llm-eval-harness-EvalWorker... # stack output EvalWorkerFunctionName
+NIMBUS_EVAL_TABLE=llm-eval-harness-EvalTable-...              # stack output TableName
 ```
 
 The UI disables the cloud option until `GET /health` reports `cloud_evals.configured`. Full design
@@ -196,7 +196,7 @@ and item shapes: `docs/cloud-evals.md`; infrastructure notes and first-deploy ve
 ### History: from the CLI, in the UI, kept
 
 Every evaluation is recorded with where it was started — the web UI, the CLI, or another API
-client — and the Evals tab labels it. `evalharness login` then `evalharness eval --remote …` runs an
+client — and the Evals tab labels it. `nimbus login` then `nimbus eval --remote …` runs an
 evaluation on the deployed stack from your terminal, so it lands in that stack's history and its
 UI like any other ([docs/cli.md](docs/cli.md#running-on-a-deployed-harness)).
 
@@ -213,7 +213,7 @@ a replay log, not history — always expire after 90 days.
 
 ## Guardrails
 
-`server/evalharness/routers/guardrails.py` authors AWS Bedrock Guardrails directly: create/update
+`server/nimbus/routers/guardrails.py` authors AWS Bedrock Guardrails directly: create/update
 operate on a mutable `DRAFT` working copy, `POST /guardrails/{id}/versions` publishes the current
 draft as a new immutable numbered version, and any version (including `DRAFT`) can be applied to a
 run. `GET /guardrails/{id}/versions` lists the full version history for a guardrail. Bedrock-only.
@@ -444,23 +444,29 @@ terminals instead; they run the exact same commands.
 
 ## Configuration
 
-### Server (`server/`, env vars prefixed `EVALHARNESS_`)
+### Server (`server/`, env vars prefixed `NIMBUS_`)
+
+Nimbus was called `evalharness` before, and the old `EVALHARNESS_*` names still
+work: each is read when its `NIMBUS_*` name is not set. An existing
+`server/data/evalharness.db` keeps being used as the default history until a
+`nimbus.db` exists, and a CLI login saved under `~/.config/evalharness` is moved
+to `~/.config/nimbus` the first time it is read.
 
 | Env var | Default | Description |
 | --- | --- | --- |
-| `EVALHARNESS_AWS_REGION` | `us-east-1` | AWS region for Bedrock/Guardrails/DynamoDB calls |
-| `EVALHARNESS_DB_PATH` | `./data/evalharness.db` | SQLite path for run/evaluation history |
-| `EVALHARNESS_CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON list) |
-| `EVALHARNESS_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of a real provider (test infrastructure) |
-| `EVALHARNESS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
-| `EVALHARNESS_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
-| `EVALHARNESS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
-| `EVALHARNESS_EVAL_FUNCTION_NAME` | *(unset)* | Name of the eval worker Lambda (stack output `EvalWorkerFunctionName`). With `EVAL_TABLE`, enables the cloud lane |
-| `EVALHARNESS_EVAL_TABLE` | *(unset)* | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
-| `EVALHARNESS_HISTORY_BACKEND` | `auto` | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda, SQLite elsewhere) |
-| `EVALHARNESS_LOCAL_EVALS` | `auto` | `on` \| `off` \| `auto` (off inside Lambda) — whether evaluations may run in this process |
-| `EVALHARNESS_AUTH_USER_POOL_ID` | *(unset)* | Cognito user pool to verify bearer tokens against. With `EVALHARNESS_AUTH_CLIENT_ID`, every route but `/health` requires a token; unset locally means no gate. The deployed stack injects both |
-| `EVALHARNESS_AUTH_CLIENT_ID` | *(unset)* | The pool's app client id — what the SPA signs in with and what every accepted token's `aud`/`client_id` must equal |
+| `NIMBUS_AWS_REGION` | `us-east-1` | AWS region for Bedrock/Guardrails/DynamoDB calls |
+| `NIMBUS_DB_PATH` | `./data/nimbus.db` | SQLite path for run/evaluation history |
+| `NIMBUS_CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON list) |
+| `NIMBUS_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of a real provider (test infrastructure) |
+| `NIMBUS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
+| `NIMBUS_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
+| `NIMBUS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
+| `NIMBUS_EVAL_FUNCTION_NAME` | *(unset)* | Name of the eval worker Lambda (stack output `EvalWorkerFunctionName`). With `EVAL_TABLE`, enables the cloud lane |
+| `NIMBUS_EVAL_TABLE` | *(unset)* | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |
+| `NIMBUS_HISTORY_BACKEND` | `auto` | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda, SQLite elsewhere) |
+| `NIMBUS_LOCAL_EVALS` | `auto` | `on` \| `off` \| `auto` (off inside Lambda) — whether evaluations may run in this process |
+| `NIMBUS_AUTH_USER_POOL_ID` | *(unset)* | Cognito user pool to verify bearer tokens against. With `NIMBUS_AUTH_CLIENT_ID`, every route but `/health` requires a token; unset locally means no gate. The deployed stack injects both |
+| `NIMBUS_AUTH_CLIENT_ID` | *(unset)* | The pool's app client id — what the SPA signs in with and what every accepted token's `aud`/`client_id` must equal |
 
 AWS credentials themselves are **not** a setting — they come from the standard boto3 credential
 chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, SSO, or an instance/task role).
@@ -487,8 +493,8 @@ then go to relative `/api/v1/...` paths. Note that `/`, not `""`, is the value: 
 ```
 llm-eval-harness/
 ├── server/                   # FastAPI + Strands Agents SDK (uvicorn, :8000)
-│   ├── evalharness/
-│   │   ├── cli/              # the `evalharness` command line (main, commands, render)
+│   ├── nimbus/
+│   │   ├── cli/              # the `nimbus` command line (main, commands, render)
 │   │   ├── routers/          # health, models, tools, runs (+ evaluations), guardrails
 │   │   ├── engine/           # run execution, streaming, fake model
 │   │   ├── evals/            # determinism + grading engine, LLM-as-judge, cloud lane client
@@ -531,7 +537,7 @@ runs on every deploy rather than on request. Point it at anything yourself:
 python3 scripts/deploy_smoke.py --url https://your-distribution.cloudfront.net
 ```
 
-It exists because `evalharness serve` once shipped completely broken and passed every check in the
+It exists because `nimbus serve` once shipped completely broken and passed every check in the
 pipeline twice: unit tests, coverage and mutation testing all measure code as *imported*, and
 nothing executed the thing and watched it answer.
 

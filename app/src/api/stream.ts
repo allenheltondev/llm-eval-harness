@@ -2,7 +2,7 @@
  * NDJSON stream consumer.
  *
  * The server writes one JSON object per line (`event.model_dump_json() + "\n"`,
- * see server/evalharness/engine/events.py) and flushes as it goes, so a chunk
+ * see server/nimbus/engine/events.py) and flushes as it goes, so a chunk
  * boundary can land anywhere — mid-line, between lines, or several lines at
  * once. This module buffers across chunks, tolerates CRLF, ignores blank lines,
  * and parses a trailing line that never got its newline before EOF.

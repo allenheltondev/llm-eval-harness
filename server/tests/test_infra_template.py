@@ -8,7 +8,7 @@ configured:
 * the eval worker inherited its environment from the AgentCore runtime, where
   ``history_backend: auto`` resolved to SQLite. Lambda sets
   ``AWS_LAMBDA_FUNCTION_NAME``, so the same environment resolves to DynamoDB --
-  and the worker has no ``EVALHARNESS_EVAL_TABLE``, so every evaluation died in
+  and the worker has no ``NIMBUS_EVAL_TABLE``, so every evaluation died in
   ``get_history_repo()`` before running anything.
 * the server's Function URL had no resource policy, so every request 403'd
   (SAM only emits one for a *literal* ``AuthType: NONE``).
@@ -80,18 +80,18 @@ def _env(resources: dict, logical_id: str) -> dict[str, object]:
 def test_worker_pins_sqlite_rather_than_letting_auto_resolve(resources: dict) -> None:
     """The trap: inside Lambda, ``auto`` means DynamoDB, and the worker has no table."""
     env = _env(resources, "EvalWorkerFunction")
-    assert env["EVALHARNESS_HISTORY_BACKEND"] == "sqlite"
-    assert env["EVALHARNESS_DB_PATH"].startswith("/tmp/")
+    assert env["NIMBUS_HISTORY_BACKEND"] == "sqlite"
+    assert env["NIMBUS_DB_PATH"].startswith("/tmp/")
     # Pinning is only correct *because* the worker has no table of its own to
     # point the history repo at; its DynamoDB writes go through DynamoEvalStore.
-    assert "EVALHARNESS_EVAL_TABLE" not in env
+    assert "NIMBUS_EVAL_TABLE" not in env
 
 
 def test_server_keeps_its_own_backend_explicit(resources: dict) -> None:
     """The server is the half that really does use DynamoDB for history."""
     env = _env(resources, "ServerFunction")
-    assert env["EVALHARNESS_HISTORY_BACKEND"] == "dynamodb"
-    assert "EVALHARNESS_EVAL_TABLE" in env
+    assert env["NIMBUS_HISTORY_BACKEND"] == "dynamodb"
+    assert "NIMBUS_EVAL_TABLE" in env
 
 
 def test_history_retention_reaches_both_writers_and_defaults_to_forever(
@@ -103,7 +103,7 @@ def test_history_retention_reaches_both_writers_and_defaults_to_forever(
     assert parameter["MinValue"] == 0
     for function in ("ServerFunction", "EvalWorkerFunction"):
         env = _env(resources, function)
-        assert env["EVALHARNESS_HISTORY_RETENTION_DAYS"] == {"Fn::Ref": "HistoryRetentionDays"}
+        assert env["NIMBUS_HISTORY_RETENTION_DAYS"] == {"Fn::Ref": "HistoryRetentionDays"}
 
 
 def test_function_url_has_a_public_resource_policy(resources: dict, template: dict) -> None:

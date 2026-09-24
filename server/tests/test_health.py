@@ -43,7 +43,7 @@ async def test_health_aws_credentials_error(client, monkeypatch):
 
 
 async def test_health_aws_region_reported(client, monkeypatch):
-    monkeypatch.setenv("EVALHARNESS_AWS_REGION", "eu-west-1")
+    monkeypatch.setenv("NIMBUS_AWS_REGION", "eu-west-1")
     response = await client.get("/api/v1/health")
     assert response.json()["aws"]["region"] == "eu-west-1"
 
@@ -62,7 +62,7 @@ async def test_health_survives_an_unexpected_credentials_orchestration_failure(
 ):
     """Not the AWS SDK call itself (which has its own internal fallback to
     "error") -- a failure in the health endpoint's own dispatch of that check."""
-    import evalharness.routers.health as health_module
+    import nimbus.routers.health as health_module
 
     def _raise():
         raise RuntimeError("orchestration exploded")
@@ -76,7 +76,7 @@ async def test_health_survives_an_unexpected_credentials_orchestration_failure(
 
 
 async def test_health_survives_an_unexpected_provider_check_failure(client, monkeypatch):
-    import evalharness.routers.health as health_module
+    import nimbus.routers.health as health_module
 
     async def _raise(_settings):
         raise RuntimeError("orchestration exploded")

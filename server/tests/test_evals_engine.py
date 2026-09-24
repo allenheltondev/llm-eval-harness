@@ -11,14 +11,14 @@ import pytest
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
-from evalharness.config import Settings
-from evalharness.engine.fake_model import Error, FakeModel, Text
-from evalharness.evals import engine as evals_engine
-from evalharness.evals import jobs as evals_jobs
-from evalharness.evals.events import EvalCompleteEvent, EvalStartEvent, RunStartedEvent
-from evalharness.evals.judge import FakeJudgeModel
-from evalharness.evals.schemas import EvaluationRequest
-from evalharness.store import db, history
+from nimbus.config import Settings
+from nimbus.engine.fake_model import Error, FakeModel, Text
+from nimbus.evals import engine as evals_engine
+from nimbus.evals import jobs as evals_jobs
+from nimbus.evals.events import EvalCompleteEvent, EvalStartEvent, RunStartedEvent
+from nimbus.evals.judge import FakeJudgeModel
+from nimbus.evals.schemas import EvaluationRequest
+from nimbus.store import db, history
 
 THROTTLE = [Error(ModelThrottledException("slow down"))]
 

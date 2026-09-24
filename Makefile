@@ -45,15 +45,15 @@ DEPLOY_API_URL ?= /
 # rather run them in two separate terminals (e.g. to keep their logs apart).
 dev:
 	@trap 'kill 0' EXIT INT TERM; \
-	(cd server && uv run uvicorn evalharness.main:app --reload --port 8000) & \
+	(cd server && uv run uvicorn nimbus.main:app --reload --port 8000) & \
 	(cd app && npm run dev) & \
 	wait
 
 # Fake-model mode (zero AWS calls, scripted model + judge):
-#   EVALHARNESS_FAKE_MODEL=1 make dev
+#   NIMBUS_FAKE_MODEL=1 make dev
 
 dev-server:
-	cd server && uv run uvicorn evalharness.main:app --reload --port 8000
+	cd server && uv run uvicorn nimbus.main:app --reload --port 8000
 
 dev-app:
 	cd app && npm run dev
@@ -187,8 +187,8 @@ deploy-backend:
 	echo; \
 	echo "Backend deployed to stack $(STACK_NAME):"; \
 	echo "  AppUrl:                        $$(resolve_output AppUrl)"; \
-	echo "  EVALHARNESS_EVAL_FUNCTION_NAME=$$(resolve_output EvalWorkerFunctionName)"; \
-	echo "  EVALHARNESS_EVAL_TABLE=$$(resolve_output TableName)"
+	echo "  NIMBUS_EVAL_FUNCTION_NAME=$$(resolve_output EvalWorkerFunctionName)"; \
+	echo "  NIMBUS_EVAL_TABLE=$$(resolve_output TableName)"
 
 deploy-frontend:
 	@set -e; \

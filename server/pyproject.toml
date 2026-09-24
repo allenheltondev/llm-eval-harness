@@ -1,7 +1,7 @@
 [project]
-name = "llm-eval-harness-server"
+name = "nimbus-evals"
 version = "0.1.0"
-description = "LLM Eval Harness server - execution/eval engine for the model-evaluation harness"
+description = "Nimbus: run, compare and grade LLM prompts from the command line, an API or a web UI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -15,7 +15,7 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "aiosqlite>=0.20",
     "pyjwt[crypto]>=2.8",
-    # `evalharness eval --suite` reads test suites as YAML (and so JSON).
+    # `nimbus eval --suite` reads test suites as YAML (and so JSON).
     "pyyaml>=6.0",
 ]
 
@@ -24,7 +24,7 @@ dependencies = [
 # ride into the Lambda artifact, which has a 250 MB ceiling it is already
 # pruning to stay under, in exchange for nothing this parser cannot do.
 [project.scripts]
-evalharness = "evalharness.cli.main:main"
+nimbus = "nimbus.cli.main:main"
 
 [dependency-groups]
 dev = [
@@ -41,7 +41,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["evalharness"]
+packages = ["nimbus"]
 
 [tool.ruff]
 line-length = 100
@@ -60,12 +60,12 @@ ignore = ["B008"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-# Coverage is opt-in via the CLI (`uv run pytest --cov=evalharness ...`), not
+# Coverage is opt-in via the CLI (`uv run pytest --cov=nimbus ...`), not
 # wired into addopts here, so a plain `uv run pytest` during local dev stays at
 # its normal (faster) speed. CI's coverage step passes --cov explicitly; see
 # docs/testing.md / the CI workflow for the exact invocation.
 [tool.coverage.run]
-source = ["evalharness"]
+source = ["nimbus"]
 
 [tool.coverage.report]
 # Ratchet, not a target: set to the actual post-gap-fill percentage (98.6%),
@@ -78,11 +78,11 @@ exclude_also = [
     # An abstract/unsupported-by-design method body; the interesting behavior
     # is that it raises, which is what a caller-side test (if any) covers.
     "raise NotImplementedError",
-    # The AgentCore SDK bootstrap in evalharness/worker/agentcore_app.py
+    # The AgentCore SDK bootstrap in nimbus/worker/agentcore_app.py
     # (module-level `app = BedrockAgentCoreApp()` / `@app.entrypoint` wiring
     # and the `if __name__ == "__main__":` boot path) cannot run without the
     # optional `worker` extra installed *and* a real AgentCore Runtime
-    # container -- evalharness.worker.agentcore_app imports cleanly without
+    # container -- nimbus.worker.agentcore_app imports cleanly without
     # either, and `dispatch`/`execute` (everything actually worth testing) are
     # exercised directly. That block is marked inline with the standard
     # `# pragma: no cover` comment (already covered by coverage.py's default
@@ -112,16 +112,16 @@ exclude_also = [
 # part: worker/ddb.py (118), guardrails/translator.py (100) and engine/mapper.py
 # (84) carry most of them and are where the next round of test work pays off.
 [tool.mutmut]
-source_paths = ["evalharness"]
+source_paths = ["nimbus"]
 only_mutate = [
-    "evalharness/evals/metrics.py",
-    "evalharness/evals/rubrics.py",
-    "evalharness/engine/mapper.py",
-    "evalharness/engine/events.py",
-    "evalharness/store/history.py",
-    "evalharness/worker/ddb.py",
-    "evalharness/guardrails/translator.py",
-    "evalharness/models_catalog.py",
-    "evalharness/cli/render.py",
+    "nimbus/evals/metrics.py",
+    "nimbus/evals/rubrics.py",
+    "nimbus/engine/mapper.py",
+    "nimbus/engine/events.py",
+    "nimbus/store/history.py",
+    "nimbus/worker/ddb.py",
+    "nimbus/guardrails/translator.py",
+    "nimbus/models_catalog.py",
+    "nimbus/cli/render.py",
 ]
 pytest_add_cli_args_test_selection = ["tests/"]

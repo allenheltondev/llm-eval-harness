@@ -1,7 +1,7 @@
 """Tests for the emitter/store seam the two evaluation lanes share.
 
 The point of the seam is that the local lane is *nothing but* an adapter over
-:func:`evalharness.evals.engine.execute_evaluation_with_seam`, so most of these
+:func:`nimbus.evals.engine.execute_evaluation_with_seam`, so most of these
 tests are equivalence tests: drive the core directly with recording doubles,
 drive the local lane through its real job + SQLite adapter, and assert the two
 produce the same events, in the same order, with the same persistence calls.
@@ -13,14 +13,14 @@ from typing import Any
 import pytest
 from sqlmodel import Session
 
-from evalharness.config import Settings
-from evalharness.engine.fake_model import FakeModel, Text
-from evalharness.errors import NotFoundError
-from evalharness.evals import engine as evals_engine
-from evalharness.evals import jobs as evals_jobs
-from evalharness.evals.judge import FakeJudgeModel
-from evalharness.evals.schemas import EvaluationRequest
-from evalharness.store import db, history
+from nimbus.config import Settings
+from nimbus.engine.fake_model import FakeModel, Text
+from nimbus.errors import NotFoundError
+from nimbus.evals import engine as evals_engine
+from nimbus.evals import jobs as evals_jobs
+from nimbus.evals.judge import FakeJudgeModel
+from nimbus.evals.schemas import EvaluationRequest
+from nimbus.store import db, history
 
 ANSWER = "Order B456 is delayed; escalate to the carrier."
 
@@ -58,7 +58,7 @@ def determinism(n: int = 3) -> EvaluationRequest:
 
 
 class RecordingStore:
-    """An :class:`~evalharness.evals.engine.EvalStore` that remembers everything.
+    """An :class:`~nimbus.evals.engine.EvalStore` that remembers everything.
 
     ``load_run`` still delegates to SQLite -- that is where ``execute_run``
     wrote the row -- which is exactly the split the cloud worker's store has,
@@ -438,7 +438,7 @@ async def test_the_seam_accepts_the_workers_call_shape(initialized_db, monkeypat
 
 async def test_the_seam_matches_the_workers_outcome_envelope(initialized_db, monkeypatch):
     """What comes back is what ``interfaces.normalize_outcome`` expects."""
-    from evalharness.worker import interfaces
+    from nimbus.worker import interfaces
 
     monkeypatch.setattr(evals_engine, "default_deps", deps)
     recorder = Recorder()

@@ -33,7 +33,7 @@ account:
   `ui/src/auth/core.ts` (the published `@readysetcloud/ui/auth`) is the model
   for `app/src/auth/core.ts` — the `cognito-idp` calls, the session document
   and the refresh/revoke behaviour were ported from it, not designed here.
-- This repository's own source (`server/evalharness/**`, `app/src/api/http.ts`)
+- This repository's own source (`server/nimbus/**`, `app/src/api/http.ts`)
   for every claim about what the application does.
 
 **Second-hand, from AWS documentation via search** — `docs.aws.amazon.com` is
@@ -54,7 +54,7 @@ summaries, not fetched pages. Strong hints, not verified:
   policy). Recalled, not fetched: the page is behind the same proxy block.
 - [Verifying a JSON web token](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html)
   — the JWKS URL shape and the `iss` / `aud` / `client_id` / `token_use` /
-  `exp` checks `evalharness/auth.py` implements. Same caveat.
+  `exp` checks `nimbus/auth.py` implements. Same caveat.
 
 Claims below are tagged **[lwa]**, **[rsc]**, **[repo]**, **[docs]**, or
 **[measured]** (something actually run on this branch).
@@ -63,7 +63,7 @@ Claims below are tagged **[lwa]**, **[rsc]**, **[repo]**, **[docs]**, or
 
 ## The adapter, and why the application is untouched
 
-`evalharness.main:app` runs on Lambda **unchanged** — no handler function, no
+`nimbus.main:app` runs on Lambda **unchanged** — no handler function, no
 Mangum, no ASGI-to-Lambda shim anywhere in `server/`. The AWS Lambda Web
 Adapter layer does the translation out of process:
 
@@ -113,7 +113,7 @@ PYTHONPATH="${PYTHONPATH:-}:${LAMBDA_TASK_ROOT}:/opt/python:${LAMBDA_RUNTIME_DIR
   exec python3 -m uvicorn \
     --host 127.0.0.1 \
     --port "${AWS_LWA_PORT:-${PORT:-8080}}" \
-    evalharness.main:app
+    nimbus.main:app
 ```
 
 Two deliberate deviations from AWS's example **[lwa]**:
@@ -233,7 +233,7 @@ pruned by default:
 All four arrive via `strands-agents-tools`, and the only modules that import
 them are `strands_tools/calculator.py`, `strands_tools/image_reader.py` and
 `strands_tools/use_computer.py` **[measured]** — none of which any
-`evalharness` module imports, directly or dynamically (the package contains no
+`nimbus` module imports, directly or dynamically (the package contains no
 `importlib.import_module` / `__import__` call at all **[measured]**).
 `strands_evals`, which *is* used, does not reference `strands_tools` anywhere
 **[measured]**.
@@ -257,14 +257,14 @@ CloudFormation or API Gateway.
 
 | Env var | Value | Why |
 |---|---|---|
-| `EVALHARNESS_EVAL_TABLE` | `!Ref EvalTable` | History backend and cloud-eval state |
-| `EVALHARNESS_EVAL_FUNCTION_NAME` | `!Ref EvalWorkerFunction`, or absent when the worker is not deployed | The cloud evaluation lane |
-| `EVALHARNESS_AUTH_USER_POOL_ID` / `EVALHARNESS_AUTH_CLIENT_ID` | `!Ref UserPool` / `!Ref UserPoolClient` | The bearer-token gate ("Auth" below) |
-| `EVALHARNESS_DB_PATH` | `/tmp/evalharness.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
-| `EVALHARNESS_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
-| `EVALHARNESS_LOCAL_EVALS` | `off` | Same reasoning |
-| `EVALHARNESS_AWS_REGION` | `!Ref AWS::Region` | |
-| `EVALHARNESS_CORS_ORIGINS` | `[]` (parameter `ServerCorsOrigins`) | See below |
+| `NIMBUS_EVAL_TABLE` | `!Ref EvalTable` | History backend and cloud-eval state |
+| `NIMBUS_EVAL_FUNCTION_NAME` | `!Ref EvalWorkerFunction`, or absent when the worker is not deployed | The cloud evaluation lane |
+| `NIMBUS_AUTH_USER_POOL_ID` / `NIMBUS_AUTH_CLIENT_ID` | `!Ref UserPool` / `!Ref UserPoolClient` | The bearer-token gate ("Auth" below) |
+| `NIMBUS_DB_PATH` | `/tmp/nimbus.db` | `/var/task` is read-only; the run engine opens a SQLite file for scratch even under the DynamoDB history backend |
+| `NIMBUS_HISTORY_BACKEND` | `dynamodb` | Explicit rather than relying on `auto`'s `AWS_LAMBDA_FUNCTION_NAME` detection |
+| `NIMBUS_LOCAL_EVALS` | `off` | Same reasoning |
+| `NIMBUS_AWS_REGION` | `!Ref AWS::Region` | |
+| `NIMBUS_CORS_ORIGINS` | `[]` (parameter `ServerCorsOrigins`) | See below |
 
 ### CORS: the empty list is the correct value
 
@@ -376,9 +376,9 @@ covers the entire API surface including the NDJSON streams **[repo]**.
 
 Stated plainly, because it is the thing most likely to be misremembered.
 
-**The gate is the application.** With `EVALHARNESS_AUTH_USER_POOL_ID` and
-`EVALHARNESS_AUTH_CLIENT_ID` set — the template injects both from its own
-`UserPool` / `UserPoolClient` — `evalharness.auth.require_auth` sits on every
+**The gate is the application.** With `NIMBUS_AUTH_USER_POOL_ID` and
+`NIMBUS_AUTH_CLIENT_ID` set — the template injects both from its own
+`UserPool` / `UserPoolClient` — `nimbus.auth.require_auth` sits on every
 router except `/health`. A request without `Authorization: Bearer <jwt>`, or
 with a token the pool did not sign for this client, gets `401
 {"error": {"code": "unauthorized"}}` before its body is even parsed
@@ -446,7 +446,7 @@ for SigV4-signing non-browser clients; `ServerFunctionUrlAuthType` is
 parameterized to `AWS_IAM` for that case and documented as not being a drop-in.
 
 **The token path, hop by hop.** The browser holds the ID token in
-`localStorage` (`evalharness.auth.v1`) and the SPA's HTTP layer adds the
+`localStorage` (`nimbus.auth.v1`) and the SPA's HTTP layer adds the
 bearer header to every JSON request and NDJSON stream **[repo]**. The `/api/*`
 behaviour uses the managed `CachingDisabled` cache policy with the managed
 `AllViewerExceptHostHeader` origin request policy. CloudFront ordinarily
@@ -657,7 +657,7 @@ the measurement.
 
 - **`Handler: run.sh` + `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`.** Copied from
   an AWS-maintained example **[lwa]**, but that example is x86 and does not use
-  a package (`evalharness.main:app` vs `main:app`). The import of a *package*
+  a package (`nimbus.main:app` vs `main:app`). The import of a *package*
   from `$LAMBDA_TASK_ROOT` rather than a top-level module is the one untested
   step.
 - **The `python3` substitution.** Near-certain, but it is a deviation from the
@@ -694,7 +694,7 @@ the measurement.
 - **The Function URL forwards `Authorization` under `AuthType: NONE`.** Read,
   not observed; same symptom, checked with `curl -H "Authorization: Bearer
   ..."` against `ServerFunctionUrl`.
-- **The JWKS fetch on cold start.** `evalharness.auth` fetches the pool's keys
+- **The JWKS fetch on cold start.** `nimbus.auth` fetches the pool's keys
   with a 5 s timeout from inside the Lambda over the public internet — there
   is no VPC, so this is a plain outbound HTTPS call, but it is one more thing
   the first authenticated request after a cold start pays for.

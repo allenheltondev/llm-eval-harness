@@ -172,7 +172,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
               <p>If this problem persists, try:</p>
               <ul className="mt-2 space-y-1">
                 <li>• Clearing your browser cache and cookies</li>
-                <li>• Checking that the LLM Eval Harness API server is reachable</li>
+                <li>• Checking that the Nimbus API server is reachable</li>
                 <li>• Ensuring you have a stable internet connection</li>
                 <li>• Refreshing the page</li>
                 <li>• Using a different browser</li>

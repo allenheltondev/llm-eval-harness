@@ -60,7 +60,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --dev
       - run: uv run ruff check .
-      - run: uv run pytest --cov=evalharness --cov-report=term-missing
+      - run: uv run pytest --cov=nimbus --cov-report=term-missing
 
   infra:
     name: Template

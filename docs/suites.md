@@ -60,7 +60,7 @@ report a pass rate for tests nobody ran.
 ## Running one
 
 ```bash
-evalharness eval --suite suite.yaml
+nimbus eval --suite suite.yaml
 ```
 
 Run options given on the command line **override** the file's `run_config`, and
@@ -68,7 +68,7 @@ only the ones you give — so the same suite runs against another model without
 editing it:
 
 ```bash
-evalharness eval --suite suite.yaml -m anthropic.claude-3-5-haiku --temperature 0
+nimbus eval --suite suite.yaml -m anthropic.claude-3-5-haiku --temperature 0
 ```
 
 `inference` settings merge rather than replace: `--max-tokens 50` keeps the
@@ -80,7 +80,7 @@ Options that cannot apply to a suite are errors, not silently ignored: `-p`
 malformed file is exit `2` with one line naming the file and every bad field:
 
 ```
-evalharness: --suite suite.yaml: cases.3.input: Field required
+nimbus: --suite suite.yaml: cases.3.input: Field required
 ```
 
 Over HTTP it is the same request, with the suite inline:

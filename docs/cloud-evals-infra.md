@@ -10,7 +10,7 @@ actually run on this branch).
 ## Decision: a Lambda, invoked asynchronously
 
 The worker is an ordinary Python 3.12 Lambda (`EvalWorkerFunction`), arm64, with
-the handler named directly as `evalharness.worker.lambda_app.handler`. The
+the handler named directly as `nimbus.worker.lambda_app.handler`. The
 FastAPI server starts an evaluation with `lambda:Invoke` and
 `InvocationType="Event"`.
 
@@ -38,7 +38,7 @@ background task ran, the padded `runtimeSessionId` derivation, and the
 AgentCore execution role with its `bedrock-agentcore.amazonaws.com` trust
 policy and X-Ray/CloudWatch-namespace grants.
 
-What did *not* change: `evalharness/worker/ddb.py`, `interfaces.py`, the
+What did *not* change: `nimbus/worker/ddb.py`, `interfaces.py`, the
 DynamoDB item shapes, the reader, and the engine seam. The host was always the
 thin part.
 
@@ -56,7 +56,7 @@ environment disappears mid-write, and the evaluation sits at `running` --
 forever, with history kept by default -- with nothing to tell the reader it is
 never coming back.
 
-So the worker stops itself first. `evalharness.worker.lambda_app.Deadline`
+So the worker stops itself first. `nimbus.worker.lambda_app.Deadline`
 reads the invocation's own `get_remaining_time_in_millis()` and, with
 `DEADLINE_MARGIN_SECONDS` (60s) to spare, reports itself through the engine's
 `cancelled` seam — the one already polled between runs and before grading. The
@@ -213,7 +213,7 @@ outputs and tool transcripts of every unrelated evaluation the environment ever
 ran, until ephemeral storage became the failure mode.
 
 `lambda_app.scratch_database()` gives each invocation a database of its own
-under `<tmp>/evalharness-worker/`, via `store.db.scoped_db`, which disposes the
+under `<tmp>/nimbus-worker/`, via `store.db.scoped_db`, which disposes the
 engine afterwards and restores whatever was active before. The directory is
 wiped at the **start** of an invocation, which clears whatever a killed one left
 behind, and again at the **end**, so a frozen idle environment holds no
@@ -250,7 +250,7 @@ If the invoke fails after the row is written, the server settles it as `error`
 ## The artifact
 
 `scripts/package-eval-worker.sh` builds a plain Lambda zip: aarch64-manylinux
-wheels resolved for `python3.12`, the `evalharness` package beside them, no
+wheels resolved for `python3.12`, the `nimbus` package beside them, no
 entry shim (the template names the handler by dotted path).
 
 The S3 key is content-hashed. For an S3-sourced function the key **is** the
@@ -293,14 +293,14 @@ with its own service permissions, not the function's role.
 
 ### To the evaluation engine
 
-`evalharness/worker/interfaces.py` is the whole surface between the host and
-`evalharness.evals`:
+`nimbus/worker/interfaces.py` is the whole surface between the host and
+`nimbus.evals`:
 
 ```python
 async def run_evaluation(request: dict, emit, store, cancelled) -> EvalOutcome
 ```
 
-It resolves `evalharness.evals.engine.execute_evaluation_with_seam` **lazily**,
+It resolves `nimbus.evals.engine.execute_evaluation_with_seam` **lazily**,
 at call time. Two things depend on that: the worker had to import cleanly while
 the evals refactor was still in flight, and a Lambda cold start should not pay
 to import the run engine (boto3 clients, strands, SQLModel) before an
@@ -316,7 +316,7 @@ the evaluation at `running`.
 
 ### To DynamoDB
 
-`evalharness/worker/ddb.py` implements the engine's `EvalStore` protocol
+`nimbus/worker/ddb.py` implements the engine's `EvalStore` protocol
 (`save_evaluation`, `load_run`, `save_run`) plus the emitter and cancel polling.
 Two of `cloud-evals.md`'s writer rules are enforced *structurally* rather than
 by convention:
