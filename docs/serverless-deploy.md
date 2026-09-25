@@ -144,8 +144,21 @@ brings its own client:
   S3 bucket + CloudFront + Cognito) then `make deploy-frontend` (build the SPA
   with `VITE_API_URL=/`, sync to S3, invalidate). Idempotent; prints the final
   URL. CI runs the same two targets as separate jobs.
-- Stack outputs added: `ServerFunctionUrl`, `AppUrl` (CloudFront domain),
-  `AppBucket`.
+- Stack outputs added: `ServerFunctionUrl`, `AppUrl` (the custom domain when
+  there is one, the CloudFront domain otherwise), `AppBucket`.
+- **Custom domain** (production only): parameters `AppDomainName` and
+  `AppHostedZoneId`, both empty by default; condition `DeployCustomDomain`
+  needs both. With them the stack creates `AppCertificate` (ACM, DNS
+  validation -- CloudFormation writes the validation record in the zone and
+  waits for issuance; CloudFront needs it in us-east-1, where this stack is),
+  sets the distribution's `Aliases` and `ViewerCertificate` (SNI,
+  TLSv1.2_2021), and adds `AppDnsRecord` / `AppDnsRecordIpv6` (A/AAAA aliases
+  to the distribution). The same shape as `readysetcloud/newsletter-service`'s
+  frontend domain. `.github/workflows/deploy.yaml` passes
+  `nimbus.readysetcloud.io` and the Production environment's `HOSTED_ZONE_ID`
+  variable; without the variable it warns and deploys without a domain.
+  `pull-request.yaml` (staging) passes neither. The CloudFront domain keeps
+  working alongside the custom one.
 - IAM for the server function role: Bedrock invoke + guardrails, DynamoDB on the
   table, `lambda:InvokeFunction` on the worker function. The
   template injects NIMBUS_EVAL_TABLE / EVAL_FUNCTION_NAME / AUTH_* directly

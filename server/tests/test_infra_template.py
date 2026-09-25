@@ -199,3 +199,81 @@ def test_the_access_group_is_named_after_the_stack_unless_told_otherwise(
             {"Fn::Ref": "AWS::StackName"},
         ]
     }
+
+
+def test_the_custom_domain_is_off_unless_both_parameters_are_given(template: dict) -> None:
+    """Every deploy but production passes neither, and serves on *.cloudfront.net."""
+    parameters = template["Parameters"]
+    assert parameters["AppDomainName"]["Default"] == ""
+    assert parameters["AppHostedZoneId"]["Default"] == ""
+    assert template["Conditions"]["DeployCustomDomain"] == {
+        "Fn::And": [
+            {"Fn::Condition": "DeployServer"},
+            {"Fn::Not": [{"Fn::Equals": [{"Fn::Ref": "AppDomainName"}, ""]}]},
+            {"Fn::Not": [{"Fn::Equals": [{"Fn::Ref": "AppHostedZoneId"}, ""]}]},
+        ]
+    }
+
+
+def test_the_distribution_serves_the_domain_on_its_own_dns_validated_certificate(
+    resources: dict,
+) -> None:
+    certificate = resources["AppCertificate"]
+    assert certificate["Condition"] == "DeployCustomDomain"
+    assert certificate["Properties"]["ValidationMethod"] == "DNS"
+    assert certificate["Properties"]["DomainValidationOptions"] == [
+        {"DomainName": {"Fn::Ref": "AppDomainName"}, "HostedZoneId": {"Fn::Ref": "AppHostedZoneId"}}
+    ]
+
+    config = resources["AppDistribution"]["Properties"]["DistributionConfig"]
+    assert config["Aliases"] == {
+        "Fn::If": [
+            "DeployCustomDomain",
+            [{"Fn::Ref": "AppDomainName"}],
+            {"Fn::Ref": "AWS::NoValue"},
+        ]
+    }
+    on, off = config["ViewerCertificate"]["Fn::If"][1:]
+    assert on["AcmCertificateArn"] == {"Fn::Ref": "AppCertificate"}
+    assert on["SslSupportMethod"] == "sni-only"
+    assert off == {"CloudFrontDefaultCertificate": True}
+
+
+@pytest.mark.parametrize(
+    "logical_id, record_type", [("AppDnsRecord", "A"), ("AppDnsRecordIpv6", "AAAA")]
+)
+def test_the_domain_points_at_the_distribution(
+    resources: dict, logical_id: str, record_type: str
+) -> None:
+    record = resources[logical_id]
+    assert record["Condition"] == "DeployCustomDomain"
+    properties = record["Properties"]
+    assert properties["Type"] == record_type
+    assert properties["Name"] == {"Fn::Ref": "AppDomainName"}
+    assert properties["AliasTarget"]["DNSName"] == {"Fn::GetAtt": "AppDistribution.DomainName"}
+    # CloudFront's fixed alias hosted zone.
+    assert properties["AliasTarget"]["HostedZoneId"] == "Z2FDTNDATAQYW2"
+
+
+def test_the_app_url_is_the_custom_domain_when_there_is_one(template: dict) -> None:
+    assert template["Outputs"]["AppUrl"]["Value"] == {
+        "Fn::If": [
+            "DeployCustomDomain",
+            {"Fn::Sub": "https://${AppDomainName}"},
+            {"Fn::Sub": "https://${AppDistribution.DomainName}"},
+        ]
+    }
+
+
+def _workflow(name: str) -> str:
+    return (TEMPLATE.parent.parent / ".github" / "workflows" / name).read_text()
+
+
+def test_only_production_deploys_the_custom_domain() -> None:
+    production = _workflow("deploy.yaml")
+    assert "APP_DOMAIN_NAME: nimbus.readysetcloud.io" in production
+    assert "APP_HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}" in production
+
+    staging = _workflow("pull-request.yaml")
+    assert "APP_DOMAIN_NAME" not in staging
+    assert "APP_HOSTED_ZONE_ID" not in staging

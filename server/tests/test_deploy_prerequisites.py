@@ -248,3 +248,15 @@ def test_deploy_backend_passes_an_access_group_name_when_given():
 
 def test_deploy_backend_leaves_the_access_group_to_the_template_by_default():
     assert "AccessGroupName" not in _deploy_overrides()
+
+
+def test_deploy_backend_passes_a_custom_domain_when_given():
+    overrides = _deploy_overrides("APP_DOMAIN_NAME=nimbus.example.com", "APP_HOSTED_ZONE_ID=Z123")
+    assert '"AppDomainName=nimbus.example.com"' in overrides
+    assert '"AppHostedZoneId=Z123"' in overrides
+
+
+def test_deploy_backend_leaves_the_domain_off_by_default():
+    overrides = _deploy_overrides()
+    assert "AppDomainName" not in overrides
+    assert "AppHostedZoneId" not in overrides

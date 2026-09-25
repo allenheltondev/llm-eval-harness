@@ -152,6 +152,24 @@ Parameters:
       group without anyone choosing one; `make deploy-backend
       ACCESS_GROUP_NAME=...` sets it.
 
+  # --------------------------------------------------------------------------
+  # Custom domain (production only -- see docs/serverless-deploy.md "Custom domain")
+  # --------------------------------------------------------------------------
+  AppDomainName:
+    Type: String
+    Default: ''
+    Description: >
+      Optional hostname for the app, e.g. nimbus.readysetcloud.io. With
+      AppHostedZoneId, the stack issues an ACM certificate for it (DNS
+      validated in that zone), adds it to the CloudFront distribution and
+      points A/AAAA alias records at the distribution. Empty (the default,
+      and every non-production deploy) serves on the *.cloudfront.net domain
+      only. CloudFront certificates must be in us-east-1, as this stack is.
+  AppHostedZoneId:
+    Type: String
+    Default: ''
+    Description: Route 53 hosted zone that holds AppDomainName's parent domain.
+
 Conditions:
   # The worker is opt-in. Everything below is skipped entirely until an artifact
   # key is supplied, so the rest of the stack deploys exactly as it did before.
@@ -162,6 +180,12 @@ Conditions:
   # that uses it: without an explicit name, the stack's own (unique per account
   # and region) is the group's.
   HasAccessGroupName: !Not [!Equals [!Ref AccessGroupName, '']]
+  # Both halves are needed: the certificate validates, and the alias records
+  # live, in the hosted zone.
+  DeployCustomDomain: !And
+    - !Condition DeployServer
+    - !Not [!Equals [!Ref AppDomainName, '']]
+    - !Not [!Equals [!Ref AppHostedZoneId, '']]
   # Only when BOTH halves are deployed does the server get a cloud eval lane.
   ServerHasEvalWorker: !And
     - !Condition DeployServer
@@ -697,6 +721,46 @@ Resources:
           return request;
         }
 
+  # The app's custom domain (production). Same shape as
+  # readysetcloud/newsletter-service's FrontendCertificate/FrontendDNSRecord:
+  # CloudFormation writes the DNS validation record itself and waits for the
+  # certificate to issue before the distribution uses it.
+  AppCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: DeployCustomDomain
+    Properties:
+      DomainName: !Ref AppDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref AppDomainName
+          HostedZoneId: !Ref AppHostedZoneId
+
+  # A and AAAA: the distribution serves IPv6 by default. Z2FDTNDATAQYW2 is
+  # CloudFront's fixed hosted zone id for alias targets.
+  AppDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployCustomDomain
+    Properties:
+      HostedZoneId: !Ref AppHostedZoneId
+      Name: !Ref AppDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt AppDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  AppDnsRecordIpv6:
+    Type: AWS::Route53::RecordSet
+    Condition: DeployCustomDomain
+    Properties:
+      HostedZoneId: !Ref AppHostedZoneId
+      Name: !Ref AppDomainName
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt AppDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
   AppDistribution:
     Type: AWS::CloudFront::Distribution
     Condition: DeployServer
@@ -705,6 +769,13 @@ Resources:
         Enabled: true
         Comment: !Sub Nimbus (${AWS::StackName}) -- SPA + API
         HttpVersion: http2and3
+        Aliases: !If [DeployCustomDomain, [!Ref AppDomainName], !Ref AWS::NoValue]
+        ViewerCertificate: !If
+          - DeployCustomDomain
+          - AcmCertificateArn: !Ref AppCertificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
         DefaultRootObject: index.html
         Origins:
           - Id: spa
@@ -804,8 +875,13 @@ Outputs:
     Value: !GetAtt ServerFunctionUrl.FunctionUrl
   AppUrl:
     Condition: DeployServer
-    Description: The deployment's one public URL -- SPA at /, API at /api/v1.
-    Value: !Sub https://${AppDistribution.DomainName}
+    Description: >
+      The deployment's one public URL -- SPA at /, API at /api/v1. The custom
+      domain when one is configured, the CloudFront domain otherwise.
+    Value: !If
+      - DeployCustomDomain
+      - !Sub https://${AppDomainName}
+      - !Sub https://${AppDistribution.DomainName}
   AppBucket:
     Condition: DeployServer
     Description: S3 bucket the built SPA is synced into (private; read only via CloudFront OAC)

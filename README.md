@@ -254,6 +254,19 @@ https://d1234abcd.cloudfront.net/            → the app
 https://d1234abcd.cloudfront.net/api/v1/...  → the server
 ```
 
+Production also serves on **https://nimbus.readysetcloud.io**: its deploy passes
+`APP_DOMAIN_NAME` and `APP_HOSTED_ZONE_ID` (the Production environment's `HOSTED_ZONE_ID`
+variable, the `readysetcloud.io` zone), and the stack issues a DNS-validated ACM certificate,
+adds the name to the distribution and points A/AAAA alias records at it. Staging and local
+deploys pass neither and stay on their CloudFront domain. For your own domain:
+
+```bash
+make deploy-backend APP_DOMAIN_NAME=nimbus.example.com APP_HOSTED_ZONE_ID=Z0123456789ABC
+```
+
+Pass them on **every** deploy of that stack: like any template parameter, one left off resets to
+its default, which removes the domain.
+
 ### Sign-in (Cognito)
 
 The deployed app requires sign-in with a **Ready, Set, Cloud account**: the stack creates its own
@@ -360,6 +373,9 @@ pools and, on the shared RSC pool (`arn:aws:cognito-idp:<region>:<account>:userp
 `cognito-idp:CreateUserPoolClient`, `UpdateUserPoolClient`, `DeleteUserPoolClient`,
 `DescribeUserPoolClient`, `CreateGroup`, `UpdateGroup`, `DeleteGroup` and `GetGroup`, plus
 `ssm:GetParameters` on `/readysetcloud/auth/user-pool-id` (the template resolves the pool from it).
+A deploy with a custom domain also needs `acm:RequestCertificate`, `DescribeCertificate`,
+`DeleteCertificate` and `AddTagsToCertificate`, and `route53:ChangeResourceRecordSets`,
+`ListResourceRecordSets` and `GetHostedZone` on the zone plus `route53:GetChange`.
 `make grant-access` / `revoke-access` / `create-user` need `cognito-idp:AdminAddUserToGroup`,
 `AdminRemoveUserFromGroup` and `AdminCreateUser` on that pool, for whoever runs them.
 
