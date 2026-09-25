@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MetricsBar from '../MetricsBar'
 import { INITIAL_RUN_STATE, useRunStore } from '../../../stores'
 
+/** Each metric is a labelled group: its text is the label followed by the value. */
 function stat(label: string): string {
-  return screen.getByText(label).nextElementSibling?.textContent ?? ''
+  const text = screen.getByRole('group', { name: label }).textContent ?? ''
+  return text.startsWith(label) ? text.slice(label.length) : text
 }
 
 beforeEach(() => {

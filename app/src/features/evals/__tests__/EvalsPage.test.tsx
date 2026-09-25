@@ -191,6 +191,37 @@ describe('EvalsPage', () => {
     expect(followEvaluation).toHaveBeenCalledWith('eval-running')
   })
 
+  it('says so when there are no evaluations yet', () => {
+    useEvalStore.setState({ evaluations: [] })
+    render(<EvalsPage />)
+
+    expect(screen.getByText('No evaluations yet')).toBeInTheDocument()
+    expect(screen.queryByTestId('eval-list')).not.toBeInTheDocument()
+  })
+
+  it('shows a loading placeholder while the first page loads', () => {
+    useEvalStore.setState({ evaluations: [], listLoading: true })
+    render(<EvalsPage />)
+
+    expect(screen.getByTestId('eval-list-loading')).toHaveTextContent('Loading evaluations…')
+    expect(screen.queryByText('No evaluations yet')).not.toBeInTheDocument()
+  })
+
+  it('reports a list load failure and retries with the current filter', () => {
+    useEvalStore.setState({
+      evaluations: [],
+      listError: { message: 'Network down', code: 'network_error' }
+    })
+    render(<EvalsPage />)
+    loadEvaluations.mockClear()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load evaluations')
+    expect(screen.getByRole('alert')).toHaveTextContent('Network down')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(loadEvaluations).toHaveBeenCalledWith({})
+  })
+
   it('renders a lane badge per row', () => {
     render(<EvalsPage />)
 

@@ -50,6 +50,9 @@ describe('ErrorBoundary', () => {
     )
 
     expect(screen.getByText('Something went wrong')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The application encountered an unexpected error'
+    )
     expect(screen.queryByTestId('safe-child')).not.toBeInTheDocument()
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       'ErrorBoundary caught an error:',

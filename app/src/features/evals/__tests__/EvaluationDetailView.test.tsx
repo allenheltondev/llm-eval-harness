@@ -4,7 +4,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { ToastProvider } from '@readysetcloud/ui'
 import EvaluationDetailView, { batchSlots, sourceLabel } from '../EvaluationDetailView'
 import type { EvaluationDetail, EvaluationResult } from '../../../api'
 
@@ -280,13 +281,17 @@ describe('EvaluationDetailView', () => {
   it('copies a link to this evaluation', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
-    render(<EvaluationDetailView evaluation={suiteEvaluation} result={suiteResult} />)
+    render(
+      <ToastProvider>
+        <EvaluationDetailView evaluation={suiteEvaluation} result={suiteResult} />
+      </ToastProvider>
+    )
 
     fireEvent.click(screen.getByTestId('eval-copy-link'))
 
-    await waitFor(() =>
-      expect(screen.getByTestId('eval-copy-link')).toHaveTextContent('Link copied')
-    )
+    // Confirmed with a toast; the button itself keeps its label.
+    expect(await screen.findByText('Link copied')).toBeInTheDocument()
+    expect(screen.getByTestId('eval-copy-link')).toHaveTextContent('Copy link')
     expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/#\/evals\/eval-suite$/))
   })
 

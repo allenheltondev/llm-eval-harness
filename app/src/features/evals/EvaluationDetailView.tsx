@@ -10,8 +10,8 @@
  * the CLI shows exactly as one started here.
  */
 
-import { useState } from 'react'
-import { Badge, StatusBadge } from '@readysetcloud/ui'
+import { Alert, Badge, Button, Card, CardBody, CardHeader, StatusBadge } from '@readysetcloud/ui'
+import { useNotify } from '../../components/notify'
 import { statusTone } from '../../components/status'
 import type {
   EvaluationDetail,
@@ -62,19 +62,22 @@ function shareableLink(evaluationId: string): string {
 }
 
 function CopyLinkButton({ evaluationId }: { evaluationId: string }) {
-  const [copied, setCopied] = useState(false)
+  const notify = useNotify()
   if (!navigator.clipboard) return null
   return (
-    <button
-      type="button"
-      className="btn btn-secondary py-1 px-2 text-xs"
+    <Button
+      variant="secondary"
+      size="sm"
       data-testid="eval-copy-link"
       onClick={() => {
-        void navigator.clipboard.writeText(shareableLink(evaluationId)).then(() => setCopied(true))
+        navigator.clipboard.writeText(shareableLink(evaluationId)).then(
+          () => notify('Link copied', { variant: 'success' }),
+          () => notify('Could not copy the link', { variant: 'error' })
+        )
       }}
     >
-      {copied ? 'Link copied' : 'Copy link'}
-    </button>
+      Copy link
+    </Button>
   )
 }
 
@@ -92,7 +95,7 @@ function RunSlots({ slots }: { slots: RunSlot[] }) {
     <span className="flex flex-wrap gap-1">
       {slots.map((slot, index) => {
         const className = `px-1.5 py-0.5 rounded text-xs ${
-          slot.failed ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-primary-700'
+          slot.failed ? 'bg-error-50 text-error-700' : 'bg-muted text-primary-700'
         }`
         if (!slot.runId) {
           return (
@@ -186,13 +189,13 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
   const definitions = new Map((suite?.cases ?? []).map(definition => [definition.id, definition]))
   return (
     <section aria-labelledby="eval-cases-heading" data-testid="eval-cases">
-      <h3 id="eval-cases-heading" className="text-sm font-semibold text-gray-900 mb-2">
+      <h3 id="eval-cases-heading" className="text-sm font-semibold text-foreground mb-2">
         Cases
       </h3>
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead>
-            <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+            <tr className="text-left text-xs text-muted-foreground border-b border-border">
               <th className="py-2 pr-3">Case</th>
               <th className="py-2 pr-3">Result</th>
               <th className="py-2 pr-3">Score</th>
@@ -209,14 +212,14 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
               return (
                 <tr
                   key={result.id}
-                  className="border-b border-gray-100 align-top"
+                  className="border-b border-border align-top"
                   data-testid={`eval-case-${result.id}`}
                 >
                   <td className="py-2 pr-3">
-                    <span className="font-mono text-xs text-gray-900">{result.id}</span>
+                    <span className="font-mono text-xs text-foreground">{result.id}</span>
                     {definition && (
-                      <details className="mt-1 text-xs text-gray-600">
-                        <summary className="cursor-pointer text-gray-500">Case</summary>
+                      <details className="mt-1 text-xs text-muted-foreground">
+                        <summary className="cursor-pointer text-muted-foreground">Case</summary>
                         <dl className="mt-1 space-y-1 max-w-md">
                           <dt className="font-medium">Input</dt>
                           <dd className="whitespace-pre-wrap">{definition.input}</dd>
@@ -242,11 +245,11 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
                     </StatusBadge>
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs">{formatScore(result.score)}</td>
-                  <td className="py-2 pr-3 font-mono text-xs text-gray-600">
+                  <td className="py-2 pr-3 font-mono text-xs text-muted-foreground">
                     {result.scores.map(formatScore).join(' · ') || '—'}
                   </td>
-                  <td className="py-2 pr-3 text-xs text-gray-700 max-w-md">
-                    {problem && <p className="text-red-700">{problem}</p>}
+                  <td className="py-2 pr-3 text-xs text-muted-foreground max-w-md">
+                    {problem && <p className="text-error-700">{problem}</p>}
                     {result.reasoning && <p className="whitespace-pre-wrap">{result.reasoning}</p>}
                   </td>
                   <td className="py-2">
@@ -266,8 +269,8 @@ function ConfigRow({ label, value }: { label: string; value: string | null | und
   if (value === null || value === undefined || value === '') return null
   return (
     <div className="min-w-0">
-      <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className="text-sm text-gray-900 whitespace-pre-wrap break-words">{value}</dd>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-sm text-foreground whitespace-pre-wrap break-words">{value}</dd>
     </div>
   )
 }
@@ -286,7 +289,7 @@ function Configuration({ config }: { config: EvaluationStoredConfig }) {
   const suite = config.suite
   return (
     <section aria-labelledby="eval-config-heading" data-testid="eval-config">
-      <h3 id="eval-config-heading" className="text-sm font-semibold text-gray-900 mb-2">
+      <h3 id="eval-config-heading" className="text-sm font-semibold text-foreground mb-2">
         Configuration
       </h3>
       <dl className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -337,14 +340,10 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
     ? batchSlots(result.run_ids, result.failed_runs)
     : successfulSlots(evaluation.run_ids, index => `Run ${index + 1}`)
   return (
-    <section
-      className="card p-4 sm:p-6 space-y-5"
-      aria-labelledby="eval-detail-heading"
-      data-testid="eval-detail"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <Card role="region" aria-labelledby="eval-detail-heading" data-testid="eval-detail">
+      <CardHeader className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <h2 id="eval-detail-heading" className="text-base font-semibold text-gray-900">
+          <h2 id="eval-detail-heading" className="card-title">
             {evaluation.config.suite?.name ?? `${evaluation.kind} evaluation`}
           </h2>
           {source && (
@@ -352,31 +351,33 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
               {source}
             </Badge>
           )}
-          <span className="font-mono text-xs text-gray-500">{evaluation.id}</span>
+          <span className="font-mono text-xs text-muted-foreground">{evaluation.id}</span>
         </div>
         <CopyLinkButton evaluationId={evaluation.id} />
-      </div>
+      </CardHeader>
 
-      {result?.truncated && (
-        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">
-          Some of the judge&apos;s reasoning was shortened to fit the stored result.
-        </p>
-      )}
+      <CardBody className="space-y-5">
+        {result?.truncated && (
+          <Alert variant="info">
+            Some of the judge&apos;s reasoning was shortened to fit the stored result.
+          </Alert>
+        )}
 
-      {result?.cases && result.cases.length > 0 && (
-        <SuiteCases cases={result.cases} suite={evaluation.config.suite} />
-      )}
+        {result?.cases && result.cases.length > 0 && (
+          <SuiteCases cases={result.cases} suite={evaluation.config.suite} />
+        )}
 
-      <Configuration config={evaluation.config} />
+        <Configuration config={evaluation.config} />
 
-      {!result?.cases && runSlots.length > 0 && (
-        <section aria-labelledby="eval-runs-heading" data-testid="eval-runs">
-          <h3 id="eval-runs-heading" className="text-sm font-semibold text-gray-900 mb-2">
-            Runs
-          </h3>
-          <RunSlots slots={runSlots} />
-        </section>
-      )}
-    </section>
+        {!result?.cases && runSlots.length > 0 && (
+          <section aria-labelledby="eval-runs-heading" data-testid="eval-runs">
+            <h3 id="eval-runs-heading" className="text-sm font-semibold text-foreground mb-2">
+              Runs
+            </h3>
+            <RunSlots slots={runSlots} />
+          </section>
+        )}
+      </CardBody>
+    </Card>
   )
 }

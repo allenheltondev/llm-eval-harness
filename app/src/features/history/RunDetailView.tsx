@@ -11,7 +11,16 @@
 import { useEffect } from 'react'
 import { useHistoryStore } from '../../stores'
 import type { RunDetail, RunMetrics, ToolTranscriptEntry } from '../../api'
-import { Loading, StatusBadge } from '@readysetcloud/ui'
+import {
+  Alert,
+  Badge,
+  Card,
+  CardBody,
+  ErrorState,
+  Loading,
+  StatTile,
+  StatusBadge
+} from '@readysetcloud/ui'
 import { statusTone } from '../../components/status'
 
 export interface RunDetailHighlight {
@@ -56,50 +65,45 @@ interface MetricStatProps {
 
 function MetricStat({ label, value, highlighted }: MetricStatProps) {
   return (
-    <div
-      className={`min-w-0 rounded-lg p-2 ${highlighted ? 'ring-2 ring-amber-400 bg-amber-50' : ''}`}
+    <StatTile
+      className={`min-w-0 ${highlighted ? 'ring-2 ring-warning-400' : ''}`}
       data-testid="run-detail-metric"
       data-highlighted={highlighted ? 'true' : 'false'}
-    >
-      <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className="text-sm font-medium text-gray-900 tabular-nums truncate">{value}</dd>
-    </div>
+      label={label}
+      value={value}
+    />
   )
 }
 
 function ToolTranscriptRow({ entry }: { entry: ToolTranscriptEntry }) {
   return (
     <li
-      className="rounded-lg border border-gray-200 bg-surface p-3"
+      className="rounded-lg border border-border bg-surface p-3"
       data-testid="run-detail-tool-row"
     >
       <div className="flex items-center justify-between gap-2 mb-2">
-        <span className="font-mono text-sm font-medium text-gray-900">{entry.name}</span>
+        <span className="font-mono text-sm font-medium text-foreground">{entry.name}</span>
         <span className="flex items-center gap-2">
-          {entry.error && (
-            <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-medium">
-              error
-            </span>
-          )}
-          <span className="text-xs text-gray-500">{entry.duration_ms} ms</span>
+          {entry.error && <Badge variant="error">error</Badge>}
+          <span className="text-xs text-muted-foreground">{entry.duration_ms} ms</span>
         </span>
       </div>
       <div className="text-xs">
-        <p className="font-medium text-gray-600 mb-1">Input</p>
-        <pre className="overflow-x-auto rounded bg-gray-50 p-2 font-mono text-gray-800">
+        <p className="font-medium text-muted-foreground mb-1">Input</p>
+        <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-foreground">
           {prettyJson(entry.input)}
         </pre>
       </div>
       <div className="text-xs mt-2">
-        <p className="font-medium text-gray-600 mb-1">Output</p>
-        <pre className="max-h-48 overflow-auto rounded bg-gray-50 p-2 font-mono text-gray-800">
+        <p className="font-medium text-muted-foreground mb-1">Output</p>
+        <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-foreground">
           {prettyJson(entry.output)}
         </pre>
       </div>
       {entry.error && (
         <div className="text-xs mt-2">
-          <p className="font-medium text-red-600 mb-1">Error</p>
-          <pre className="overflow-x-auto rounded bg-red-50 p-2 font-mono text-red-800">
+          <p className="font-medium text-error-600 mb-1">Error</p>
+          <pre className="overflow-x-auto rounded bg-error-50 p-2 font-mono text-error-800">
             {prettyJson(entry.error)}
           </pre>
         </div>
@@ -119,14 +123,19 @@ export default function RunDetailView({ runId, highlight, className = '' }: RunD
 
   if (!detail) {
     return (
-      <div className={`card p-4 sm:p-6 ${className}`} data-testid="run-detail-view">
-        <Loading text="Loading run…" />
-        {error && (
-          <p className="mt-3 text-xs text-red-600" role="alert">
-            {error.message}
-          </p>
-        )}
-      </div>
+      <Card className={className} data-testid="run-detail-view">
+        <CardBody>
+          <Loading text="Loading run…" />
+          {error && (
+            <ErrorState
+              className="mt-3"
+              heading="Could not load this run"
+              message={error.message}
+              action={{ label: 'Try again', onClick: () => void getRunDetail(runId, true) }}
+            />
+          )}
+        </CardBody>
+      </Card>
     )
   }
 
@@ -145,137 +154,133 @@ function RunDetailBody({
   const transcript = detail.tool_transcript ?? []
 
   return (
-    <div
-      className={`card p-4 sm:p-6 space-y-4 ${className}`}
-      data-testid="run-detail-view"
-      data-run-id={detail.id}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-xs text-gray-500">{formatTs(detail.ts)}</p>
-          <p
-            className={`font-mono text-sm text-gray-900 break-all rounded ${
-              highlight?.model_id ? 'ring-2 ring-amber-400 bg-amber-50 px-1' : ''
-            }`}
-            data-testid="run-detail-model-id"
-            data-highlighted={highlight?.model_id ? 'true' : 'false'}
-          >
-            {detail.model_id}
-          </p>
-          {detail.config?.toolset && (
-            <p className="text-xs text-gray-600" data-testid="run-detail-toolset">
-              Toolset: {detail.config.toolset}
+    <Card className={className} data-testid="run-detail-view" data-run-id={detail.id}>
+      <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-xs text-muted-foreground">{formatTs(detail.ts)}</p>
+            <p
+              className={`font-mono text-sm text-foreground break-all rounded ${
+                highlight?.model_id ? 'ring-2 ring-warning-400 bg-warning-50 px-1' : ''
+              }`}
+              data-testid="run-detail-model-id"
+              data-highlighted={highlight?.model_id ? 'true' : 'false'}
+            >
+              {detail.model_id}
             </p>
-          )}
-        </div>
-        <StatusBadge
-          data-testid="run-detail-status-badge"
-          data-highlighted={highlight?.status ? 'true' : 'false'}
-          tone={statusTone(detail.status)}
-          role={undefined}
-          className={highlight?.status ? 'ring-2 ring-warning-400' : undefined}
-        >
-          {detail.status}
-        </StatusBadge>
-      </div>
-
-      {detail.error != null && (
-        <div
-          className="p-3 rounded-lg bg-red-50 border border-red-200"
-          role="alert"
-          data-testid="run-detail-error"
-        >
-          <pre className="text-xs font-mono text-red-800 whitespace-pre-wrap break-words">
-            {prettyJson(detail.error)}
-          </pre>
-        </div>
-      )}
-
-      <details>
-        <summary className="cursor-pointer text-xs font-medium text-gray-700">
-          System prompt
-        </summary>
-        <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words">
-          {detail.system_prompt || '—'}
-        </pre>
-      </details>
-
-      <details open>
-        <summary className="cursor-pointer text-xs font-medium text-gray-700">User prompt</summary>
-        <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words">
-          {detail.user_prompt || '—'}
-        </pre>
-      </details>
-
-      <div>
-        <p className="text-xs font-medium text-gray-700 mb-1">Output</p>
-        <div
-          data-testid="run-detail-output"
-          className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-sm text-gray-800"
-        >
-          {detail.output || <span className="text-gray-400">No output.</span>}
-        </div>
-      </div>
-
-      <div>
-        <p className="text-xs font-medium text-gray-700 mb-2">
-          Tool calls{transcript.length > 0 && ` (${transcript.length})`}
-        </p>
-        {transcript.length === 0 ? (
-          <p className="text-xs text-gray-500">No tools were called.</p>
-        ) : (
-          <ul className="space-y-2">
-            {transcript.map(entry => (
-              <ToolTranscriptRow key={entry.tool_use_id} entry={entry} />
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div>
-        <p className="text-xs font-medium text-gray-700 mb-2">Metrics</p>
-        <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          <MetricStat
-            label="Input tokens"
-            value={formatCount(detail.metrics?.input_tokens)}
-            highlighted={highlight?.metrics?.input_tokens}
-          />
-          <MetricStat
-            label="Output tokens"
-            value={formatCount(detail.metrics?.output_tokens)}
-            highlighted={highlight?.metrics?.output_tokens}
-          />
-          <MetricStat
-            label="Total tokens"
-            value={formatCount(detail.metrics?.total_tokens)}
-            highlighted={highlight?.metrics?.total_tokens}
-          />
-          <MetricStat
-            label="Latency"
-            value={formatMs(detail.metrics?.latency_ms)}
-            highlighted={highlight?.metrics?.latency_ms}
-          />
-          <MetricStat
-            label="Cycles"
-            value={formatCount(detail.metrics?.cycle_count)}
-            highlighted={highlight?.metrics?.cycle_count}
-          />
-        </dl>
-      </div>
-
-      {detail.guardrail_trace != null && (
-        <details>
-          <summary className="cursor-pointer text-xs font-medium text-gray-700">
-            Guardrail trace
-          </summary>
-          <pre
-            data-testid="run-detail-guardrail-trace"
-            className="mt-2 max-h-72 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800"
+            {detail.config?.toolset && (
+              <p className="text-xs text-muted-foreground" data-testid="run-detail-toolset">
+                Toolset: {detail.config.toolset}
+              </p>
+            )}
+          </div>
+          <StatusBadge
+            data-testid="run-detail-status-badge"
+            data-highlighted={highlight?.status ? 'true' : 'false'}
+            tone={statusTone(detail.status)}
+            role={undefined}
+            className={highlight?.status ? 'ring-2 ring-warning-400' : undefined}
           >
-            {prettyJson(detail.guardrail_trace)}
+            {detail.status}
+          </StatusBadge>
+        </div>
+
+        {detail.error != null && (
+          <Alert variant="error" data-testid="run-detail-error">
+            <pre className="text-xs font-mono whitespace-pre-wrap break-words">
+              {prettyJson(detail.error)}
+            </pre>
+          </Alert>
+        )}
+
+        <details>
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            System prompt
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-border bg-muted p-3 font-mono text-xs text-foreground whitespace-pre-wrap break-words">
+            {detail.system_prompt || '—'}
           </pre>
         </details>
-      )}
-    </div>
+
+        <details open>
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            User prompt
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-border bg-muted p-3 font-mono text-xs text-foreground whitespace-pre-wrap break-words">
+            {detail.user_prompt || '—'}
+          </pre>
+        </details>
+
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-1">Output</p>
+          <div
+            data-testid="run-detail-output"
+            className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted p-3 font-mono text-sm text-foreground"
+          >
+            {detail.output || <span className="text-muted-foreground">No output.</span>}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-2">
+            Tool calls{transcript.length > 0 && ` (${transcript.length})`}
+          </p>
+          {transcript.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No tools were called.</p>
+          ) : (
+            <ul className="space-y-2">
+              {transcript.map(entry => (
+                <ToolTranscriptRow key={entry.tool_use_id} entry={entry} />
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-2">Metrics</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <MetricStat
+              label="Input tokens"
+              value={formatCount(detail.metrics?.input_tokens)}
+              highlighted={highlight?.metrics?.input_tokens}
+            />
+            <MetricStat
+              label="Output tokens"
+              value={formatCount(detail.metrics?.output_tokens)}
+              highlighted={highlight?.metrics?.output_tokens}
+            />
+            <MetricStat
+              label="Total tokens"
+              value={formatCount(detail.metrics?.total_tokens)}
+              highlighted={highlight?.metrics?.total_tokens}
+            />
+            <MetricStat
+              label="Latency"
+              value={formatMs(detail.metrics?.latency_ms)}
+              highlighted={highlight?.metrics?.latency_ms}
+            />
+            <MetricStat
+              label="Cycles"
+              value={formatCount(detail.metrics?.cycle_count)}
+              highlighted={highlight?.metrics?.cycle_count}
+            />
+          </div>
+        </div>
+
+        {detail.guardrail_trace != null && (
+          <details>
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+              Guardrail trace
+            </summary>
+            <pre
+              data-testid="run-detail-guardrail-trace"
+              className="mt-2 max-h-72 overflow-auto rounded-lg border border-border bg-muted p-3 font-mono text-xs text-foreground"
+            >
+              {prettyJson(detail.guardrail_trace)}
+            </pre>
+          </details>
+        )}
+      </CardBody>
+    </Card>
   )
 }

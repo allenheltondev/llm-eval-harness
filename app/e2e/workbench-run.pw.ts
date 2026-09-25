@@ -40,8 +40,9 @@ test('runs a prompt against the fake model and streams the canned reply', async 
 
   // Metrics bar: FakeModel's usage_per_turn defaults to (11, 7) input/output
   // tokens regardless of prompt content.
-  const stat = (label: string) => page.locator('dl > div').filter({ hasText: label }).locator('dd')
-  await expect(stat('Input tokens')).toHaveText('11')
-  await expect(stat('Output tokens')).toHaveText('7')
-  await expect(stat('Total tokens')).toHaveText('18')
+  // Each metric is a labelled group whose text is "<label><value>".
+  const stat = (label: string) => page.getByRole('group', { name: label, exact: true })
+  await expect(stat('Input tokens')).toHaveText('Input tokens11')
+  await expect(stat('Output tokens')).toHaveText('Output tokens7')
+  await expect(stat('Total tokens')).toHaveText('Total tokens18')
 })

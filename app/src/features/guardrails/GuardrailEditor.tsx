@@ -9,7 +9,22 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Loading } from '@readysetcloud/ui'
+import {
+  Alert,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Field,
+  Input,
+  Loading,
+  SegmentedControl,
+  Select,
+  TextArea,
+  type SegmentedControlOption
+} from '@readysetcloud/ui'
+import { useNotify } from '../../components/notify'
 import { selectGuardrailDetail, useGuardrailStore } from '../../stores'
 import type {
   ContentFilter,
@@ -44,6 +59,45 @@ const FILTER_LABELS: Record<ContentFilterType, string> = {
 }
 
 const STRENGTHS: GuardrailStrength[] = ['NONE', 'LOW', 'MEDIUM', 'HIGH']
+
+/** Strength choices; every option is disabled together when the control is. */
+function strengthOptions(disabled: boolean): SegmentedControlOption<GuardrailStrength>[] {
+  return STRENGTHS.map(strength => ({ value: strength, label: strength, disabled }))
+}
+
+const PII_ACTION_OPTIONS: SegmentedControlOption<PiiRow['action']>[] = [
+  { value: 'BLOCK', label: 'BLOCK' },
+  { value: 'ANONYMIZE', label: 'ANONYMIZE' }
+]
+
+/**
+ * A SegmentedControl with a visible caption styled like the package's field
+ * labels. The group's accessible name comes from `aria-label` (more specific
+ * than the caption, e.g. "Hate input strength"), since a <label> cannot
+ * target a group of buttons.
+ */
+function SegmentedField<T extends string>({
+  label,
+  hint,
+  ...control
+}: {
+  label: string
+  hint?: string
+  'aria-label': string
+  options: SegmentedControlOption<T>[]
+  value: T
+  onChange: (value: T) => void
+}) {
+  return (
+    <div className="field">
+      <span className="field-label" aria-hidden="true">
+        {label}
+      </span>
+      <SegmentedControl {...control} />
+      {hint && <span className="field-hint">{hint}</span>}
+    </div>
+  )
+}
 
 const PII_ENTITY_TYPES: PiiEntityType[] = [
   'ADDRESS',
@@ -165,7 +219,9 @@ export default function GuardrailEditor({
   const [piiRows, setPiiRows] = useState<PiiRow[]>([])
   const [groundingThreshold, setGroundingThreshold] = useState('')
   const [relevanceThreshold, setRelevanceThreshold] = useState('')
+  const [nameError, setNameError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const notify = useNotify()
 
   const loadGuardrail = useGuardrailStore(state => state.loadGuardrail)
   const createGuardrail = useGuardrailStore(state => state.createGuardrail)
@@ -313,9 +369,10 @@ export default function GuardrailEditor({
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setFormError(null)
+    setNameError(null)
 
     if (name.trim() === '') {
-      setFormError('Name is required.')
+      setNameError('Name is required.')
       return
     }
 
@@ -330,14 +387,19 @@ export default function GuardrailEditor({
     const result = guardrailId
       ? await updateGuardrail(guardrailId, config)
       : await createGuardrail(config)
-    if (result) onClose()
+    if (result) {
+      notify(guardrailId ? 'Guardrail saved' : 'Guardrail created', { variant: 'success' })
+      onClose()
+    }
   }
 
   if (guardrailId && detailLoading && !detail) {
     return (
-      <div className="card p-4 sm:p-6 max-w-3xl mx-auto">
-        <Loading text="Loading guardrail…" />
-      </div>
+      <Card className="max-w-3xl mx-auto">
+        <CardBody>
+          <Loading text="Loading guardrail…" />
+        </CardBody>
+      </Card>
     )
   }
 
@@ -348,255 +410,202 @@ export default function GuardrailEditor({
       onSubmit={event => void handleSubmit(event)}
     >
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">
+        <h2 className="text-lg font-semibold text-foreground">
           {guardrailId ? 'Edit guardrail' : 'New guardrail'}
         </h2>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
+        <Button variant="secondary" onClick={onClose}>
           Back
-        </button>
+        </Button>
       </div>
 
-      <section className="card p-4 sm:p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-3">Basics</h3>
-        <div className="space-y-3">
-          <div>
-            <label
-              htmlFor="guardrail-name"
-              className="block text-xs font-medium text-gray-700 mb-1"
-            >
-              Name<span aria-hidden="true"> *</span>
-            </label>
-            <input
-              id="guardrail-name"
-              type="text"
-              className="input"
-              value={name}
-              onChange={event => setName(event.target.value)}
-            />
-          </div>
-          <div>
-            <label
-              htmlFor="guardrail-description"
-              className="block text-xs font-medium text-gray-700 mb-1"
-            >
-              Description
-            </label>
-            <input
-              id="guardrail-description"
-              type="text"
-              className="input"
-              value={description}
-              onChange={event => setDescription(event.target.value)}
-            />
-          </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Basics</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-3">
+          <Input
+            label="Name"
+            hint="Required."
+            aria-required="true"
+            type="text"
+            value={name}
+            error={nameError ?? undefined}
+            onChange={event => setName(event.target.value)}
+          />
+          <Input
+            label="Description"
+            type="text"
+            value={description}
+            onChange={event => setDescription(event.target.value)}
+          />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label
-                htmlFor="blocked-input-message"
-                className="block text-xs font-medium text-gray-700 mb-1"
-              >
-                Blocked input message
-              </label>
-              <textarea
-                id="blocked-input-message"
-                className="input"
-                rows={2}
-                value={blockedInputMessage}
-                onChange={event => setBlockedInputMessage(event.target.value)}
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="blocked-output-message"
-                className="block text-xs font-medium text-gray-700 mb-1"
-              >
-                Blocked output message
-              </label>
-              <textarea
-                id="blocked-output-message"
-                className="input"
-                rows={2}
-                value={blockedOutputMessage}
-                onChange={event => setBlockedOutputMessage(event.target.value)}
-              />
-            </div>
+            <TextArea
+              label="Blocked input message"
+              rows={2}
+              value={blockedInputMessage}
+              onChange={event => setBlockedInputMessage(event.target.value)}
+            />
+            <TextArea
+              label="Blocked output message"
+              rows={2}
+              value={blockedOutputMessage}
+              onChange={event => setBlockedOutputMessage(event.target.value)}
+            />
           </div>
-        </div>
-      </section>
+        </CardBody>
+      </Card>
 
-      <section className="card p-4 sm:p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-3">Content filters</h3>
-        <div className="space-y-3">
+      <Card>
+        <CardHeader>
+          <CardTitle>Content filters</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-3">
           {CONTENT_FILTER_TYPES.map(type => {
             const filter = filters[type]
             const isPromptAttack = type === 'PROMPT_ATTACK'
             return (
               <div
                 key={type}
-                className="grid grid-cols-1 sm:grid-cols-[10rem_1fr_1fr] gap-2 sm:items-end p-3 rounded-lg border border-gray-200"
+                className="grid grid-cols-1 sm:grid-cols-[8rem_1fr_1fr] gap-3 sm:items-start p-3 rounded-lg border border-border"
                 data-testid={`filter-row-${type}`}
               >
-                <label className="flex items-center gap-2 text-sm text-gray-800">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 rounded border-gray-300 text-primary-600"
-                    data-testid={`filter-enable-${type}`}
-                    checked={filter.enabled}
-                    onChange={event => updateFilter(type, { enabled: event.target.checked })}
-                  />
-                  {FILTER_LABELS[type]}
-                </label>
-                <div>
-                  <label
-                    htmlFor={`filter-${type}-input`}
-                    className="block text-xs text-gray-600 mb-1"
-                  >
-                    Input strength
-                  </label>
-                  <select
-                    id={`filter-${type}-input`}
-                    className="input"
-                    disabled={!filter.enabled}
-                    value={filter.inputStrength}
-                    onChange={event =>
-                      updateFilter(type, {
-                        inputStrength: event.target.value as GuardrailStrength
-                      })
-                    }
-                  >
-                    {STRENGTHS.map(strength => (
-                      <option key={strength} value={strength}>
-                        {strength}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor={`filter-${type}-output`}
-                    className="block text-xs text-gray-600 mb-1"
-                  >
-                    Output strength
-                  </label>
-                  <select
-                    id={`filter-${type}-output`}
-                    className="input"
-                    disabled={!filter.enabled || isPromptAttack}
-                    value={isPromptAttack ? 'NONE' : filter.outputStrength}
-                    onChange={event =>
-                      updateFilter(type, {
-                        outputStrength: event.target.value as GuardrailStrength
-                      })
-                    }
-                  >
-                    {STRENGTHS.map(strength => (
-                      <option key={strength} value={strength}>
-                        {strength}
-                      </option>
-                    ))}
-                  </select>
-                  {isPromptAttack && (
-                    <p className="mt-1 text-xs text-gray-500">
-                      Output strength is always NONE for prompt attacks.
-                    </p>
+                <Field label={FILTER_LABELS[type]}>
+                  {props => (
+                    <input
+                      {...props}
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-border text-primary-600"
+                      data-testid={`filter-enable-${type}`}
+                      checked={filter.enabled}
+                      onChange={event => updateFilter(type, { enabled: event.target.checked })}
+                    />
                   )}
-                </div>
+                </Field>
+                <SegmentedField
+                  label="Input strength"
+                  aria-label={`${FILTER_LABELS[type]} input strength`}
+                  options={strengthOptions(!filter.enabled)}
+                  value={filter.inputStrength}
+                  onChange={inputStrength => updateFilter(type, { inputStrength })}
+                />
+                <SegmentedField
+                  label="Output strength"
+                  aria-label={`${FILTER_LABELS[type]} output strength`}
+                  options={strengthOptions(!filter.enabled || isPromptAttack)}
+                  value={isPromptAttack ? 'NONE' : filter.outputStrength}
+                  onChange={outputStrength => updateFilter(type, { outputStrength })}
+                  hint={
+                    isPromptAttack
+                      ? 'Output strength is always NONE for prompt attacks.'
+                      : undefined
+                  }
+                />
               </div>
             )
           })}
-        </div>
-      </section>
+        </CardBody>
+      </Card>
 
-      <section className="card p-4 sm:p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-3">Denied topics</h3>
-        <div className="space-y-3" data-testid="denied-topic-rows">
+      <Card>
+        <CardHeader>
+          <CardTitle>Denied topics</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-3" data-testid="denied-topic-rows">
           {deniedTopics.map((row, index) => (
             <div
               key={index}
-              className="p-3 rounded-lg border border-gray-200 space-y-2"
+              className="p-3 rounded-lg border border-border space-y-2"
               data-testid={`denied-topic-row-${index}`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-700">Topic {index + 1}</span>
-                <button
-                  type="button"
-                  className="text-xs font-medium text-red-700 hover:text-red-800"
-                  onClick={() => removeDeniedTopic(index)}
-                >
+                <span className="text-xs font-medium text-muted-foreground">Topic {index + 1}</span>
+                <Button variant="ghost" size="sm" onClick={() => removeDeniedTopic(index)}>
                   Remove
-                </button>
+                </Button>
               </div>
-              <input
-                type="text"
-                className="input"
-                placeholder="Name"
-                aria-label={`Denied topic ${index + 1} name`}
-                value={row.name}
-                onChange={event => updateDeniedTopic(index, { name: event.target.value })}
-              />
-              <textarea
-                className="input"
-                rows={2}
-                placeholder="Definition"
-                aria-label={`Denied topic ${index + 1} definition`}
-                value={row.definition}
-                onChange={event => updateDeniedTopic(index, { definition: event.target.value })}
-              />
-              <textarea
-                className="input"
-                rows={2}
-                placeholder="Examples (comma or newline separated, up to 5)"
-                aria-label={`Denied topic ${index + 1} examples`}
-                value={row.examples}
-                onChange={event => updateDeniedTopic(index, { examples: event.target.value })}
-              />
+              <Field label={<span className="sr-only">Denied topic {index + 1} name</span>}>
+                {props => (
+                  <input
+                    {...props}
+                    type="text"
+                    className="input"
+                    placeholder="Name"
+                    value={row.name}
+                    onChange={event => updateDeniedTopic(index, { name: event.target.value })}
+                  />
+                )}
+              </Field>
+              <Field label={<span className="sr-only">Denied topic {index + 1} definition</span>}>
+                {props => (
+                  <textarea
+                    {...props}
+                    className="input"
+                    rows={2}
+                    placeholder="Definition"
+                    value={row.definition}
+                    onChange={event => updateDeniedTopic(index, { definition: event.target.value })}
+                  />
+                )}
+              </Field>
+              <Field label={<span className="sr-only">Denied topic {index + 1} examples</span>}>
+                {props => (
+                  <textarea
+                    {...props}
+                    className="input"
+                    rows={2}
+                    placeholder="Examples (comma or newline separated, up to 5)"
+                    value={row.examples}
+                    onChange={event => updateDeniedTopic(index, { examples: event.target.value })}
+                  />
+                )}
+              </Field>
             </div>
           ))}
-          <button type="button" className="btn btn-secondary" onClick={addDeniedTopic}>
+          <Button variant="secondary" onClick={addDeniedTopic}>
             Add denied topic
-          </button>
-        </div>
-      </section>
+          </Button>
+        </CardBody>
+      </Card>
 
-      <section className="card p-4 sm:p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-3">Words</h3>
-        <label htmlFor="denied-words" className="block text-xs font-medium text-gray-700 mb-1">
-          Denied words (one per line)
-        </label>
-        <textarea
-          id="denied-words"
-          className="input"
-          rows={4}
-          value={words}
-          onChange={event => setWords(event.target.value)}
-        />
-        <label className="mt-3 flex items-center gap-2 text-sm text-gray-800">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-gray-300 text-primary-600"
-            checked={managedProfanity}
-            onChange={event => setManagedProfanity(event.target.checked)}
+      <Card>
+        <CardHeader>
+          <CardTitle>Words</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-3">
+          <TextArea
+            label="Denied words (one per line)"
+            rows={4}
+            value={words}
+            onChange={event => setWords(event.target.value)}
           />
-          Use the managed profanity word list
-        </label>
-      </section>
+          <Field label="Use the managed profanity word list">
+            {props => (
+              <input
+                {...props}
+                type="checkbox"
+                className="h-4 w-4 rounded border-border text-primary-600"
+                checked={managedProfanity}
+                onChange={event => setManagedProfanity(event.target.checked)}
+              />
+            )}
+          </Field>
+        </CardBody>
+      </Card>
 
-      <section className="card p-4 sm:p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-3">PII</h3>
-        <div className="space-y-3" data-testid="pii-rows">
+      <Card>
+        <CardHeader>
+          <CardTitle>PII</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-3" data-testid="pii-rows">
           {piiRows.map((row, index) => (
             <div
               key={index}
-              className="flex flex-wrap items-end gap-2 p-3 rounded-lg border border-gray-200"
+              className="flex flex-wrap items-end gap-3 p-3 rounded-lg border border-border"
               data-testid={`pii-row-${index}`}
             >
               <div className="flex-1 min-w-[10rem]">
-                <label htmlFor={`pii-type-${index}`} className="block text-xs text-gray-600 mb-1">
-                  Entity type
-                </label>
-                <select
-                  id={`pii-type-${index}`}
-                  className="input"
+                <Select
+                  label="Entity type"
                   value={row.type}
                   onChange={event =>
                     updatePiiRow(index, { type: event.target.value as PiiEntityType })
@@ -607,106 +616,71 @@ export default function GuardrailEditor({
                       {type}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
-              <div className="min-w-[8rem]">
-                <label htmlFor={`pii-action-${index}`} className="block text-xs text-gray-600 mb-1">
-                  Action
-                </label>
-                <select
-                  id={`pii-action-${index}`}
-                  className="input"
-                  value={row.action}
-                  onChange={event =>
-                    updatePiiRow(index, {
-                      action: event.target.value as 'BLOCK' | 'ANONYMIZE'
-                    })
-                  }
-                >
-                  <option value="BLOCK">BLOCK</option>
-                  <option value="ANONYMIZE">ANONYMIZE</option>
-                </select>
-              </div>
-              <button
-                type="button"
-                className="text-xs font-medium text-red-700 hover:text-red-800 mb-2"
-                onClick={() => removePiiRow(index)}
-              >
+              <SegmentedField
+                label="Action"
+                aria-label={`PII rule ${index + 1} action`}
+                options={PII_ACTION_OPTIONS}
+                value={row.action}
+                onChange={action => updatePiiRow(index, { action })}
+              />
+              <Button variant="ghost" size="sm" onClick={() => removePiiRow(index)}>
                 Remove
-              </button>
+              </Button>
             </div>
           ))}
-          <button type="button" className="btn btn-secondary" onClick={addPiiRow}>
+          <Button variant="secondary" onClick={addPiiRow}>
             Add PII rule
-          </button>
-        </div>
-      </section>
+          </Button>
+        </CardBody>
+      </Card>
 
-      <section className="card p-4 sm:p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-3">Contextual grounding</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label
-              htmlFor="grounding-threshold"
-              className="block text-xs font-medium text-gray-700 mb-1"
-            >
-              Grounding threshold (0-1)
-            </label>
-            <input
-              id="grounding-threshold"
-              type="number"
-              step="0.05"
-              min={0}
-              max={1}
-              className="input"
-              value={groundingThreshold}
-              onChange={event => setGroundingThreshold(event.target.value)}
-            />
-          </div>
-          <div>
-            <label
-              htmlFor="relevance-threshold"
-              className="block text-xs font-medium text-gray-700 mb-1"
-            >
-              Relevance threshold (0-1)
-            </label>
-            <input
-              id="relevance-threshold"
-              type="number"
-              step="0.05"
-              min={0}
-              max={1}
-              className="input"
-              value={relevanceThreshold}
-              onChange={event => setRelevanceThreshold(event.target.value)}
-            />
-          </div>
-        </div>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Contextual grounding</CardTitle>
+        </CardHeader>
+        <CardBody className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Input
+            label="Grounding threshold (0-1)"
+            type="number"
+            step="0.05"
+            min={0}
+            max={1}
+            value={groundingThreshold}
+            onChange={event => setGroundingThreshold(event.target.value)}
+          />
+          <Input
+            label="Relevance threshold (0-1)"
+            type="number"
+            step="0.05"
+            min={0}
+            max={1}
+            value={relevanceThreshold}
+            onChange={event => setRelevanceThreshold(event.target.value)}
+          />
+        </CardBody>
+      </Card>
 
       {formError && (
-        <p className="text-sm text-red-600" role="alert" data-testid="form-error">
+        <Alert variant="error" data-testid="form-error">
           {formError}
-        </p>
+        </Alert>
       )}
 
       {saveError && (
-        <p className="text-sm text-red-600" role="alert" data-testid="save-error">
+        <Alert variant="error" data-testid="save-error">
           Could not save: {saveError.message}
-        </p>
+        </Alert>
       )}
 
       <div className="flex gap-2">
-        <button
-          type="submit"
-          className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={saving}
-        >
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
+        <Button type="submit" loading={saving} loadingLabel="Saving…">
+          Save
+        </Button>
+        <Button variant="secondary" onClick={onClose}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   )

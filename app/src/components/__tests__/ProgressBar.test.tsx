@@ -32,6 +32,12 @@ describe('ProgressBar', () => {
     expect(screen.getByText('66%')).toBeInTheDocument()
   })
 
+  it('exposes a progressbar named by its status with the rounded value', () => {
+    render(<ProgressBar progress={66.4} status="Grading" />)
+    const progressbar = screen.getByRole('progressbar', { name: 'Grading' })
+    expect(progressbar).toHaveAttribute('aria-valuenow', '66')
+  })
+
   it('indeterminate: full width, pulsing, and no percentage next to the status', () => {
     const { container } = render(<ProgressBar indeterminate status="Working" />)
     expect(bar(container).style.width).toBe('100%')
@@ -41,9 +47,9 @@ describe('ProgressBar', () => {
   })
 
   it.each([
-    ['success', 'bg-green-600', 'bg-green-100'],
-    ['warning', 'bg-yellow-600', 'bg-yellow-100'],
-    ['error', 'bg-red-600', 'bg-red-100']
+    ['success', 'bg-success-600', 'bg-success-100'],
+    ['warning', 'bg-warning-600', 'bg-warning-100'],
+    ['error', 'bg-error-600', 'bg-error-100']
   ] as const)('applies the %s colour to the bar and its track', (color, fill, track) => {
     const { container } = render(<ProgressBar progress={10} color={color} />)
     expect(bar(container).className).toContain(fill)

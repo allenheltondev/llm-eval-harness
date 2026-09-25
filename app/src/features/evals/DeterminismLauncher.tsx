@@ -20,6 +20,17 @@
 
 import { useEffect, useState } from 'react'
 import {
+  Alert,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Input,
+  SegmentedControl,
+  Select,
+  TextArea
+} from '@readysetcloud/ui'
+import {
   findModel,
   groupModelsBySource,
   selectCanRun,
@@ -169,91 +180,86 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
     else setStartFailed(true)
   }
 
+  const unavailableHints = EXECUTION_OPTIONS.filter(option =>
+    option.value === 'cloud' ? !cloudConfigured : !localAvailable
+  ).map(option =>
+    option.value === 'cloud' ? CLOUD_UNAVAILABLE_TOOLTIP : LOCAL_UNAVAILABLE_TOOLTIP
+  )
+
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="determinism-launcher-heading">
-      <h2 id="determinism-launcher-heading" className="text-base font-semibold text-gray-900 mb-3">
-        New determinism evaluation
-      </h2>
-
-      {!canRun ? (
-        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
-          Set a model and a user prompt in the Workbench tab before starting a determinism
-          evaluation.
-        </p>
-      ) : (
-        <dl className="text-sm text-gray-700 space-y-1 mb-4" data-testid="workbench-config-summary">
-          <div>
-            <dt className="inline font-medium text-gray-900">Model: </dt>
-            <dd className="inline font-mono text-xs">{model?.name ?? modelId}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium text-gray-900">Tools: </dt>
-            <dd className="inline">{toolset ?? 'None'}</dd>
-          </div>
-          <div>
-            <dt className="font-medium text-gray-900">System prompt</dt>
-            <dd className="text-xs text-gray-600 font-mono">{truncate(systemPrompt)}</dd>
-          </div>
-          <div>
-            <dt className="font-medium text-gray-900">User prompt</dt>
-            <dd className="text-xs text-gray-600 font-mono">{truncate(userPrompt)}</dd>
-          </div>
-        </dl>
-      )}
-
-      <div className="space-y-3">
-        <div>
-          <span className="block text-xs font-medium text-gray-700 mb-1">Run location</span>
-          <div
-            className="inline-flex rounded-lg border border-gray-300 overflow-hidden text-sm"
-            role="radiogroup"
-            aria-label="Run location"
+    <Card role="region" aria-labelledby="determinism-launcher-heading">
+      <CardHeader>
+        <h2 id="determinism-launcher-heading" className="card-title">
+          New determinism evaluation
+        </h2>
+      </CardHeader>
+      <CardBody>
+        {!canRun ? (
+          <Alert variant="info" className="mb-4">
+            Set a model and a user prompt in the Workbench tab before starting a determinism
+            evaluation.
+          </Alert>
+        ) : (
+          <dl
+            className="text-sm text-muted-foreground space-y-1 mb-4"
+            data-testid="workbench-config-summary"
           >
-            {EXECUTION_OPTIONS.map(option => {
-              const disabled = option.value === 'cloud' ? !cloudConfigured : !localAvailable
-              const hint =
-                option.value === 'cloud' ? CLOUD_UNAVAILABLE_TOOLTIP : LOCAL_UNAVAILABLE_TOOLTIP
-              return (
-                <label
-                  key={option.value}
-                  title={disabled ? hint : undefined}
-                  className={`px-3 py-1.5 cursor-pointer first:border-r first:border-gray-300 ${
-                    effectiveExecution === option.value
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-surface text-gray-700'
-                  } ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-primary-50'}`}
-                >
-                  <input
-                    type="radio"
-                    name="eval-execution"
-                    value={option.value}
-                    checked={effectiveExecution === option.value}
-                    disabled={disabled}
-                    onChange={() => handleExecutionChange(option.value)}
-                    className="sr-only"
-                  />
-                  {option.label}
-                </label>
-              )
-            })}
-          </div>
-          {effectiveExecution === 'cloud' && (
-            <p className="mt-1 text-xs text-gray-500" data-testid="cloud-execution-note">
-              Runs and prompts are persisted to your AWS account (DynamoDB) for later review.
-            </p>
-          )}
-        </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Model: </dt>
+              <dd className="inline font-mono text-xs">{model?.name ?? modelId}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Tools: </dt>
+              <dd className="inline">{toolset ?? 'None'}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-foreground">System prompt</dt>
+              <dd className="text-xs text-muted-foreground font-mono">{truncate(systemPrompt)}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-foreground">User prompt</dt>
+              <dd className="text-xs text-muted-foreground font-mono">{truncate(userPrompt)}</dd>
+            </div>
+          </dl>
+        )}
 
-        <div>
-          <label htmlFor="eval-n" className="block text-xs font-medium text-gray-700 mb-1">
-            Number of runs ({N_MIN}–{N_MAX})
-          </label>
-          <input
-            id="eval-n"
+        <div className="space-y-4">
+          <div className="field">
+            <span className="field-label" aria-hidden="true">
+              Run location
+            </span>
+            <SegmentedControl
+              aria-label="Run location"
+              options={EXECUTION_OPTIONS.map(option => {
+                const disabled = option.value === 'cloud' ? !cloudConfigured : !localAvailable
+                const hint =
+                  option.value === 'cloud' ? CLOUD_UNAVAILABLE_TOOLTIP : LOCAL_UNAVAILABLE_TOOLTIP
+                return {
+                  value: option.value,
+                  disabled,
+                  label: <span title={disabled ? hint : undefined}>{option.label}</span>
+                }
+              })}
+              value={effectiveExecution}
+              onChange={handleExecutionChange}
+            />
+            {unavailableHints.map(hint => (
+              <p key={hint} className="field-hint">
+                {hint}
+              </p>
+            ))}
+            {effectiveExecution === 'cloud' && (
+              <p className="field-hint" data-testid="cloud-execution-note">
+                Runs and prompts are persisted to your AWS account (DynamoDB) for later review.
+              </p>
+            )}
+          </div>
+
+          <Input
+            label={`Number of runs (${N_MIN}–${N_MAX})`}
             type="number"
             min={N_MIN}
             max={N_MAX}
-            className="input"
             value={n}
             onChange={event => {
               const raw = Number(event.target.value)
@@ -261,18 +267,9 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
               setN(clampN(raw))
             }}
           />
-        </div>
 
-        <div>
-          <label
-            htmlFor="grader-model-select"
-            className="block text-xs font-medium text-gray-700 mb-1"
-          >
-            Grader model
-          </label>
-          <select
-            id="grader-model-select"
-            className="input"
+          <Select
+            label="Grader model"
             value={graderModelId}
             onChange={event => handleGraderModelChange(event.target.value)}
           >
@@ -286,72 +283,60 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
                 ))}
               </optgroup>
             ))}
-          </select>
-        </div>
+          </Select>
 
-        <div>
-          <label htmlFor="eval-rubric" className="block text-xs font-medium text-gray-700 mb-1">
-            Custom rubric <span className="text-gray-400 font-normal">(optional)</span>
-          </label>
-          <textarea
-            id="eval-rubric"
-            className="input font-mono text-sm"
+          <TextArea
+            label="Custom rubric (optional)"
+            className="font-mono text-sm"
             rows={3}
             placeholder="How the judge should score consistency…"
             value={rubric}
             onChange={event => setRubric(event.target.value)}
           />
-        </div>
 
-        <div>
-          <button
-            type="button"
-            className="text-xs font-medium text-primary-700 hover:text-primary-800"
-            aria-expanded={showAdvanced}
-            aria-controls="advanced-grading-fields"
-            onClick={() => setShowAdvanced(open => !open)}
-          >
-            {showAdvanced ? '▾' : '▸'} Advanced grading
-          </button>
-
-          {showAdvanced && (
-            <div
-              id="advanced-grading-fields"
-              className="mt-2 p-3 rounded-lg border border-gray-200 bg-gray-50"
+          <div>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={showAdvanced}
+              aria-controls="advanced-grading-fields"
+              onClick={() => setShowAdvanced(open => !open)}
             >
-              <label
-                htmlFor="grader-system-prompt"
-                className="block text-xs font-medium text-gray-700 mb-1"
+              {showAdvanced ? '▾' : '▸'} Advanced grading
+            </Button>
+
+            {showAdvanced && (
+              <div
+                id="advanced-grading-fields"
+                className="mt-2 p-3 rounded-lg border border-border bg-muted/30"
               >
-                Custom grader system prompt
-              </label>
-              <textarea
-                id="grader-system-prompt"
-                className="input font-mono text-sm"
-                rows={4}
-                placeholder="Override the judge's default system prompt…"
-                value={graderSystemPrompt}
-                onChange={event => setGraderSystemPrompt(event.target.value)}
-              />
-            </div>
+                <TextArea
+                  label="Custom grader system prompt"
+                  className="font-mono text-sm"
+                  rows={4}
+                  placeholder="Override the judge's default system prompt…"
+                  value={graderSystemPrompt}
+                  onChange={event => setGraderSystemPrompt(event.target.value)}
+                />
+              </div>
+            )}
+          </div>
+
+          <Button
+            block
+            disabled={!canRun || !graderReady}
+            loading={isEvaluating}
+            loadingLabel="Running…"
+            onClick={() => void handleStart()}
+          >
+            Start evaluation
+          </Button>
+
+          {startFailed && startErrorState && (
+            <Alert variant="error">Could not start evaluation: {startErrorState.message}</Alert>
           )}
         </div>
-
-        <button
-          type="button"
-          className="btn btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={!canRun || !graderReady || isEvaluating}
-          onClick={() => void handleStart()}
-        >
-          {isEvaluating ? 'Running…' : 'Start evaluation'}
-        </button>
-
-        {startFailed && startErrorState && (
-          <p className="text-xs text-red-600" role="alert">
-            Could not start evaluation: {startErrorState.message}
-          </p>
-        )}
-      </div>
-    </section>
+      </CardBody>
+    </Card>
   )
 }

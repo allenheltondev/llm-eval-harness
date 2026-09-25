@@ -7,6 +7,7 @@
  * and duration in place when the result lands.
  */
 
+import { Badge, Card, CardBody, CardHeader, EmptyState } from '@readysetcloud/ui'
 import { useRunStore, type ToolEventEntry } from '../../stores'
 
 /**
@@ -33,39 +34,31 @@ function ToolRow({ entry }: { entry: ToolEventEntry }) {
   const input = entry.input !== undefined ? entry.input : entry.inputJson
 
   return (
-    <li className="rounded-lg border border-gray-200 bg-surface p-3" data-testid="tool-event">
+    <li className="rounded-lg border border-border bg-surface p-3" data-testid="tool-event">
       <div className="flex items-center justify-between gap-2 mb-2">
-        <span className="font-mono text-sm font-medium text-gray-900">
+        <span className="font-mono text-sm font-medium text-foreground">
           {entry.name || 'unnamed tool'}
         </span>
         <span className="flex items-center gap-2">
-          {entry.error && (
-            <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-medium">
-              error
-            </span>
-          )}
-          {pending && (
-            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">
-              running
-            </span>
-          )}
+          {entry.error && <Badge variant="error">error</Badge>}
+          {pending && <Badge variant="warning">running</Badge>}
           {entry.duration_ms !== undefined && (
-            <span className="text-xs text-gray-500">{entry.duration_ms} ms</span>
+            <span className="text-xs text-muted-foreground">{entry.duration_ms} ms</span>
           )}
         </span>
       </div>
 
       <div className="text-xs">
-        <p className="font-medium text-gray-600 mb-1">Input</p>
-        <pre className="overflow-x-auto rounded bg-gray-50 p-2 font-mono text-gray-800">
+        <p className="font-medium text-muted-foreground mb-1">Input</p>
+        <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-foreground">
           {prettyJson(input)}
         </pre>
       </div>
 
       {entry.result !== undefined && (
         <div className="text-xs mt-2">
-          <p className="font-medium text-gray-600 mb-1">Result</p>
-          <pre className="max-h-48 overflow-auto rounded bg-gray-50 p-2 font-mono text-gray-800">
+          <p className="font-medium text-muted-foreground mb-1">Result</p>
+          <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-foreground">
             {prettyJson(entry.result)}
           </pre>
         </div>
@@ -73,8 +66,8 @@ function ToolRow({ entry }: { entry: ToolEventEntry }) {
 
       {entry.error && (
         <div className="text-xs mt-2">
-          <p className="font-medium text-red-600 mb-1">Error</p>
-          <pre className="overflow-x-auto rounded bg-red-50 p-2 font-mono text-red-800">
+          <p className="font-medium text-error-600 mb-1">Error</p>
+          <pre className="overflow-x-auto rounded bg-error-50 p-2 font-mono text-error-800">
             {prettyJson(entry.error)}
           </pre>
         </div>
@@ -87,20 +80,23 @@ export default function ToolTimeline() {
   const toolEvents = useRunStore(state => state.toolEvents)
 
   return (
-    <section className="card p-4 sm:p-6" aria-labelledby="tool-timeline-heading">
-      <h2 id="tool-timeline-heading" className="text-base font-semibold text-gray-900 mb-3">
-        Tool calls{toolEvents.length > 0 && ` (${toolEvents.length})`}
-      </h2>
-
-      {toolEvents.length === 0 ? (
-        <p className="text-sm text-gray-500">No tools were called.</p>
-      ) : (
-        <ul className="space-y-2">
-          {toolEvents.map(entry => (
-            <ToolRow key={entry.tool_use_id} entry={entry} />
-          ))}
-        </ul>
-      )}
-    </section>
+    <Card role="region" aria-labelledby="tool-timeline-heading">
+      <CardHeader>
+        <h2 id="tool-timeline-heading" className="card-title">
+          Tool calls{toolEvents.length > 0 && ` (${toolEvents.length})`}
+        </h2>
+      </CardHeader>
+      <CardBody>
+        {toolEvents.length === 0 ? (
+          <EmptyState title="No tools were called." />
+        ) : (
+          <ul className="space-y-2">
+            {toolEvents.map(entry => (
+              <ToolRow key={entry.tool_use_id} entry={entry} />
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   )
 }

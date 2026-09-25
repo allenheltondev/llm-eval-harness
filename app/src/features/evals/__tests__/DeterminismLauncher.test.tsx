@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { HealthResponse, ModelInfo, ModelProviders } from '../../../api'
 
 /**
@@ -66,6 +66,11 @@ const MODELS: ModelInfo[] = [
     source: 'bedrock'
   }
 ]
+
+/** A Run location option: a SegmentedControl button, pressed when selected. */
+function option(name: string): HTMLElement {
+  return within(screen.getByRole('group', { name: 'Run location' })).getByRole('button', { name })
+}
 
 const startEvaluation = vi.fn().mockResolvedValue('eval-new')
 
@@ -233,10 +238,8 @@ describe('DeterminismLauncher', () => {
       render(<DeterminismLauncher />)
       await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
 
-      const local = screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement
-      const cloud = screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement
-      expect(local.checked).toBe(true)
-      expect(cloud.checked).toBe(false)
+      expect(option('This machine')).toHaveAttribute('aria-pressed', 'true')
+      expect(option('Cloud — persisted')).toHaveAttribute('aria-pressed', 'false')
     })
 
     it('seeds the toggle from settings.defaultEvalExecution', async () => {
@@ -244,9 +247,7 @@ describe('DeterminismLauncher', () => {
       render(<DeterminismLauncher />)
       await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
 
-      expect(
-        (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked
-      ).toBe(true)
+      expect(option('Cloud — persisted')).toHaveAttribute('aria-pressed', 'true')
     })
 
     it('switching to Cloud persists it as the new default and shows the storage note', async () => {
@@ -255,11 +256,9 @@ describe('DeterminismLauncher', () => {
 
       expect(screen.queryByTestId('cloud-execution-note')).not.toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('radio', { name: 'Cloud — persisted' }))
+      fireEvent.click(option('Cloud — persisted'))
 
-      expect(
-        (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked
-      ).toBe(true)
+      expect(option('Cloud — persisted')).toHaveAttribute('aria-pressed', 'true')
       expect(useSettingsStore.getState().defaultEvalExecution).toBe('cloud')
       expect(screen.getByTestId('cloud-execution-note')).toHaveTextContent(
         'Runs and prompts are persisted to your AWS account (DynamoDB) for later review.'
@@ -271,13 +270,12 @@ describe('DeterminismLauncher', () => {
       healthMock.mockResolvedValueOnce(health(false))
       render(<DeterminismLauncher />)
 
-      await waitFor(() =>
-        expect(
-          (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled
-        ).toBe(true)
+      await waitFor(() => expect(option('Cloud — persisted')).toBeDisabled())
+      expect(option('Cloud — persisted').querySelector('[title]')).toHaveAttribute(
+        'title',
+        'Cloud lane not configured on the server'
       )
-      const cloudLabel = screen.getByRole('radio', { name: 'Cloud — persisted' }).closest('label')
-      expect(cloudLabel).toHaveAttribute('title', 'Cloud lane not configured on the server')
+      expect(screen.getByText('Cloud lane not configured on the server')).toBeInTheDocument()
     })
 
     it('treats a health-check failure as unconfigured (disabled, no crash)', async () => {
@@ -285,11 +283,7 @@ describe('DeterminismLauncher', () => {
       healthMock.mockRejectedValueOnce(new Error('network down'))
       render(<DeterminismLauncher />)
 
-      await waitFor(() =>
-        expect(
-          (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled
-        ).toBe(true)
-      )
+      await waitFor(() => expect(option('Cloud — persisted')).toBeDisabled())
     })
 
     it('carries execution:"cloud" on the launch request when Cloud is selected', async () => {
@@ -297,7 +291,7 @@ describe('DeterminismLauncher', () => {
       render(<DeterminismLauncher />)
       await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
 
-      fireEvent.click(screen.getByRole('radio', { name: 'Cloud — persisted' }))
+      fireEvent.click(option('Cloud — persisted'))
       fireEvent.click(screen.getByRole('button', { name: 'Start evaluation' }))
 
       expect(startEvaluation).toHaveBeenCalledWith(expect.objectContaining({ execution: 'cloud' }))
@@ -312,31 +306,25 @@ describe('DeterminismLauncher', () => {
       it('disables "This machine" with a hint', async () => {
         render(<DeterminismLauncher />)
 
-        await waitFor(() =>
-          expect(
-            (screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement).disabled
-          ).toBe(true)
+        await waitFor(() => expect(option('This machine')).toBeDisabled())
+        expect(option('This machine').querySelector('[title]')).toHaveAttribute(
+          'title',
+          'Local execution is unavailable on this deployment'
         )
         expect(
-          screen.getByRole('radio', { name: 'This machine' }).closest('label')
-        ).toHaveAttribute('title', 'Local execution is unavailable on this deployment')
+          screen.getByText('Local execution is unavailable on this deployment')
+        ).toBeInTheDocument()
         // The cloud lane is configured here, so it stays selectable.
-        expect(
-          (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).disabled
-        ).toBe(false)
+        expect(option('Cloud — persisted')).toBeEnabled()
       })
 
       it('makes cloud the effective default without rewriting the stored preference', async () => {
         render(<DeterminismLauncher />)
 
         await waitFor(() =>
-          expect(
-            (screen.getByRole('radio', { name: 'Cloud — persisted' }) as HTMLInputElement).checked
-          ).toBe(true)
+          expect(option('Cloud — persisted')).toHaveAttribute('aria-pressed', 'true')
         )
-        expect(
-          (screen.getByRole('radio', { name: 'This machine' }) as HTMLInputElement).checked
-        ).toBe(false)
+        expect(option('This machine')).toHaveAttribute('aria-pressed', 'false')
         expect(screen.getByTestId('cloud-execution-note')).toBeInTheDocument()
         // The user's own preference is untouched: it is right again the moment
         // they point the UI at their own machine.

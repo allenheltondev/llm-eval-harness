@@ -7,7 +7,18 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Loading } from '@readysetcloud/ui'
+import {
+  Alert,
+  Button,
+  Card,
+  CardBody,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  Input,
+  Loading
+} from '@readysetcloud/ui'
 import { useGuardrailStore } from '../../stores'
 import type { GuardrailVersionSummary } from '../../api'
 
@@ -58,71 +69,64 @@ export default function VersionsPanel({
   }
 
   return (
-    <div className="card p-4 sm:p-6 max-w-3xl mx-auto" data-testid="versions-panel">
-      <div className="flex items-center justify-between mb-4">
+    <Card className="max-w-3xl mx-auto" data-testid="versions-panel">
+      <CardHeader className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Versions</h2>
-          <p className="text-sm text-gray-600">{guardrailName}</p>
+          <h2 className="card-title">Versions</h2>
+          <CardDescription>{guardrailName}</CardDescription>
         </div>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
+        <Button variant="secondary" onClick={onClose}>
           Back
-        </button>
-      </div>
+        </Button>
+      </CardHeader>
 
-      {loading && <Loading text="Loading versions…" />}
+      <CardBody>
+        {loading && <Loading text="Loading versions…" />}
 
-      {!loading && versions.length === 0 && (
-        <p className="text-sm text-gray-600" data-testid="versions-empty">
-          No versions yet.
-        </p>
-      )}
+        {!loading && versions.length === 0 && (
+          <div data-testid="versions-empty">
+            <EmptyState title="No versions yet" />
+          </div>
+        )}
 
-      {!loading && versions.length > 0 && (
-        <ul className="divide-y divide-gray-100" data-testid="versions-list">
-          {versions.map(version => (
-            <li key={version.version} className="py-2 flex items-center justify-between">
-              <div>
-                <span className="text-sm font-medium text-gray-900">
-                  {version.version === 'DRAFT' ? 'DRAFT' : `Version ${version.version}`}
-                </span>
-                {version.description && (
-                  <p className="text-xs text-gray-600 mt-0.5">{version.description}</p>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+        {!loading && versions.length > 0 && (
+          <ul className="divide-y divide-border" data-testid="versions-list">
+            {versions.map(version => (
+              <li key={version.version} className="py-2 flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium text-foreground">
+                    {version.version === 'DRAFT' ? 'DRAFT' : `Version ${version.version}`}
+                  </span>
+                  {version.description && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{version.description}</p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
 
-      <div className="mt-6 pt-4 border-t border-gray-200">
+      <CardFooter>
         {publishing ? (
           <div className="space-y-2">
-            <label
-              htmlFor="publish-description"
-              className="block text-xs font-medium text-gray-700"
-            >
-              Version description (optional)
-            </label>
-            <input
-              id="publish-description"
+            <Input
+              label="Version description (optional)"
               type="text"
-              className="input"
               value={description}
               onChange={event => setDescription(event.target.value)}
               placeholder="What changed in this version?"
             />
             <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={saving}
+              <Button
+                loading={saving}
+                loadingLabel="Publishing…"
                 onClick={() => void handlePublish()}
               >
-                {saving ? 'Publishing…' : 'Confirm publish'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
+                Confirm publish
+              </Button>
+              <Button
+                variant="secondary"
                 disabled={saving}
                 onClick={() => {
                   setPublishing(false)
@@ -130,21 +134,19 @@ export default function VersionsPanel({
                 }}
               >
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
-          <button type="button" className="btn btn-primary" onClick={() => setPublishing(true)}>
-            Publish current DRAFT
-          </button>
+          <Button onClick={() => setPublishing(true)}>Publish current DRAFT</Button>
         )}
 
         {saveError && (
-          <p className="mt-2 text-xs text-red-600" role="alert">
+          <Alert variant="error" className="mt-2">
             Could not publish: {saveError.message}
-          </p>
+          </Alert>
         )}
-      </div>
-    </div>
+      </CardFooter>
+    </Card>
   )
 }

@@ -7,7 +7,15 @@
  * evaluation is active, mirroring how `OutputPane` reads `runStore` directly.
  */
 
-import { LoadingSpinner } from '@readysetcloud/ui'
+import {
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  LoadingSpinner
+} from '@readysetcloud/ui'
 import ProgressBar from '../../components/ProgressBar'
 import { selectProgressFraction, useEvalStore, type EvalPhase } from '../../stores'
 import type { EvalStreamEvent } from '../../api'
@@ -65,72 +73,66 @@ export default function EvalProgress() {
   const feed = buildFeed(events)
 
   return (
-    <section
-      className="card p-4 sm:p-6"
-      aria-labelledby="eval-progress-heading"
-      data-testid="eval-progress"
-    >
-      <div className="flex items-center justify-between mb-3">
-        <h3 id="eval-progress-heading" className="text-base font-semibold text-gray-900">
-          {PHASE_LABELS[status]}
-        </h3>
+    <Card role="region" aria-labelledby="eval-progress-heading" data-testid="eval-progress">
+      <CardHeader className="flex items-center justify-between gap-3">
+        <CardTitle id="eval-progress-heading">{PHASE_LABELS[status]}</CardTitle>
         {status === 'grading' && (
           <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
             <LoadingSpinner size="sm" />
             Grading…
           </span>
         )}
-      </div>
+      </CardHeader>
 
-      <ProgressBar
-        progress={fraction * 100}
-        status={`${progress.completed + progress.failed} / ${progress.total} runs`}
-        indeterminate={false}
-        color={progress.failed > 0 ? 'warning' : 'primary'}
-      />
+      <CardBody>
+        <ProgressBar
+          progress={fraction * 100}
+          status={`${progress.completed + progress.failed} / ${progress.total} runs`}
+          indeterminate={false}
+          color={progress.failed > 0 ? 'warning' : 'primary'}
+        />
 
-      <dl className="grid grid-cols-3 gap-3 mt-4 text-sm">
-        <div>
-          <dt className="text-xs text-gray-500">Completed</dt>
-          <dd className="font-medium text-gray-900" data-testid="eval-progress-completed">
-            {progress.completed}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-gray-500">Failed</dt>
-          <dd className="font-medium text-gray-900" data-testid="eval-progress-failed">
-            {progress.failed}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-gray-500">Total</dt>
-          <dd className="font-medium text-gray-900" data-testid="eval-progress-total">
-            {progress.total}
-          </dd>
-        </div>
-      </dl>
+        <dl className="grid grid-cols-3 gap-3 mt-4 text-sm">
+          <div>
+            <dt className="text-xs text-muted-foreground">Completed</dt>
+            <dd className="font-medium text-foreground" data-testid="eval-progress-completed">
+              {progress.completed}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Failed</dt>
+            <dd className="font-medium text-foreground" data-testid="eval-progress-failed">
+              {progress.failed}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Total</dt>
+            <dd className="font-medium text-foreground" data-testid="eval-progress-total">
+              {progress.total}
+            </dd>
+          </div>
+        </dl>
 
-      <ul
-        className="mt-4 space-y-1 max-h-48 overflow-y-auto text-xs font-mono"
-        data-testid="eval-event-feed"
-      >
-        {feed.length === 0 && (
-          <li className="text-gray-400 font-sans">Waiting for the first run…</li>
-        )}
-        {feed.map((entry, index) => (
-          <li key={index} className={entry.failed ? 'text-red-600' : 'text-gray-600'}>
-            {entry.line}
-          </li>
-        ))}
-      </ul>
+        <ul
+          className="mt-4 space-y-1 max-h-48 overflow-y-auto text-xs font-mono"
+          data-testid="eval-event-feed"
+        >
+          {feed.length === 0 && (
+            <li className="text-muted-foreground font-sans">Waiting for the first run…</li>
+          )}
+          {feed.map((entry, index) => (
+            <li key={index} className={entry.failed ? 'text-error-600' : 'text-muted-foreground'}>
+              {entry.line}
+            </li>
+          ))}
+        </ul>
+      </CardBody>
 
-      <button
-        type="button"
-        className="btn btn-secondary mt-4"
-        onClick={() => void cancelEvaluation()}
-      >
-        Cancel
-      </button>
-    </section>
+      <CardFooter>
+        <Button variant="secondary" onClick={() => void cancelEvaluation()}>
+          Cancel
+        </Button>
+      </CardFooter>
+    </Card>
   )
 }

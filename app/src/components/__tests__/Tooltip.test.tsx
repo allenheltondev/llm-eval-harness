@@ -1,6 +1,7 @@
 /**
- * Tooltip: shows its content on hover, hides it on mouse-leave, and never
- * renders a bubble at all when no `content` was given.
+ * Tooltip: shows its content on hover or keyboard focus, hides it on
+ * mouse-leave / blur / Escape, describes its trigger via aria-describedby, and
+ * never renders a bubble at all when no `content` was given.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -51,5 +52,38 @@ describe('Tooltip', () => {
     )
     fireEvent.mouseEnter(screen.getByText('Target').parentElement!)
     expect(container.querySelector('.left-full')).toBeInTheDocument()
+  })
+
+  it('opens on keyboard focus, links the trigger via aria-describedby, and closes on blur', () => {
+    render(
+      <Tooltip content="Helpful hint">
+        <button>Target</button>
+      </Tooltip>
+    )
+    const trigger = screen.getByRole('button', { name: 'Target' })
+    expect(trigger).not.toHaveAttribute('aria-describedby')
+
+    fireEvent.focus(trigger)
+    const bubble = screen.getByRole('tooltip')
+    expect(bubble).toHaveTextContent('Helpful hint')
+    expect(trigger).toHaveAccessibleDescription('Helpful hint')
+
+    fireEvent.blur(trigger)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    expect(trigger).not.toHaveAttribute('aria-describedby')
+  })
+
+  it('closes on Escape', () => {
+    render(
+      <Tooltip content="Helpful hint">
+        <button>Target</button>
+      </Tooltip>
+    )
+    const trigger = screen.getByRole('button', { name: 'Target' })
+    fireEvent.focus(trigger)
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+
+    fireEvent.keyDown(trigger, { key: 'Escape' })
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
   })
 })
