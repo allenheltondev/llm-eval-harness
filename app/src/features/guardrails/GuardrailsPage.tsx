@@ -230,7 +230,10 @@ export default function GuardrailsPage() {
         loading={loading}
         loaded={loaded}
         error={error}
-        onRetry={() => void loadGuardrails()}
+        // Forced: the store's `error` is shared with the editor and versions
+        // loads, so it can be set while the list is already `loaded` -- and an
+        // unforced load returns the cached list without clearing it.
+        onRetry={() => void loadGuardrails(true)}
         onNew={() => setView({ mode: 'editor', guardrailId: null })}
         onEdit={id => setView({ mode: 'editor', guardrailId: id })}
         onVersions={guardrail =>

@@ -8,7 +8,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { ToastProvider } from '@readysetcloud/ui'
 import GuardrailsPage from '../GuardrailsPage'
 import { INITIAL_GUARDRAIL_STATE, useGuardrailStore } from '../../../stores'
-import type { GuardrailSummary } from '../../../api'
+import { api, type GuardrailSummary } from '../../../api'
 
 const GUARDRAILS: GuardrailSummary[] = [
   {
@@ -32,6 +32,9 @@ const GUARDRAILS: GuardrailSummary[] = [
     updatedAt: '2026-07-20T08:30:00Z'
   }
 ]
+
+/** The store's own list load, before the stubs below replace it. */
+const realLoadGuardrails = useGuardrailStore.getState().loadGuardrails
 
 const loadGuardrails = vi.fn().mockResolvedValue(undefined)
 const removeGuardrail = vi.fn().mockResolvedValue(true)
@@ -108,6 +111,29 @@ describe('GuardrailsPage', () => {
 
     fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }))
     expect(loadGuardrails).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers on Retry when the list is already loaded (an editor or versions load failed)', async () => {
+    // The store's `error` is shared with the detail and versions loads, so the
+    // list can be `loaded` and still show this error; Retry must refetch.
+    const list = vi
+      .spyOn(api.guardrails, 'list')
+      .mockResolvedValue({ guardrails: GUARDRAILS } as Awaited<
+        ReturnType<typeof api.guardrails.list>
+      >)
+    useGuardrailStore.setState({
+      loadGuardrails: realLoadGuardrails,
+      loaded: true,
+      error: { code: 'upstream_error', message: 'Could not load versions.' }
+    })
+    render(<GuardrailsPage />)
+
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('fraud-guardrail')).toBeInTheDocument()
+    list.mockRestore()
   })
 
   it('confirms a successful delete with a toast', async () => {
