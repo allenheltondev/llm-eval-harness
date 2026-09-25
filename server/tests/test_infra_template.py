@@ -16,7 +16,9 @@ configured:
 
 from __future__ import annotations
 
+import os
 import pathlib
+import subprocess
 
 import pytest
 import yaml
@@ -199,3 +201,125 @@ def test_the_access_group_is_named_after_the_stack_unless_told_otherwise(
             {"Fn::Ref": "AWS::StackName"},
         ]
     }
+
+
+def test_the_custom_domain_is_off_unless_both_parameters_are_given(template: dict) -> None:
+    """Every deploy but production passes neither, and serves on *.cloudfront.net."""
+    parameters = template["Parameters"]
+    assert parameters["AppDomainName"]["Default"] == ""
+    assert parameters["AppHostedZoneId"]["Default"] == ""
+    assert template["Conditions"]["DeployCustomDomain"] == {
+        "Fn::And": [
+            {"Fn::Condition": "DeployServer"},
+            {"Fn::Not": [{"Fn::Equals": [{"Fn::Ref": "AppDomainName"}, ""]}]},
+            {"Fn::Not": [{"Fn::Equals": [{"Fn::Ref": "AppHostedZoneId"}, ""]}]},
+        ]
+    }
+
+
+def test_the_distribution_serves_the_domain_on_its_own_dns_validated_certificate(
+    resources: dict,
+) -> None:
+    certificate = resources["AppCertificate"]
+    assert certificate["Condition"] == "DeployCustomDomain"
+    assert certificate["Properties"]["ValidationMethod"] == "DNS"
+    assert certificate["Properties"]["DomainValidationOptions"] == [
+        {"DomainName": {"Fn::Ref": "AppDomainName"}, "HostedZoneId": {"Fn::Ref": "AppHostedZoneId"}}
+    ]
+
+    config = resources["AppDistribution"]["Properties"]["DistributionConfig"]
+    assert config["Aliases"] == {
+        "Fn::If": [
+            "DeployCustomDomain",
+            [{"Fn::Ref": "AppDomainName"}],
+            {"Fn::Ref": "AWS::NoValue"},
+        ]
+    }
+    on, off = config["ViewerCertificate"]["Fn::If"][1:]
+    assert on["AcmCertificateArn"] == {"Fn::Ref": "AppCertificate"}
+    assert on["SslSupportMethod"] == "sni-only"
+    assert off == {"CloudFrontDefaultCertificate": True}
+
+
+@pytest.mark.parametrize(
+    "logical_id, record_type", [("AppDnsRecord", "A"), ("AppDnsRecordIpv6", "AAAA")]
+)
+def test_the_domain_points_at_the_distribution(
+    resources: dict, logical_id: str, record_type: str
+) -> None:
+    record = resources[logical_id]
+    assert record["Condition"] == "DeployCustomDomain"
+    properties = record["Properties"]
+    assert properties["Type"] == record_type
+    assert properties["Name"] == {"Fn::Ref": "AppDomainName"}
+    assert properties["AliasTarget"]["DNSName"] == {"Fn::GetAtt": "AppDistribution.DomainName"}
+    # CloudFront's fixed alias hosted zone.
+    assert properties["AliasTarget"]["HostedZoneId"] == "Z2FDTNDATAQYW2"
+
+
+def test_the_app_url_is_the_custom_domain_when_there_is_one(template: dict) -> None:
+    assert template["Outputs"]["AppUrl"]["Value"] == {
+        "Fn::If": [
+            "DeployCustomDomain",
+            {"Fn::Sub": "https://${AppDomainName}"},
+            {"Fn::Sub": "https://${AppDistribution.DomainName}"},
+        ]
+    }
+
+
+def _workflow(name: str) -> str:
+    return (TEMPLATE.parent.parent / ".github" / "workflows" / name).read_text()
+
+
+def _production_deploy_step() -> dict:
+    workflow = yaml.safe_load(_workflow("deploy.yaml"))
+    steps = workflow["jobs"]["deploy-backend"]["steps"]
+    return next(step for step in steps if step.get("name") == "Package and deploy the stack")
+
+
+def _run_production_deploy_step(tmp_path: pathlib.Path, zone_id: str) -> tuple[int, str, str]:
+    """Run the step's own shell with a fake `make` that records its arguments."""
+    step = _production_deploy_step()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "make.args"
+    fake_make = bin_dir / "make"
+    fake_make.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > {calls}\n')
+    fake_make.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "APP_DOMAIN_NAME": step["env"]["APP_DOMAIN_NAME"],
+        "APP_HOSTED_ZONE_ID": zone_id,
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]], env=env, capture_output=True, text=True, check=False
+    )
+    return result.returncode, result.stdout, calls.read_text() if calls.exists() else ""
+
+
+def test_only_production_deploys_the_custom_domain() -> None:
+    step = _production_deploy_step()
+    assert step["env"]["APP_DOMAIN_NAME"] == "nimbus.readysetcloud.io"
+    assert step["env"]["APP_HOSTED_ZONE_ID"] == "${{ vars.HOSTED_ZONE_ID }}"
+
+    staging = _workflow("pull-request.yaml")
+    assert "APP_DOMAIN_NAME" not in staging
+    assert "APP_HOSTED_ZONE_ID" not in staging
+
+
+def test_production_passes_the_domain_and_zone_to_the_deploy(tmp_path: pathlib.Path) -> None:
+    code, _, args = _run_production_deploy_step(tmp_path, "Z0123456789")
+
+    assert code == 0
+    assert "APP_DOMAIN_NAME=nimbus.readysetcloud.io" in args.splitlines()
+    assert "APP_HOSTED_ZONE_ID=Z0123456789" in args.splitlines()
+
+
+def test_production_refuses_to_deploy_without_the_hosted_zone(tmp_path: pathlib.Path) -> None:
+    """Deploying on would keep whatever domain the stack had, not the one intended."""
+    code, stdout, args = _run_production_deploy_step(tmp_path, "")
+
+    assert code == 1
+    assert "::error title=No hosted zone::" in stdout
+    assert args == ""  # never deployed

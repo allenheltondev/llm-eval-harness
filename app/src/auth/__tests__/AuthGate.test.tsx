@@ -127,7 +127,12 @@ describe('AuthGate', () => {
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.getByLabelText('Email')).toBeInTheDocument()
     expect(screen.queryByText('app')).not.toBeInTheDocument()
-    expect(await getConfig()).toMatchObject({ region: 'eu-west-1', clientId: 'client-9' })
+    expect(await getConfig()).toMatchObject({
+      region: 'eu-west-1',
+      clientId: 'client-9',
+      // No parent-domain session cookie (see authConfig).
+      sharedCookieDomain: ''
+    })
   })
 
   it('switches between sign-in, account creation and password reset', async () => {
