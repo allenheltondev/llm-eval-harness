@@ -16,7 +16,9 @@ configured:
 
 from __future__ import annotations
 
+import os
 import pathlib
+import subprocess
 
 import pytest
 import yaml
@@ -269,11 +271,55 @@ def _workflow(name: str) -> str:
     return (TEMPLATE.parent.parent / ".github" / "workflows" / name).read_text()
 
 
+def _production_deploy_step() -> dict:
+    workflow = yaml.safe_load(_workflow("deploy.yaml"))
+    steps = workflow["jobs"]["deploy-backend"]["steps"]
+    return next(step for step in steps if step.get("name") == "Package and deploy the stack")
+
+
+def _run_production_deploy_step(tmp_path: pathlib.Path, zone_id: str) -> tuple[int, str, str]:
+    """Run the step's own shell with a fake `make` that records its arguments."""
+    step = _production_deploy_step()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "make.args"
+    fake_make = bin_dir / "make"
+    fake_make.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > {calls}\n')
+    fake_make.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "APP_DOMAIN_NAME": step["env"]["APP_DOMAIN_NAME"],
+        "APP_HOSTED_ZONE_ID": zone_id,
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]], env=env, capture_output=True, text=True, check=False
+    )
+    return result.returncode, result.stdout, calls.read_text() if calls.exists() else ""
+
+
 def test_only_production_deploys_the_custom_domain() -> None:
-    production = _workflow("deploy.yaml")
-    assert "APP_DOMAIN_NAME: nimbus.readysetcloud.io" in production
-    assert "APP_HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}" in production
+    step = _production_deploy_step()
+    assert step["env"]["APP_DOMAIN_NAME"] == "nimbus.readysetcloud.io"
+    assert step["env"]["APP_HOSTED_ZONE_ID"] == "${{ vars.HOSTED_ZONE_ID }}"
 
     staging = _workflow("pull-request.yaml")
     assert "APP_DOMAIN_NAME" not in staging
     assert "APP_HOSTED_ZONE_ID" not in staging
+
+
+def test_production_passes_the_domain_and_zone_to_the_deploy(tmp_path: pathlib.Path) -> None:
+    code, _, args = _run_production_deploy_step(tmp_path, "Z0123456789")
+
+    assert code == 0
+    assert "APP_DOMAIN_NAME=nimbus.readysetcloud.io" in args.splitlines()
+    assert "APP_HOSTED_ZONE_ID=Z0123456789" in args.splitlines()
+
+
+def test_production_refuses_to_deploy_without_the_hosted_zone(tmp_path: pathlib.Path) -> None:
+    """Deploying on would keep whatever domain the stack had, not the one intended."""
+    code, stdout, args = _run_production_deploy_step(tmp_path, "")
+
+    assert code == 1
+    assert "::error title=No hosted zone::" in stdout
+    assert args == ""  # never deployed

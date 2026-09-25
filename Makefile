@@ -147,8 +147,10 @@ smoke:
 #   HISTORY_RETENTION_DAYS=365 make deploy-backend  # expire history after a year (default: keep forever)
 #   make deploy-backend ACCESS_GROUP_NAME=nimbus-team  # access group on the shared pool (default: the stack name)
 #   make deploy-backend APP_DOMAIN_NAME=nimbus.example.com APP_HOSTED_ZONE_ID=Z123...
-#       # serve on a custom domain (production passes these; leaving them off a
-#       # deploy REMOVES the domain, like any parameter sam deploy is not given)
+#       # serve on a custom domain (production passes these). Left off, a deploy
+#       # keeps whatever the stack has -- sam deploy reuses the previous value of
+#       # any parameter it is not given. To take the domain away, set both empty:
+#   make deploy-backend APP_DOMAIN_NAME= APP_HOSTED_ZONE_ID=
 #   DEPLOY_API_URL=https://... make deploy-frontend   # SPA pointed elsewhere
 # --------------------------------------------------------------------------- #
 
@@ -157,6 +159,12 @@ package-eval-worker:
 
 package-server:
 	SERVER_BUILD_DIR=$(SERVER_BUILD_DIR) ./scripts/package-server.sh
+
+# `Name=Value` for a custom-domain parameter the caller set, `Name=""` when
+# they set it empty, nothing when they did not set it at all. The quotes
+# matter: sam parses a bare `Name=` as no override (so the previous value is
+# kept), and only `Name=""` as an explicit empty value.
+domain_override = $(if $(filter undefined,$(origin $(2))),,$(if $($(2)),"$(1)=$($(2))",'$(1)=""'))
 
 deploy-backend:
 	@set -e; \
@@ -190,8 +198,8 @@ deploy-backend:
 		$${SERVER_MEMORY:+"ServerMemorySize=$$SERVER_MEMORY"} \
 		$${HISTORY_RETENTION_DAYS:+"HistoryRetentionDays=$$HISTORY_RETENTION_DAYS"} \
 		$(if $(ACCESS_GROUP_NAME),"AccessGroupName=$(ACCESS_GROUP_NAME)",) \
-		$(if $(APP_DOMAIN_NAME),"AppDomainName=$(APP_DOMAIN_NAME)",) \
-		$(if $(APP_HOSTED_ZONE_ID),"AppHostedZoneId=$(APP_HOSTED_ZONE_ID)",) ); \
+		$(call domain_override,AppDomainName,APP_DOMAIN_NAME) \
+		$(call domain_override,AppHostedZoneId,APP_HOSTED_ZONE_ID) ); \
 	echo; \
 	echo "Backend deployed to stack $(STACK_NAME):"; \
 	echo "  AppUrl:                        $$(resolve_output AppUrl)"; \

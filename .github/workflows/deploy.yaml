@@ -151,15 +151,17 @@ jobs:
       # Production alone serves on the custom domain (staging stays on its
       # CloudFront domain). The hosted zone id is the Production environment's
       # HOSTED_ZONE_ID variable -- the readysetcloud.io zone. Without it the
-      # stack deploys with no custom domain, and says so.
+      # deploy stops: a parameter left out of `sam deploy` keeps its previous
+      # value, so deploying on without it would neither add the domain nor
+      # remove it -- it would just quietly not be what this says.
       - name: Package and deploy the stack
         env:
           APP_DOMAIN_NAME: nimbus.readysetcloud.io
           APP_HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
         run: |
           if [ -z "${APP_HOSTED_ZONE_ID}" ]; then
-            echo "::warning title=No custom domain::The Production environment has no HOSTED_ZONE_ID variable, so ${APP_DOMAIN_NAME} is not configured (or is removed) on this deploy."
-            APP_DOMAIN_NAME=
+            echo "::error title=No hosted zone::Set the Production environment's HOSTED_ZONE_ID variable to the readysetcloud.io hosted zone id; production serves on ${APP_DOMAIN_NAME}."
+            exit 1
           fi
           make deploy-backend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1 \
             APP_DOMAIN_NAME="${APP_DOMAIN_NAME}" APP_HOSTED_ZONE_ID="${APP_HOSTED_ZONE_ID}"

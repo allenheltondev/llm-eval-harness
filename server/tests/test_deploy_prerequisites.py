@@ -256,7 +256,15 @@ def test_deploy_backend_passes_a_custom_domain_when_given():
     assert '"AppHostedZoneId=Z123"' in overrides
 
 
-def test_deploy_backend_leaves_the_domain_off_by_default():
+def test_deploy_backend_leaves_the_domain_alone_when_not_given():
+    """Omitted, sam deploy keeps the stack's previous value (UsePreviousValue)."""
     overrides = _deploy_overrides()
     assert "AppDomainName" not in overrides
     assert "AppHostedZoneId" not in overrides
+
+
+def test_deploy_backend_sends_explicit_empties_to_remove_the_domain():
+    """sam reads a bare `Name=` as no override at all; only `Name=""` clears it."""
+    overrides = _deploy_overrides("APP_DOMAIN_NAME=", "APP_HOSTED_ZONE_ID=")
+    assert "'AppDomainName=\"\"'" in overrides
+    assert "'AppHostedZoneId=\"\"'" in overrides

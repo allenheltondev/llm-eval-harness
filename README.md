@@ -264,8 +264,10 @@ deploys pass neither and stay on their CloudFront domain. For your own domain:
 make deploy-backend APP_DOMAIN_NAME=nimbus.example.com APP_HOSTED_ZONE_ID=Z0123456789ABC
 ```
 
-Pass them on **every** deploy of that stack: like any template parameter, one left off resets to
-its default, which removes the domain.
+A deploy that leaves them off keeps whatever the stack already has: `sam deploy` reuses the previous
+value of any parameter it is not given. To take a domain away, set both empty
+(`make deploy-backend APP_DOMAIN_NAME= APP_HOSTED_ZONE_ID=`), which sends them as explicit empty
+values. The production workflow stops, rather than deploying, if `HOSTED_ZONE_ID` is missing.
 
 ### Sign-in (Cognito)
 

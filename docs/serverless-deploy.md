@@ -156,7 +156,10 @@ brings its own client:
   to the distribution). The same shape as `readysetcloud/newsletter-service`'s
   frontend domain. `.github/workflows/deploy.yaml` passes
   `nimbus.readysetcloud.io` and the Production environment's `HOSTED_ZONE_ID`
-  variable; without the variable it warns and deploys without a domain.
+  variable, and fails rather than deploys when the variable is missing (an
+  omitted parameter keeps its previous value under `sam deploy`, so skipping
+  it would silently change nothing). Removing a domain takes explicit empty
+  values: `make deploy-backend APP_DOMAIN_NAME= APP_HOSTED_ZONE_ID=`.
   `pull-request.yaml` (staging) passes neither. The CloudFront domain keeps
   working alongside the custom one.
 - IAM for the server function role: Bedrock invoke + guardrails, DynamoDB on the
