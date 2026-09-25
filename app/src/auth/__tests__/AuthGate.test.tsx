@@ -127,7 +127,13 @@ describe('AuthGate', () => {
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.getByLabelText('Email')).toBeInTheDocument()
     expect(screen.queryByText('app')).not.toBeInTheDocument()
-    expect(await getConfig()).toMatchObject({ region: 'eu-west-1', clientId: 'client-9' })
+    expect(await getConfig()).toMatchObject({
+      region: 'eu-west-1',
+      clientId: 'client-9',
+      // Not the package's shared `rsc_auth`: sibling RSC apps' tokens are for
+      // their own clients, and our sign-out must not mark theirs signed out.
+      sharedCookieName: 'nimbus_auth_client-9'
+    })
   })
 
   it('switches between sign-in, account creation and password reset', async () => {

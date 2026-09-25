@@ -39,6 +39,22 @@ import { SessionContext, displayName, type Session } from './session'
 type GateState =
   { kind: 'loading' } | { kind: 'open' } | { kind: 'required'; requiredGroup: string | null }
 
+/**
+ * The package's parent-domain session cookie, scoped to this app client.
+ *
+ * On any *.readysetcloud.io host the package bridges sessions between sibling
+ * apps through one `.readysetcloud.io` cookie (`rsc_auth` by default) holding
+ * the raw Cognito tokens of whichever app signed in last. Those tokens are
+ * minted for that app's client: this server rejects them (`aud` must be this
+ * stack's client), a refresh with them fails, and the sign-out that follows
+ * writes the cookie's shared `signed_out` marker -- signing the person out of
+ * the other apps too. A name of its own keeps Nimbus's session to Nimbus, in
+ * both directions; the client id in it keeps two stacks apart as well.
+ */
+export function sharedCookieName(clientId: string): string {
+  return `nimbus_auth_${clientId}`
+}
+
 export const SESSION_EXPIRED_NOTICE = 'Your session has ended — please sign in again.'
 
 export interface AuthGateProps {
@@ -63,7 +79,11 @@ export default function AuthGate({
         if (cancelled) return
         const auth = health.auth
         if (auth.required) {
-          configureAuth({ region: auth.region, clientId: auth.client_id })
+          configureAuth({
+            region: auth.region,
+            clientId: auth.client_id,
+            sharedCookieName: sharedCookieName(auth.client_id)
+          })
           setAuthTokenProvider({
             getToken: getFreshIdToken,
             onUnauthorized: () => {
