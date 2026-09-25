@@ -130,9 +130,8 @@ describe('AuthGate', () => {
     expect(await getConfig()).toMatchObject({
       region: 'eu-west-1',
       clientId: 'client-9',
-      // Not the package's shared `rsc_auth`: sibling RSC apps' tokens are for
-      // their own clients, and our sign-out must not mark theirs signed out.
-      sharedCookieName: 'nimbus_auth_client-9'
+      // No parent-domain session cookie (see authConfig).
+      sharedCookieDomain: ''
     })
   })
 

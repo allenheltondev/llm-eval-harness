@@ -30,7 +30,8 @@ import {
   getFreshIdToken,
   isSignedIn,
   signOut,
-  useAuth
+  useAuth,
+  type AuthConfig
 } from '@readysetcloud/ui/auth'
 import { api } from '../api/client'
 import { setAuthTokenProvider } from '../api/http'
@@ -40,19 +41,20 @@ type GateState =
   { kind: 'loading' } | { kind: 'open' } | { kind: 'required'; requiredGroup: string | null }
 
 /**
- * The package's parent-domain session cookie, scoped to this app client.
+ * The auth package's configuration for the pool `/health` names.
  *
- * On any *.readysetcloud.io host the package bridges sessions between sibling
- * apps through one `.readysetcloud.io` cookie (`rsc_auth` by default) holding
- * the raw Cognito tokens of whichever app signed in last. Those tokens are
- * minted for that app's client: this server rejects them (`aud` must be this
- * stack's client), a refresh with them fails, and the sign-out that follows
- * writes the cookie's shared `signed_out` marker -- signing the person out of
- * the other apps too. A name of its own keeps Nimbus's session to Nimbus, in
- * both directions; the client id in it keeps two stacks apart as well.
+ * `sharedCookieDomain: ''` switches off the package's parent-domain session
+ * bridge. On any *.readysetcloud.io host it otherwise defaults on, keeping the
+ * session's raw ID and refresh tokens in a JavaScript-readable
+ * `.readysetcloud.io` cookie: readable by script on every sibling
+ * subdomain, and -- under the default `rsc_auth` name -- shared with sibling
+ * apps whose tokens are for other clients. Nimbus's API spends the AWS bill,
+ * so its session stays on its own origin (localStorage) and nowhere else.
+ * The package treats any falsy domain as "no bridge"; the test in
+ * `__tests__/sharedCookie.test.ts` pins that on a real readysetcloud.io origin.
  */
-export function sharedCookieName(clientId: string): string {
-  return `nimbus_auth_${clientId}`
+export function authConfig(auth: { region: string; client_id: string }): AuthConfig {
+  return { region: auth.region, clientId: auth.client_id, sharedCookieDomain: '' }
 }
 
 export const SESSION_EXPIRED_NOTICE = 'Your session has ended — please sign in again.'
@@ -79,11 +81,7 @@ export default function AuthGate({
         if (cancelled) return
         const auth = health.auth
         if (auth.required) {
-          configureAuth({
-            region: auth.region,
-            clientId: auth.client_id,
-            sharedCookieName: sharedCookieName(auth.client_id)
-          })
+          configureAuth(authConfig(auth))
           setAuthTokenProvider({
             getToken: getFreshIdToken,
             onUnauthorized: () => {
