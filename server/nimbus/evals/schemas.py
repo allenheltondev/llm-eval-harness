@@ -132,6 +132,9 @@ class Suite(BaseModel):
     #: only some of the time; the case's score is the mean across repeats.
     repeats: int = Field(default=1, ge=1, le=MAX_SUITE_REPEATS)
     pass_threshold: float = Field(default=DEFAULT_PASS_THRESHOLD, ge=0.0, le=1.0)
+    #: The fraction of cases (0-1) that must pass for ``nimbus eval --gate`` to
+    #: succeed. Unset means every case. Read by the CLI's gate, not the engine.
+    min_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _cases_are_distinct_and_bounded(self) -> Suite:

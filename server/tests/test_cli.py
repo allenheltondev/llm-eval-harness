@@ -943,6 +943,158 @@ def test_the_documented_example_suite_is_valid(cli):
 
 
 # --------------------------------------------------------------------------- #
+# eval: CI gating (--fail-under, --fail-on-case-failure, --gate, --junit)
+# --------------------------------------------------------------------------- #
+
+#: The fake judge scores every case 0.95, so the headline score is 95 and a
+#: case passes at the default threshold. 0.99 makes every case fail.
+FAILING_SUITE_YAML = SUITE_YAML + "pass_threshold: 0.99\n"
+
+
+class TestGating:
+    @pytest.mark.parametrize(
+        ("suite", "flags", "code"),
+        [
+            # Every case passes; score 95.
+            (SUITE_YAML, [], 0),
+            (SUITE_YAML, ["--fail-under", "95"], 0),
+            (SUITE_YAML, ["--fail-under", "95.5"], 3),
+            (SUITE_YAML, ["--fail-on-case-failure"], 0),
+            (SUITE_YAML, ["--gate"], 0),
+            (SUITE_YAML, ["--gate", "--fail-on-case-failure", "--fail-under", "90"], 0),
+            (SUITE_YAML, ["--gate", "--fail-on-case-failure", "--fail-under", "96"], 3),
+            # Every case fails its threshold; the score is still 95.
+            (FAILING_SUITE_YAML, [], 0),
+            (FAILING_SUITE_YAML, ["--fail-under", "90"], 0),
+            (FAILING_SUITE_YAML, ["--fail-on-case-failure"], 3),
+            (FAILING_SUITE_YAML, ["--gate"], 3),
+            (FAILING_SUITE_YAML + "min_pass_rate: 0.5\n", ["--gate"], 3),
+            (FAILING_SUITE_YAML + "min_pass_rate: 0\n", ["--gate"], 0),
+            (FAILING_SUITE_YAML + "min_pass_rate: 0\n", ["--gate", "--fail-on-case-failure"], 3),
+            # min_pass_rate is inert without --gate.
+            (FAILING_SUITE_YAML + "min_pass_rate: 1\n", [], 0),
+        ],
+    )
+    def test_suite_exit_codes(self, cli, suite_file, suite, flags, code):
+        result = cli("eval", "--suite", suite_file(suite), *flags)
+
+        assert result.code == code, result.err
+        # The result is printed either way: a gate changes the exit code only.
+        assert json.loads(result.out)["status"] == "completed"
+        if code == 3:
+            assert "| gate failed: " in result.err
+        elif flags:
+            assert "| gate passed" in result.err
+        else:
+            assert "gate" not in result.err
+
+    def test_json_mode_is_gated_too(self, cli, suite_file):
+        result = cli("--json", "eval", "--suite", suite_file(FAILING_SUITE_YAML), "--gate")
+
+        assert result.code == 3
+        assert json.loads(result.out.splitlines()[-1])["type"] == "eval_complete"
+        assert "| gate failed: pass rate 0% is under the suite's bar of 100%" in result.err
+
+    @pytest.mark.parametrize(("bar", "code"), [("95", 0), ("96", 3)])
+    def test_fail_under_gates_a_determinism_experiment(self, cli, bar, code):
+        result = cli("eval", "-m", "m1", "-p", "hi", "-n", "2", "--fail-under", bar)
+
+        assert result.code == code, result.err
+
+    @pytest.mark.parametrize(
+        ("status", "code"), [("error", 1), ("cancelled", 130), ("completed", 3)]
+    )
+    @pytest.mark.parametrize(
+        "flags", [["--fail-under", "50"], ["--fail-on-case-failure"], ["--gate"]]
+    )
+    def test_the_harnesss_own_verdict_comes_before_the_gate(
+        self, cli, suite_file, monkeypatch, tmp_path, status, code, flags
+    ):
+        """An evaluation that errored has no result to gate: it is 1, not 3."""
+
+        async def settled(request, emit, store, **kwargs):
+            result = None
+            if status == "completed":
+                result = {
+                    "score": 10,
+                    "metrics": {"pass_rate": 0.0},
+                    "cases": [{"id": "refund-window", "passed": False, "status": "failed"}],
+                }
+            return {"evaluation_id": "ev", "status": status, "result": result, "error": None}
+
+        monkeypatch.setattr(commands, "execute_evaluation_with_seam", settled)
+        report = tmp_path / "report.xml"
+
+        result = cli("eval", "--suite", suite_file(), *flags, "--junit", str(report))
+
+        assert result.code == code
+        # The report is written whatever happened, so CI shows it.
+        assert report.is_file()
+
+    @pytest.mark.parametrize(
+        ("flags", "message"),
+        [
+            (["--gate"], "--gate judges the cases of a suite"),
+            (["--fail-on-case-failure"], "--fail-on-case-failure judges the cases of a suite"),
+            (["--junit", "r.xml"], "--junit judges the cases of a suite"),
+        ],
+    )
+    def test_suite_only_flags_need_a_suite(self, cli, flags, message):
+        result = cli("eval", "-m", "m1", "-p", "hi", *flags)
+
+        assert result.code == 2
+        assert message in result.err
+
+    @pytest.mark.parametrize("bar", ["101", "-1", "abc", "nan"])
+    def test_fail_under_is_a_score_from_0_to_100(self, cli, bar, capsys):
+        with pytest.raises(SystemExit) as exited:
+            cli("eval", "-m", "m1", "-p", "hi", "--fail-under", bar)
+
+        assert exited.value.code == 2
+        assert "--fail-under" in capsys.readouterr().err
+
+    def test_min_pass_rate_is_a_fraction(self, cli, suite_file):
+        result = cli("eval", "--suite", suite_file(SUITE_YAML + "min_pass_rate: 2\n"), "--gate")
+
+        assert result.code == 2
+        assert "min_pass_rate" in result.err
+
+    def test_junit_report_for_a_suite(self, cli, suite_file, tmp_path):
+        from xml.etree import ElementTree as ET
+
+        report = tmp_path / "junit.xml"
+
+        result = cli(
+            "eval", "--suite", suite_file(FAILING_SUITE_YAML), "--junit", str(report)
+        )
+
+        assert result.code == 0  # a report is not a gate
+        assert f"| JUnit report written to {report}" in result.err
+        root = ET.parse(report).getroot()
+        [suite] = root.findall("testsuite")
+        assert suite.get("name") == "support"
+        assert (suite.get("tests"), suite.get("failures"), suite.get("errors")) == ("2", "2", "0")
+        cases = suite.findall("testcase")
+        assert [case.get("name") for case in cases] == ["refund-window", "store-hours"]
+        for case in cases:
+            assert set(case.attrib) == {"name", "classname", "time"}
+            assert case.find("failure").get("message") == f"case {case.get('name')} failed"
+            assert case.find("failure").text.startswith("score 0.95")
+        evaluation_id = json.loads(result.out)["evaluation_id"]
+        assert suite.find("properties/property").get("value") == evaluation_id
+
+    def test_a_junit_path_that_cannot_be_written_is_a_harness_failure(
+        self, cli, suite_file, tmp_path
+    ):
+        report = tmp_path / "missing-dir" / "junit.xml"
+
+        result = cli("eval", "--suite", suite_file(), "--junit", str(report))
+
+        assert result.code == 1
+        assert f"nimbus: --junit {report}: No such file or directory" in result.err
+
+
+# --------------------------------------------------------------------------- #
 # mcp
 # --------------------------------------------------------------------------- #
 
