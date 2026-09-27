@@ -46,6 +46,7 @@ class FakeTable:
         self.items: list[dict[str, Any]] = [dict(item) for item in (items or [])]
         self.puts: list[dict[str, Any]] = []
         self.deletes: list[dict[str, Any]] = []
+        self.consistent_reads = 0
 
     # -- seeding ---------------------------------------------------------- #
 
@@ -60,7 +61,10 @@ class FakeTable:
 
     # -- the API ---------------------------------------------------------- #
 
-    def get_item(self, Key: dict[str, str]) -> dict[str, Any]:  # noqa: N803 - boto3 spelling
+    def get_item(  # noqa: N803 - boto3 spelling
+        self, Key: dict[str, str], ConsistentRead: bool = False
+    ) -> dict[str, Any]:
+        self.consistent_reads += int(ConsistentRead)
         for item in self.items:
             if item["pk"] == Key["pk"] and item["sk"] == Key["sk"]:
                 return {"Item": dict(item)}

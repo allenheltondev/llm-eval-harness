@@ -271,24 +271,48 @@ class DynamoMcpStore:
             updated_at=datetime.fromisoformat(str(item["updated_at"])),
         )
 
-    def _write(self, server: McpServer, previous: dict[str, str] | None) -> None:
-        """Write the secret, then the item -- undoing the secret if the item fails.
+    def _write(
+        self,
+        server: McpServer,
+        *,
+        previous_item: dict[str, Any] | None,
+        previous_headers: dict[str, str],
+    ) -> None:
+        """Write the secret, then the item; undo the secret only if the item didn't land.
 
         Secret first, so an item that names headers never points at a
-        parameter that was not written. If the item write then fails, the
-        secret is put back to ``previous`` (the headers the stored item still
-        names; ``None`` for a server that did not exist), so the two stores
-        never disagree and a create never strands a parameter nobody knows
-        the id of.
+        parameter that was not written. A failed ``put_item`` is *ambiguous*,
+        though: a timeout can arrive after DynamoDB committed. So the outcome
+        is read back (strongly consistent) before anything is undone:
+
+        * the new item is there -- the write landed; nothing to undo.
+        * the previous item (or, for a create, none) is there -- it did not;
+          the secret goes back to ``previous_headers``, the headers that item
+          names, so the pair stays consistent and a create strands nothing.
+        * the read fails too, or finds something else -- the outcome is
+          unknown; nothing is undone (undoing could itself break a pair that
+          landed) and the error is raised.
         """
+        attempted = self._item(server)
         self._put_secret(server.id, server.headers)
         try:
-            self._table.put_item(Item=self._item(server))
+            self._table.put_item(Item=attempted)
         except Exception:
             try:
-                self._put_secret(server.id, previous or {})
-            except Exception:  # pragma: no cover - the original failure matters more
-                logger.warning("could not restore headers for MCP server %s", server.id)
+                current = self._read(server.id, consistent=True)
+            except Exception:  # pragma: no cover - logged below; the write error wins
+                logger.warning("MCP server %s: outcome of a failed write unknown", server.id)
+                raise
+            if current == attempted:
+                logger.info("MCP server %s: write reported failure but landed", server.id)
+                return
+            if current == previous_item:
+                try:
+                    self._put_secret(server.id, previous_headers)
+                except Exception:  # pragma: no cover - the original failure matters more
+                    logger.warning("could not restore headers for MCP server %s", server.id)
+            else:  # pragma: no cover - a concurrent writer; leave its state alone
+                logger.warning("MCP server %s changed during a failed write", server.id)
             raise
 
     def _put_secret(self, server_id: str, headers: dict[str, str]) -> None:
@@ -317,9 +341,16 @@ class DynamoMcpStore:
             kwargs["ExclusiveStartKey"] = last
         return [self._model(item, with_headers=False) for item in items]
 
+    def _read(self, server_id: str, *, consistent: bool = False) -> dict[str, Any] | None:
+        key = {"pk": PK_PREFIX + server_id, "sk": META_SK}
+        if consistent:
+            response = self._table.get_item(Key=key, ConsistentRead=True)
+        else:
+            response = self._table.get_item(Key=key)
+        return response.get("Item") or None
+
     def _get_item(self, server_id: str) -> dict[str, Any]:
-        response = self._table.get_item(Key={"pk": PK_PREFIX + server_id, "sk": META_SK})
-        item = response.get("Item")
+        item = self._read(server_id)
         if not item:
             raise _not_found(server_id)
         return item
@@ -332,13 +363,14 @@ class DynamoMcpStore:
         server = McpServer(
             id=uuid4().hex, name=name, url=url, headers=headers, created_at=now, updated_at=now
         )
-        self._write(server, previous=None)
+        self._write(server, previous_item=None, previous_headers={})
         return server
 
     def save(self, server: McpServer) -> McpServer:
-        previous = self.get(server.id).headers
+        previous_item = self._get_item(server.id)
+        previous_headers = self._model(previous_item).headers
         saved = server.model_copy(update={"updated_at": _now()})
-        self._write(saved, previous=previous)
+        self._write(saved, previous_item=previous_item, previous_headers=previous_headers)
         return saved
 
     def delete(self, server_id: str) -> None:

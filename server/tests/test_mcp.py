@@ -197,17 +197,36 @@ def test_deployed_connect_reports_unresolvable_hosts(monkeypatch):
 @pytest.mark.parametrize(
     ("name", "taken", "expected"),
     [
-        ("GitHub MCP", [], "github_mcp"),
-        ("  !!! ", [], "mcp"),
-        ("42 things", [], "mcp_42_things"),
-        ("A very long server name indeed", [], "a_very_long_serv"),
-        ("GitHub", ["github"], "github_2"),
-        ("GitHub", ["github", "github_2"], "github_3"),
-        ("A very long server name indeed", ["a_very_long_serv"], "a_very_long_se_2"),
+        ("GitHub MCP", [], "mcp-github-mcp"),
+        ("  !!! ", [], "mcp-server"),
+        ("42 things", [], "mcp-42-things"),
+        ("snake_case_name", [], "mcp-snake-case-name"),
+        ("A very long server name indeed", [], "mcp-a-very-long-serv"),
+        ("GitHub", ["mcp-github"], "mcp-github-2"),
+        ("GitHub", ["mcp-github", "mcp-github-2"], "mcp-github-3"),
+        ("A very long server name indeed", ["mcp-a-very-long-serv"], "mcp-a-very-long-se-2"),
     ],
 )
 def test_tool_prefix(name, taken, expected):
-    assert mcp_client.tool_prefix(name, taken) == expected
+    prefix = mcp_client.tool_prefix(name, taken)
+    assert prefix == expected
+    # Prefix + "_" + a tool name stays within every provider's 64-char limit
+    # for tool names up to 40 characters.
+    assert len(prefix) <= 20
+
+
+def test_mcp_tool_names_cannot_collide_with_builtins_or_each_other():
+    from nimbus.tools.registry import list_handlers
+
+    # Every built-in name is a plain identifier, so none can contain the "-"
+    # every MCP tool name carries.
+    builtin = [name for names in list_handlers().values() for name in names]
+    assert builtin and all(name.isidentifier() for name in builtin)
+    # Across servers, the first "_" always ends the prefix: "a" + "b_c" and
+    # "a_b" + "c" no longer meet.
+    first = mcp_client.tool_prefix("a") + "_b_c"
+    second = mcp_client.tool_prefix("a_b", [mcp_client.tool_prefix("a")]) + "_c"
+    assert first != second
 
 
 # --------------------------------------------------------------------------- #
@@ -445,7 +464,7 @@ def test_store_selection(monkeypatch):
 def test_list_server_tools_sends_the_saved_header(mcp_url):
     server = _server(url=mcp_url, headers={"X-Api-Key": API_KEY})
     tools = mcp_client.list_server_tools(server, deployed=False)
-    assert {t.name for t in tools} == {"echo", "add"}
+    assert {t.name for t in tools} == {"echo", "add", "account"}
     assert next(t for t in tools if t.name == "echo").description == "Echo the text back, reversed."
 
 
@@ -548,7 +567,7 @@ async def test_api_test_endpoint(client, initialized_db, mcp_url):
     )
     result = (await client.post(f"/api/v1/mcp-servers/{good.json()['id']}/test")).json()
     assert result["ok"] is True
-    assert sorted(t["name"] for t in result["tools"]) == ["add", "echo"]
+    assert sorted(t["name"] for t in result["tools"]) == ["account", "add", "echo"]
 
     bad = await client.post("/api/v1/mcp-servers", json={"name": "T", "url": mcp_url})
     result = (await client.post(f"/api/v1/mcp-servers/{bad.json()['id']}/test")).json()
@@ -573,7 +592,7 @@ def _stored(run_id):
 async def test_run_calls_mcp_tools_alongside_the_builtin_toolset(initialized_db, mcp_url):
     store = mcp_store.SqliteMcpStore()
     server = store.create(name="Test Server", url=mcp_url, headers={"X-Api-Key": API_KEY})
-    model = FakeModel(script=[ToolUseStep("test_server_echo", {"text": "abc"}), Text("done")])
+    model = FakeModel(script=[ToolUseStep("mcp-test-server_echo", {"text": "abc"}), Text("done")])
     request = RunRequest(
         model_id="m",
         user_prompt="go",
@@ -584,13 +603,13 @@ async def test_run_calls_mcp_tools_alongside_the_builtin_toolset(initialized_db,
     events = await _collect(request, model, mcp_store=store)
 
     results = [e for e in events if isinstance(e, ToolResultEvent)]
-    assert [(r.name, r.output, r.error) for r in results] == [("test_server_echo", "cba", None)]
+    assert [(r.name, r.output, r.error) for r in results] == [("mcp-test-server_echo", "cba", None)]
     assert isinstance(events[-1], RunCompleteEvent) and events[-1].status == "completed"
     record = _stored(events[0].run_id)
     assert record.config["mcp_servers"] == [server.id]
     assert record.config["toolset"] == "fraud-detection"
     assert API_KEY not in json.dumps(record.config)
-    assert record.tool_transcript[0]["name"] == "test_server_echo"
+    assert record.tool_transcript[0]["name"] == "mcp-test-server_echo"
 
 
 async def test_run_reports_an_unreachable_server_in_band(initialized_db, mcp_url):
@@ -844,3 +863,87 @@ async def test_default_deployed_client_refuses_loopback(mcp_url):
             await http.get(mcp_url)
     async with build_http_client({}, deployed=False) as http:
         assert (await http.get(mcp_url.replace("/mcp", "/nothing"))).status_code == 401
+
+
+async def test_an_mcp_tool_cannot_collide_with_a_builtin_tool(initialized_db, mcp_url):
+    # Server "freeze" offers "account"; the fraud-detection toolset has a
+    # built-in freeze_account. With a bare "<slug>_" prefix both registered as
+    # freeze_account and the agent refused to build.
+    store = mcp_store.SqliteMcpStore()
+    server = store.create(name="freeze", url=mcp_url, headers={"X-Api-Key": API_KEY})
+    model = FakeModel(
+        script=[
+            ToolUseStep("mcp-freeze_account", {"id": "A1"}),
+            ToolUseStep("freeze_account", FREEZE_INPUT),
+            Text("done"),
+        ]
+    )
+    request = RunRequest(
+        model_id="m", user_prompt="go", toolset="fraud-detection", mcp_servers=[server.id]
+    )
+
+    events = await _collect(request, model, mcp_store=store)
+
+    assert isinstance(events[-1], RunCompleteEvent) and events[-1].status == "completed"
+    results = {e.name: e for e in events if isinstance(e, ToolResultEvent)}
+    assert results["mcp-freeze_account"].output == "account A1"
+    assert results["freeze_account"].error is None
+
+
+FREEZE_INPUT = {
+    "account_id": "A1234",
+    "transaction_ids": ["T1"],
+    "reason": "velocity spike",
+    "severity": "high",
+    "freeze_duration": "temporary",
+}
+
+
+class AmbiguousTable(FakeTable):
+    """A put_item that commits and *then* raises, like a timeout after the write."""
+
+    def __init__(self, *, commit: bool):
+        super().__init__()
+        self.fail_next_put = False
+        self._commit = commit
+
+    def put_item(self, Item):  # noqa: N803 - boto3 spelling
+        if self.fail_next_put:
+            self.fail_next_put = False
+            if self._commit:
+                super().put_item(Item=Item)
+            raise TimeoutError("read timed out")
+        return super().put_item(Item=Item)
+
+
+def test_a_create_whose_write_landed_despite_the_error_keeps_its_secret():
+    table = AmbiguousTable(commit=True)
+    store, ssm = _dynamo(table)
+    table.fail_next_put = True
+    created = store.create(name="One", url="https://x/mcp", headers={"Authorization": "tok"})
+    # Read back instead of undone: the item and its secret are both there.
+    assert table.consistent_reads == 1
+    assert store.get(created.id).headers == {"Authorization": "tok"}
+
+
+def test_an_update_whose_write_landed_despite_the_error_is_not_rolled_back():
+    table = AmbiguousTable(commit=True)
+    store, ssm = _dynamo(table)
+    created = store.create(name="One", url="https://x/mcp", headers={"Authorization": "old"})
+    table.fail_next_put = True
+    store.save(created.model_copy(update={"headers": {"X-New": "new"}}))
+    stored = store.get(created.id)
+    assert stored.headers == {"X-New": "new"}
+    assert stored.public().header_names == ["X-New"]  # item and secret agree
+
+
+def test_a_write_that_did_not_land_is_still_rolled_back():
+    table = AmbiguousTable(commit=False)
+    store, ssm = _dynamo(table)
+    created = store.create(name="One", url="https://x/mcp", headers={"Authorization": "old"})
+    table.fail_next_put = True
+    with pytest.raises(TimeoutError):
+        store.save(created.model_copy(update={"headers": {"X-New": "new"}}))
+    stored = store.get(created.id)
+    assert stored.headers == {"Authorization": "old"}
+    assert stored.public().header_names == ["Authorization"]

@@ -30,6 +30,11 @@ def _app():
         return text[::-1]
 
     @server.tool()
+    def account(id: str) -> str:
+        """Look up an account (named to collide with built-in freeze_account)."""
+        return f"account {id}"
+
+    @server.tool()
     def add(a: int, b: int) -> int:
         """Add two numbers."""
         return a + b

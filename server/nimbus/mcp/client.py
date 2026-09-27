@@ -5,9 +5,9 @@ streamable HTTP transport, passed straight into the agent's ``tools``. The
 agent starts it (connects and lists its tools) when it is built and stops it
 on ``agent.cleanup()``, so a client lives exactly as long as its run.
 
-Tool names are prefixed with a slug of the server's name (``github_search``),
-so two servers that both offer ``search`` stay distinguishable to the model
-and in the run's tool transcript.
+Tool names are prefixed with ``mcp-`` and a slug of the server's name
+(``mcp-github_search``), so two servers that both offer ``search`` stay
+distinguishable, and no MCP tool can take a built-in tool's name.
 """
 
 from __future__ import annotations
@@ -25,8 +25,10 @@ from nimbus.mcp.urls import check_reachable
 
 #: How long to wait for a server to accept the MCP handshake.
 STARTUP_TIMEOUT_SECONDS = 20
+#: Every MCP tool name starts with this; see :func:`tool_prefix`.
+MCP_TOOL_NAMESPACE = "mcp-"
 #: Room left for the tool's own name within a provider's 64-character limit.
-MAX_PREFIX_LENGTH = 16
+MAX_SLUG_LENGTH = 16
 MAX_SERVERS_PER_RUN = 5
 
 
@@ -38,16 +40,26 @@ class McpConnectionError(AppError):
 
 
 def tool_prefix(name: str, taken: Iterable[str] = ()) -> str:
-    """A tool-name-safe slug of a server's name, unique among ``taken``."""
-    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")[:MAX_PREFIX_LENGTH].strip("_")
-    slug = slug or "mcp"
-    if slug[0].isdigit():
-        slug = f"mcp_{slug}"[:MAX_PREFIX_LENGTH]
+    """The tool-name prefix for a server: ``mcp-<slug>``, unique among ``taken``.
+
+    MCP tools are named ``<prefix>_<tool>``. The prefix lives in a namespace no
+    other tool can reach:
+
+    * it contains ``-``, which a built-in ``@tool`` name (a Python identifier)
+      never does, so no MCP tool can collide with a built-in one; and
+    * the slug uses ``-`` between words, never ``_``, so the first ``_`` in a
+      tool name always ends the prefix: two servers with distinct prefixes can
+      never produce the same full name (``a`` + ``b_c`` vs ``a_b`` + ``c``).
+
+    Hyphens are valid in tool names for every provider (``[a-zA-Z0-9_-]``).
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:MAX_SLUG_LENGTH].strip("-")
+    base = f"{MCP_TOOL_NAMESPACE}{slug or 'server'}"
     used = set(taken)
-    candidate, n = slug, 2
+    candidate, n = base, 2
     while candidate in used:
-        suffix = f"_{n}"
-        candidate = slug[: MAX_PREFIX_LENGTH - len(suffix)] + suffix
+        suffix = f"-{n}"
+        candidate = base[: len(MCP_TOOL_NAMESPACE) + MAX_SLUG_LENGTH - len(suffix)] + suffix
         n += 1
     return candidate
 

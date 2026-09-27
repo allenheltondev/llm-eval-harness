@@ -167,7 +167,8 @@ HTTP), alongside or instead of a toolset. Save a server once on the **Tools** pa
 `headers`), then tick it in the
 Workbench or the Evals launcher — or pass `"mcp_servers": ["<id>", ...]` on a run or an
 evaluation's `run_config` (at most 5), or `--mcp-server <id>` on the CLI. Each server's tools are
-prefixed with a slug of its name (`github_search_issues`) so two servers can both offer `search`.
+prefixed with `mcp-` and a slug of its name (`mcp-github_search_issues`), so two servers can both offer
+`search` and no MCP tool can take a built-in tool's name.
 
 - **Headers are write-only secrets.** Put an API key in `Authorization` (or whatever the server
   wants); the API only ever returns header *names*. Runs and evaluations store server **ids**, never
