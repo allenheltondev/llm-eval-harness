@@ -448,6 +448,20 @@ def _choose_lane(health: dict[str, Any], url: str) -> str:
     raise remote.RemoteError(f"{url} has no evaluation lane configured")
 
 
+def _remote_payload(request: EvaluationRequest) -> dict[str, Any]:
+    """The evaluation request as sent to a stack: without CLI-only settings.
+
+    ``min_pass_rate`` is read by the CLI's own gate (on the local ``request``,
+    after the result comes back) and never by the server. ``Suite`` forbids
+    unknown fields, so a stack running older server code would reject a
+    suite that carried it; it is always left out of what is sent.
+    """
+    body = request.model_dump(mode="json")
+    if isinstance(body.get("suite"), dict):
+        body["suite"].pop("min_pass_rate", None)
+    return body
+
+
 async def evaluate_remote(
     args: argparse.Namespace, request: EvaluationRequest, out: TextIO, err: TextIO
 ) -> int:
@@ -467,7 +481,7 @@ async def evaluate_remote(
     async with remote.http_client() as http:
         api = remote.RemoteApi(http, login)
         execution = _choose_lane(await api.health(), login.url)
-        body = request.model_copy(update={"execution": execution}).model_dump(mode="json")
+        body = _remote_payload(request.model_copy(update={"execution": execution}))
         try:
             created = await api.submit(body)
         except remote.RemoteNotFoundError as exc:

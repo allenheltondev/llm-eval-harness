@@ -577,6 +577,69 @@ class TestRemoteGating:
         [stored] = stored_evaluations()  # it ran on the stack, not here
         assert stored.status == "completed"
 
+    @pytest.mark.parametrize(("min_pass_rate", "code"), [("0", 0), ("1", 3)])
+    def test_min_pass_rate_never_reaches_a_stack_that_predates_it(
+        self, harness, suite, app, wired, min_pass_rate, code
+    ):
+        """A stack on older server code forbids ``suite.min_pass_rate``.
+
+        The gate is the CLI's own, so the field is never sent -- and the gate
+        still applies it, judged on the result that comes back.
+        """
+        sent: list[dict] = []
+
+        async def old_stack(scope, receive, send):
+            if scope["type"] == "http" and scope["method"] == "POST" and (
+                scope["path"] == "/api/v1/evaluations"
+            ):
+                chunks, more = [], True
+                while more:
+                    message = await receive()
+                    chunks.append(message.get("body", b""))
+                    more = message.get("more_body", False)
+                body = b"".join(chunks)
+                payload = json.loads(body)
+                sent.append(payload)
+                if "min_pass_rate" in (payload.get("suite") or {}):
+                    error = {
+                        "error": {
+                            "code": "validation_error",
+                            "message": "suite.min_pass_rate: Extra inputs are not permitted",
+                        }
+                    }
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 422,
+                            "headers": [(b"content-type", b"application/json")],
+                        }
+                    )
+                    await send({"type": "http.response.body", "body": json.dumps(error).encode()})
+                    return
+                replayed = False
+
+                async def replay():
+                    nonlocal replayed
+                    if not replayed:
+                        replayed = True
+                        return {"type": "http.request", "body": body, "more_body": False}
+                    return await receive()
+
+                await app(scope, replay, send)
+                return
+            await app(scope, receive, send)
+
+        wired._app = httpx.ASGITransport(app=old_stack)
+        sign_in(harness)
+
+        extra = f"pass_threshold: 0.99\nmin_pass_rate: {min_pass_rate}\n"
+        result = run_cli("eval", "--remote", "--suite", suite(extra), "--gate")
+
+        assert result.code == code, result.err
+        assert sent and "min_pass_rate" not in sent[0]["suite"]
+        [stored] = stored_evaluations()
+        assert stored.status == "completed"
+
     @pytest.mark.parametrize(("bar", "code"), [("95", 0), ("96", 3)])
     def test_fail_under_gates_a_determinism_experiment_on_the_stack(self, harness, bar, code):
         sign_in(harness)
