@@ -157,6 +157,27 @@ def escalate_ticket(ticket_id: str, priority: str, reason: str) -> dict:
 _REGISTRY["support"] = [support.escalate_ticket]
 ```
 
+### Remote MCP servers
+
+A run can also use the tools of remote [MCP](https://modelcontextprotocol.io) servers (streamable
+HTTP), alongside or instead of a toolset. Save a server once on the **Tools** page (or
+`POST /api/v1/mcp-servers` with `name`, `url` and optional `headers`), then tick it in the
+Workbench or the Evals launcher — or pass `"mcp_servers": ["<id>", ...]` on a run or an
+evaluation's `run_config` (at most 5), or `--mcp-server <id>` on the CLI. Each server's tools are
+prefixed with a slug of its name (`github_search_issues`) so two servers can both offer `search`.
+
+- **Headers are write-only secrets.** Put an API key in `Authorization` (or whatever the server
+  wants); the API only ever returns header *names*. Runs and evaluations store server **ids**, never
+  URLs or headers, so history and the cloud worker's payload hold no secret. Deployed, headers are
+  encrypted with the stack's `McpHeadersKey` (KMS) before they reach DynamoDB; locally they sit in
+  your own SQLite history file, like a `.env`.
+- **Deployed stacks only reach public HTTPS servers.** The server and worker are Lambda functions
+  holding AWS credentials, so `http://`, `localhost`, private, link-local and other reserved
+  addresses are refused — when the URL is saved and again (after DNS resolution) when a run
+  connects. Locally anything goes, `http://localhost` included.
+- **Test** on the Tools page connects with the saved headers and lists the server's tools.
+  A server that cannot be reached when a run starts fails that run with `mcp_connection_failed`.
+
 ## Evaluations
 
 `POST /api/v1/evaluations` runs one of three kinds of evaluation, all graded by an
@@ -512,6 +533,8 @@ to `~/.config/nimbus` the first time it is read.
 | `NIMBUS_HISTORY_BACKEND` | `auto` | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda, SQLite elsewhere) |
 | `NIMBUS_LOCAL_EVALS` | `auto` | `on` \| `off` \| `auto` (off inside Lambda) — whether evaluations may run in this process |
 | `NIMBUS_AUTH_USER_POOL_ID` | *(unset)* | Cognito user pool to verify bearer tokens against. With `NIMBUS_AUTH_CLIENT_ID`, every route but `/health` requires a token; unset locally means no gate. The deployed stack injects both |
+| `NIMBUS_MCP_TABLE` | *(unset)* | DynamoDB table for saved MCP servers; unset keeps them in the SQLite history file. The deployed stack sets it to its table |
+| `NIMBUS_MCP_KMS_KEY_ID` | *(unset)* | KMS key that encrypts saved MCP servers' headers in `NIMBUS_MCP_TABLE` (stack resource `McpHeadersKey`) |
 | `NIMBUS_AUTH_CLIENT_ID` | *(unset)* | The pool's app client id — what the SPA signs in with and what every accepted token's `aud`/`client_id` must equal |
 
 AWS credentials themselves are **not** a setting — they come from the standard boto3 credential

@@ -51,3 +51,21 @@ class Evaluation(SQLModel, table=True):
     result: str | None = None  # JSON
     progress: str | None = None  # JSON
     error: str | None = None  # JSON
+
+
+class McpServerRow(SQLModel, table=True):
+    """A saved remote MCP server (:mod:`nimbus.mcp`). Local history file only.
+
+    ``headers`` is plain JSON here: the SQLite store is the developer's own
+    file on their own machine, like a ``.env``. Deployed stacks keep these in
+    DynamoDB with the headers KMS-encrypted instead.
+    """
+
+    __tablename__ = "mcp_server"
+
+    id: str = Field(default_factory=_uuid_hex, primary_key=True)
+    name: str
+    url: str
+    headers: str = "{}"  # JSON: dict[str, str] -- secret
+    created_at: datetime = Field(default_factory=_utcnow, index=True)
+    updated_at: datetime = Field(default_factory=_utcnow)

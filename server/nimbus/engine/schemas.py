@@ -48,6 +48,10 @@ class RunRequest(BaseModel):
     #: Name of a registered toolset (``GET /tools``) the agent may call during
     #: this run. ``None`` runs without tools.
     toolset: str | None = None
+    #: Ids of saved MCP servers (``GET /mcp-servers``) whose tools the agent
+    #: may call too. Ids only: the servers' URLs and auth headers are looked up
+    #: when the run executes, so no secret is ever part of a stored config.
+    mcp_servers: list[str] = Field(default_factory=list, max_length=5)
     max_tool_iterations: int = Field(default=10, ge=1, le=100)
     guardrail: GuardrailConfig | None = None
     stream: bool = True
@@ -74,6 +78,7 @@ class RunRequest(BaseModel):
             "provider": self.provider,
             "inference": self.inference.as_model_config(),
             "toolset": self.toolset,
+            **({"mcp_servers": list(self.mcp_servers)} if self.mcp_servers else {}),
             "max_tool_iterations": self.max_tool_iterations,
             "guardrail": self.guardrail.model_dump() if self.guardrail else None,
             "stream": self.stream,

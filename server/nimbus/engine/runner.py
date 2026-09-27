@@ -32,7 +32,9 @@ from typing import Any
 from sqlmodel import Session
 from strands import Agent
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
+from strands.tools.mcp.mcp_client import MCPClientInitializationError
 
+from nimbus import deployment
 from nimbus.config import Settings, get_settings
 from nimbus.engine.events import (
     ErrorEvent,
@@ -48,6 +50,8 @@ from nimbus.engine.mapper import EventMapper
 from nimbus.engine.model_factory import ModelFactory, build_model, classify_error
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import BadRequestError
+from nimbus.mcp import client as mcp_client
+from nimbus.mcp.store import McpServerStore, build_mcp_store
 from nimbus.store.repo import (
     HistoryRepo,
     SqliteHistoryRepo,
@@ -144,6 +148,53 @@ def _stringify(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
+async def _build_agent(*, mcp_servers: list[Any], **kwargs: Any) -> Agent:
+    """Build the agent -- which connects to its MCP servers -- off the event loop.
+
+    Starting an MCP client blocks until the server has answered the handshake
+    (or timed out), so it runs in a worker thread rather than stalling every
+    other stream this process is serving.
+    """
+    if not mcp_servers:
+        return Agent(**kwargs)
+    try:
+        return await asyncio.to_thread(Agent, **kwargs)
+    except Exception as exc:
+        # Strands' tool registry re-raises a provider's start failure as a
+        # plain ValueError, so the MCP failure is found in the chain.
+        if not _caused_by(exc, MCPClientInitializationError):
+            raise
+        names = ", ".join(repr(server.name) for server in mcp_servers)
+        raise mcp_client.McpConnectionError(
+            f"Could not connect to MCP server(s) {names}: {mcp_client.describe(exc)}",
+            detail={"mcp_server_ids": [server.id for server in mcp_servers]},
+        ) from exc
+
+
+def _caused_by(exc: BaseException, kind: type[BaseException]) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, kind):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _release(agent: Agent | None, mcp_clients: list[Any]) -> None:
+    """Disconnect the run's MCP servers, whether or not the agent was built."""
+    if not mcp_clients:
+        return
+    if agent is not None:
+        try:
+            agent.cleanup()
+            return
+        except Exception:  # pragma: no cover - fall through to stopping them directly
+            logger.warning("agent cleanup failed", exc_info=True)
+    mcp_client.stop_clients(mcp_clients)
+
+
 async def execute_run(
     request: RunRequest,
     session_factory: SessionFactory | None = None,
@@ -151,6 +202,7 @@ async def execute_run(
     *,
     model_factory: ModelFactory | None = None,
     repo: HistoryRepo | None = None,
+    mcp_store: McpServerStore | None = None,
 ) -> AsyncIterator[RunEvent]:
     """Run ``request`` through a Strands Agent, yielding the run's event stream.
 
@@ -158,6 +210,10 @@ async def execute_run(
     resolve to (SQLite locally, DynamoDB in a deployed server). ``session_factory``
     is the older, SQLite-only form of the same injection and still wins when it
     is passed, so a caller can point the store at a specific database file.
+
+    ``request.mcp_servers`` are resolved through ``mcp_store`` (by default the
+    store these settings resolve to) before the run row exists, so an unknown
+    id is an ordinary 400; connecting to them happens in-band.
     """
     resolved_settings = settings or get_settings()
     if repo is None:
@@ -176,6 +232,11 @@ async def execute_run(
             detail={"toolset": request.toolset, "available": list_toolsets()},
             code="unknown_toolset",
         )
+    mcp_servers = (
+        mcp_client.resolve(request.mcp_servers, mcp_store or build_mcp_store(resolved_settings))
+        if request.mcp_servers
+        else []
+    )
 
     record = repo.create_run(
         model_id=request.model_id,
@@ -222,11 +283,14 @@ async def execute_run(
             error=error_payload,
         )
 
+    mcp_clients: list[Any] = []
+    agent: Agent | None = None
     try:
         model = make_model(request)
-        agent = Agent(
+        mcp_clients = mcp_client.build_clients(mcp_servers, deployed=deployment.in_lambda())
+        agent = await _build_agent(
             model=model,
-            tools=tools,
+            tools=[*tools, *mcp_clients],
             system_prompt=request.system_prompt or None,
             callback_handler=None,
             # Strands' default retry strategy silently swallows throttling for up to
@@ -235,6 +299,7 @@ async def execute_run(
             # throttling immediately as an ``error`` event with retryable=true and
             # let the caller decide when to retry.
             retry_strategy=None,
+            mcp_servers=mcp_servers,
         )
         recorder.register(agent)
 
@@ -275,6 +340,9 @@ async def execute_run(
         status = "error"
         error_payload = {"code": code, "message": message, "retryable": retryable}
         error_event = ErrorEvent(code=code, message=message, retryable=retryable)
+
+    finally:
+        _release(agent, mcp_clients)
 
     if mapper.unknown_count:
         logger.info("run %s: %d unmapped strands events", run_id, mapper.unknown_count)

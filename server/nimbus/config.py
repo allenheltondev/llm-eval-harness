@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     #: expired by the harness.
     history_retention_days: int = Field(default=0, ge=0)
 
+    # -- saved MCP servers (nimbus.mcp) ------------------------------------- #
+    #: DynamoDB table holding saved MCP server definitions. Unset: they live in
+    #: the local SQLite history file. The deployed template sets it (to the
+    #: stack's table) on both the server and the evaluation worker.
+    mcp_table: str | None = None
+    #: KMS key that encrypts saved MCP servers' auth headers in ``mcp_table``.
+    mcp_kms_key_id: str | None = None
+
     # -- authentication (nimbus.auth) ---------------------------------------- #
     #: Cognito user pool the deployed server verifies bearer tokens against.
     #: The deployed template injects both of these from its own resources;

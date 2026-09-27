@@ -305,6 +305,24 @@ class TestRun:
     def test_a_registered_toolset_is_accepted(self, cli):
         assert cli("run", "-m", "m1", "-p", "hi", "--toolset", "fraud-detection").code == 0
 
+    def test_an_unknown_mcp_server_fails_before_anything_is_executed(self, cli):
+        result = cli("run", "-m", "m1", "-p", "hi", "--mcp-server", "a", "--mcp-server", "b")
+        assert result.code == 1
+        assert "MCP server 'a' not found" in result.err
+        assert cli("runs", "--json").json()["items"] == []
+
+    def test_saved_mcp_servers_are_named_on_the_run(self, cli, db_path):
+        from nimbus.mcp.store import SqliteMcpStore
+        from nimbus.store import db
+
+        db.init_db(db_path)
+        saved = SqliteMcpStore().create(name="s", url="http://127.0.0.1:9/mcp", headers={})
+        result = cli("run", "-m", "m1", "-p", "hi", "--mcp-server", saved.id)
+        assert result.code == 1  # nothing listens there: reported in-band
+        assert "mcp_connection_failed" in result.err
+        stored = cli("runs", "--json").json()["items"][0]
+        assert stored["config"]["mcp_servers"] == [saved.id]
+
 
 # --------------------------------------------------------------------------- #
 # eval

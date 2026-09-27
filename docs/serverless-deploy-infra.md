@@ -498,6 +498,7 @@ for `Tracing: Active`:
 | `dynamodb:Query`, `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` | `EvalTable` |
 | `dynamodb:Query` | that table's `GSI1` |
 | `lambda:InvokeFunction` | the eval worker function (only when it is deployed) |
+| `kms:Encrypt`, `kms:Decrypt` | `McpHeadersKey` (saved MCP servers' auth headers; the worker gets `Decrypt` only) |
 
 Two differences from the worker's role are worth noting. The server **does**
 get `Query` (listing runs and evaluations walks the `GSI1` `RUN`/`EVAL`

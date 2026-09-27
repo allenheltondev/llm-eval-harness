@@ -153,6 +153,13 @@ def _run_options() -> argparse.ArgumentParser:
     )
     parent.add_argument("--toolset", help="a toolset from `nimbus tools`")
     parent.add_argument(
+        "--mcp-server",
+        action="append",
+        metavar="ID",
+        help="a saved MCP server's id whose tools the run may call (repeatable; "
+        "save servers on the Tools page)",
+    )
+    parent.add_argument(
         "--max-tool-iterations",
         type=int,
         default=None,

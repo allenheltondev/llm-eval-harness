@@ -323,3 +323,43 @@ def test_production_refuses_to_deploy_without_the_hosted_zone(tmp_path: pathlib.
     assert code == 1
     assert "::error title=No hosted zone::" in stdout
     assert args == ""  # never deployed
+
+
+def _statements(resources: dict, logical_id: str) -> list[dict]:
+    statements: list[dict] = []
+    for policy in resources[logical_id]["Properties"]["Policies"]:
+        if isinstance(policy, dict):
+            statements.extend(s for s in policy["Statement"] if "Action" in s)
+    return statements
+
+
+def _actions(statement: dict) -> set[str]:
+    action = statement["Action"]
+    return {action} if isinstance(action, str) else set(action)
+
+
+def test_saved_mcp_servers_reach_both_runners_with_their_key(resources: dict) -> None:
+    """Server saves and uses MCP servers; the worker only uses them.
+
+    Both need the table and the key, or a run naming a saved server fails in
+    whichever lane lacks them -- and only the server may encrypt (save) one.
+    """
+    key = resources["McpHeadersKey"]
+    assert key["Type"] == "AWS::KMS::Key"
+    assert key["Properties"]["EnableKeyRotation"] is True
+    key_arn = {"Fn::GetAtt": "McpHeadersKey.Arn"}
+    expected = {
+        "ServerFunction": {"kms:Encrypt", "kms:Decrypt"},
+        "EvalWorkerFunction": {"kms:Decrypt"},
+    }
+    for function, actions in expected.items():
+        env = _env(resources, function)
+        assert env["NIMBUS_MCP_TABLE"] == {"Fn::Ref": "EvalTable"}
+        assert env["NIMBUS_MCP_KMS_KEY_ID"] == {"Fn::Ref": "McpHeadersKey"}
+        granted = {
+            action
+            for statement in _statements(resources, function)
+            if statement.get("Resource") == key_arn
+            for action in _actions(statement)
+        }
+        assert granted == actions, function

@@ -67,6 +67,8 @@ from nimbus.evals.ddb_reader import EvalTable
 from nimbus.evals.events import EvalCompleteEvent
 from nimbus.evals.judge import JudgeFactory, get_judge_factory
 from nimbus.evals.schemas import EvaluationRequest
+from nimbus.mcp import client as mcp_client
+from nimbus.mcp.store import build_mcp_store
 from nimbus.schemas.runs import EvaluationDetail, Page, RunDetail, RunSummary
 from nimbus.store import history
 from nimbus.store.repo import HistoryRepo, get_history_repo, get_repo
@@ -263,6 +265,16 @@ def list_evaluations(
     )
 
 
+def _check_mcp_servers(payload: EvaluationRequest, settings: Settings) -> None:
+    """An unknown MCP server id is a 400 now, not a failure in every run later."""
+    ids = [
+        *(payload.run_config.mcp_servers if payload.run_config else []),
+        *(payload.suite.run_config.mcp_servers if payload.suite else []),
+    ]
+    if ids:
+        mcp_client.resolve(ids, build_mcp_store(settings))
+
+
 @router.post(
     "/evaluations",
     status_code=http_status.HTTP_202_ACCEPTED,
@@ -295,6 +307,8 @@ async def create_evaluation(
     upgrade to the cloud lane, because where an evaluation runs is the caller's
     decision to make.
     """
+    _check_mcp_servers(payload, settings)
+
     if payload.execution == "cloud":
         return await evals_cloud.submit(
             payload, settings=settings, invoker=invoker, store_factory=eval_writer_factory
