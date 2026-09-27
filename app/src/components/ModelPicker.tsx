@@ -50,6 +50,12 @@ export default function ModelPicker({ label }: ModelPickerProps) {
     [models, providers]
   )
   const selected = findModel(models, modelId)
+  // A model id the catalog does not list -- typed by hand while the catalog
+  // was unavailable, then persisted -- is still what a run or evaluation will
+  // send, so it stays visible (as its own option, and editable below) rather
+  // than leaving the select on its placeholder.
+  const unlisted = modelId !== '' && !selected
+  const showManual = error !== null || (!loading && models.length === 0) || unlisted
 
   function handleSelect(id: string) {
     const model = id === '' ? null : findModel(models, id)
@@ -70,6 +76,7 @@ export default function ModelPicker({ label }: ModelPickerProps) {
             <option value="">
               {loading && models.length === 0 ? 'Loading models…' : 'Select a model…'}
             </option>
+            {unlisted && <option value={modelId}>{modelId} (entered manually)</option>}
             {groups.map(group => (
               <optgroup key={group.source} label={group.label} disabled={group.disabled}>
                 {group.models.map(model => (
@@ -98,12 +105,17 @@ export default function ModelPicker({ label }: ModelPickerProps) {
         </p>
       )}
 
-      {(error || (!loading && models.length === 0)) && (
+      {showManual && (
         <div className="space-y-2">
           {error ? (
             <Alert variant="error">Could not load models: {error.message}</Alert>
-          ) : (
+          ) : !loading && models.length === 0 ? (
             <Alert variant="info">No models available from any configured provider.</Alert>
+          ) : (
+            <Alert variant="info">
+              <span className="font-mono break-all">{modelId}</span> is not in the model list; it
+              runs as entered, with the provider below.
+            </Alert>
           )}
           {/* Fallback affordance: the catalog degrades to empty rather than
                 erroring when a provider listing fails (expired AWS session,
