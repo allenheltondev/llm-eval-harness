@@ -132,8 +132,10 @@ class Settings(BaseSettings):
     #: the local SQLite history file. The deployed template sets it (to the
     #: stack's table) on both the server and the evaluation worker.
     mcp_table: str | None = None
-    #: KMS key that encrypts saved MCP servers' auth headers in ``mcp_table``.
-    mcp_kms_key_id: str | None = None
+    #: SSM Parameter Store path under which saved MCP servers' auth header
+    #: values are kept, as one ``SecureString`` per server, when ``mcp_table``
+    #: is set. The deployed template sets it to ``/nimbus/{stack}/mcp``.
+    mcp_ssm_prefix: str = "/nimbus/mcp"
 
     # -- authentication (nimbus.auth) ---------------------------------------- #
     #: Cognito user pool the deployed server verifies bearer tokens against.

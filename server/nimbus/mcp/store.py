@@ -2,20 +2,21 @@
 
 Two stores behind one protocol, chosen the way the history backend is: a
 DynamoDB table when one is configured (``NIMBUS_MCP_TABLE`` -- every deployed
-stack), the local SQLite history file otherwise. The deployed store encrypts
-the auth headers with KMS before they are written, so a table read alone
-never yields a secret.
+stack), the local SQLite history file otherwise. The deployed store keeps
+the auth header *values* out of the table entirely: they are SSM Parameter
+Store ``SecureString`` parameters, so a table read alone never yields a secret.
 
 Item shape (single-table, alongside runs and evaluations)::
 
     pk=MCP#{id}  sk=META  GSI1PK=MCP  GSI1SK={created_at}
-    name, url, created_at, updated_at, headers_enc (base64 KMS ciphertext)
+    name, url, created_at, updated_at, header_names
+    -> values: SecureString {NIMBUS_MCP_SSM_PREFIX}/{id}, JSON {name: value}
 """
 
 from __future__ import annotations
 
-import base64
 import json
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
@@ -159,68 +160,86 @@ class SqliteMcpStore:
 
 
 # --------------------------------------------------------------------------- #
-# DynamoDB + KMS
+# DynamoDB + SSM Parameter Store
 # --------------------------------------------------------------------------- #
 
 
-class HeaderCipher(Protocol):
-    def encrypt(self, headers: dict[str, str], server_id: str) -> str: ...
+class HeaderSecrets(Protocol):
+    """Where a deployed server's header values live, keyed by server id."""
 
-    def decrypt(self, blob: str, server_id: str) -> dict[str, str]: ...
+    def put(self, server_id: str, headers: dict[str, str]) -> None: ...
+
+    def get(self, server_id: str) -> dict[str, str]: ...
+
+    def delete(self, server_id: str) -> None: ...
 
 
-class KmsHeaderCipher:
-    """KMS envelope for a server's headers, bound to that server's id.
+class SsmHeaderSecrets:
+    """One ``SecureString`` parameter per server: ``{prefix}/{server_id}``.
 
-    The encryption context ties each ciphertext to its item, so a blob copied
-    onto another server's item does not decrypt there.
+    Encrypted with the account's AWS-managed ``aws/ssm`` key, so there is no
+    key to create or grant. Standard-tier parameters hold at most 4 KB, which
+    :data:`nimbus.mcp.schemas.MAX_HEADERS_BYTES` keeps a server's headers under.
     """
 
-    def __init__(self, key_id: str | None, region_name: str, client: Any | None = None) -> None:
-        self._key_id = key_id
+    def __init__(self, prefix: str, region_name: str, client: Any | None = None) -> None:
+        self._prefix = prefix.rstrip("/")
         self._region_name = region_name
         self._client = client
 
-    def _kms(self) -> Any:
+    def _ssm(self) -> Any:
         if self._client is None:
             import boto3
 
-            self._client = boto3.client("kms", region_name=self._region_name)
+            self._client = boto3.client("ssm", region_name=self._region_name)
         return self._client
 
-    @staticmethod
-    def _context(server_id: str) -> dict[str, str]:
-        return {"nimbus:mcp-server": server_id}
+    def _name(self, server_id: str) -> str:
+        return f"{self._prefix}/{server_id}"
 
-    def encrypt(self, headers: dict[str, str], server_id: str) -> str:
-        if not self._key_id:
+    def put(self, server_id: str, headers: dict[str, str]) -> None:
+        self._ssm().put_parameter(
+            Name=self._name(server_id),
+            Value=json.dumps(headers),
+            Type="SecureString",
+            Overwrite=True,
+            Description="Nimbus: a saved MCP server's auth headers",
+        )
+
+    def get(self, server_id: str) -> dict[str, str]:
+        client = self._ssm()
+        try:
+            response = client.get_parameter(Name=self._name(server_id), WithDecryption=True)
+        except client.exceptions.ParameterNotFound as exc:
+            # The item says it has headers and they are gone: connecting
+            # without them would fail anyway, and less legibly.
             raise McpStoreUnavailableError(
-                "Saving MCP server headers needs a KMS key: set NIMBUS_MCP_KMS_KEY_ID"
-            )
-        response = self._kms().encrypt(
-            KeyId=self._key_id,
-            Plaintext=json.dumps(headers).encode(),
-            EncryptionContext=self._context(server_id),
-        )
-        return base64.b64encode(response["CiphertextBlob"]).decode()
+                f"The saved headers for MCP server {server_id!r} are missing; "
+                "set them again with an update",
+                detail={"mcp_server_id": server_id},
+            ) from exc
+        return json.loads(response["Parameter"]["Value"])
 
-    def decrypt(self, blob: str, server_id: str) -> dict[str, str]:
-        response = self._kms().decrypt(
-            CiphertextBlob=base64.b64decode(blob),
-            EncryptionContext=self._context(server_id),
-        )
-        return json.loads(response["Plaintext"])
+    def delete(self, server_id: str) -> None:
+        client = self._ssm()
+        with suppress(client.exceptions.ParameterNotFound):
+            client.delete_parameter(Name=self._name(server_id))
 
 
 class DynamoMcpStore:
-    """The deployed store: items in the stack's table, headers encrypted."""
+    """The deployed store: definitions in the stack's table, header values in SSM.
 
-    def __init__(self, table: Any, cipher: HeaderCipher) -> None:
+    The item carries the header *names* only, so listing -- and anyone who can
+    read the table -- never sees a value.
+    """
+
+    def __init__(self, table: Any, secrets: HeaderSecrets) -> None:
         self._table = table
-        self._cipher = cipher
+        self._secrets = secrets
 
-    def _item(self, server: McpServer) -> dict[str, Any]:
-        item: dict[str, Any] = {
+    @staticmethod
+    def _item(server: McpServer) -> dict[str, Any]:
+        return {
             "pk": PK_PREFIX + server.id,
             "sk": META_SK,
             "GSI1PK": GSI1_PARTITION,
@@ -231,18 +250,15 @@ class DynamoMcpStore:
             "updated_at": server.updated_at.isoformat(),
             "header_names": sorted(server.headers),
         }
-        if server.headers:
-            item["headers_enc"] = self._cipher.encrypt(server.headers, server.id)
-        return item
 
     def _model(self, item: dict[str, Any], *, with_headers: bool = True) -> McpServer:
         server_id = str(item["pk"])[len(PK_PREFIX) :]
-        blob = item.get("headers_enc")
-        if blob and with_headers:
-            headers = self._cipher.decrypt(str(blob), server_id)
+        names = list(item.get("header_names") or [])
+        if names and with_headers:
+            headers = self._secrets.get(server_id)
         else:
-            # Listing never needs the values: names only, no KMS call.
-            headers = {name: "" for name in item.get("header_names") or []}
+            # Listing never needs the values: names only, no SSM call.
+            headers = {name: "" for name in names}
         return McpServer(
             id=server_id,
             name=str(item["name"]),
@@ -251,6 +267,15 @@ class DynamoMcpStore:
             created_at=datetime.fromisoformat(str(item["created_at"])),
             updated_at=datetime.fromisoformat(str(item["updated_at"])),
         )
+
+    def _write(self, server: McpServer) -> None:
+        # Secrets first: an item that names headers must never point at a
+        # parameter that was not written.
+        if server.headers:
+            self._secrets.put(server.id, server.headers)
+        else:
+            self._secrets.delete(server.id)
+        self._table.put_item(Item=self._item(server))
 
     def list(self) -> list[McpServer]:
         from boto3.dynamodb.conditions import Key
@@ -272,30 +297,34 @@ class DynamoMcpStore:
             kwargs["ExclusiveStartKey"] = last
         return [self._model(item, with_headers=False) for item in items]
 
-    def get(self, server_id: str) -> McpServer:
+    def _get_item(self, server_id: str) -> dict[str, Any]:
         response = self._table.get_item(Key={"pk": PK_PREFIX + server_id, "sk": META_SK})
         item = response.get("Item")
         if not item:
             raise _not_found(server_id)
-        return self._model(item)
+        return item
+
+    def get(self, server_id: str) -> McpServer:
+        return self._model(self._get_item(server_id))
 
     def create(self, *, name: str, url: str, headers: dict[str, str]) -> McpServer:
         now = _now()
         server = McpServer(
             id=uuid4().hex, name=name, url=url, headers=headers, created_at=now, updated_at=now
         )
-        self._table.put_item(Item=self._item(server))
+        self._write(server)
         return server
 
     def save(self, server: McpServer) -> McpServer:
-        self.get(server.id)
+        self._get_item(server.id)
         saved = server.model_copy(update={"updated_at": _now()})
-        self._table.put_item(Item=self._item(saved))
+        self._write(saved)
         return saved
 
     def delete(self, server_id: str) -> None:
-        self.get(server_id)
+        self._get_item(server_id)
         self._table.delete_item(Key={"pk": PK_PREFIX + server_id, "sk": META_SK})
+        self._secrets.delete(server_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -315,7 +344,7 @@ def build_mcp_store(settings: Settings) -> McpServerStore:
 
         return DynamoMcpStore(
             ddb_reader.build_table(settings.mcp_table, settings.aws_region),
-            KmsHeaderCipher(settings.mcp_kms_key_id, settings.aws_region),
+            SsmHeaderSecrets(settings.mcp_ssm_prefix, settings.aws_region),
         )
     if deployment.in_lambda():
         raise McpStoreUnavailableError(

@@ -7,7 +7,6 @@ the tool-name prefix are exercised end to end rather than mocked.
 
 from __future__ import annotations
 
-import base64
 import json
 import socket
 from datetime import UTC, datetime
@@ -238,23 +237,46 @@ def test_sqlite_store_round_trip(initialized_db):
             call()
 
 
-class FakeCipher:
+class ParameterNotFound(Exception):
+    pass
+
+
+class FakeSsm:
+    """The slice of the boto3 SSM client SsmHeaderSecrets uses."""
+
+    class exceptions:  # noqa: N801 - boto3 spelling
+        ParameterNotFound = ParameterNotFound
+
     def __init__(self):
-        self.decrypts = 0
+        self.parameters: dict[str, dict] = {}
+        self.gets = 0
 
-    def encrypt(self, headers, server_id):
-        return base64.b64encode(json.dumps([server_id, headers]).encode()).decode()
+    def put_parameter(self, **kwargs):
+        assert kwargs["Type"] == "SecureString" and kwargs["Overwrite"] is True
+        self.parameters[kwargs["Name"]] = kwargs
 
-    def decrypt(self, blob, server_id):
-        self.decrypts += 1
-        bound_to, headers = json.loads(base64.b64decode(blob))
-        assert bound_to == server_id
-        return headers
+    def get_parameter(self, Name, WithDecryption):  # noqa: N803 - boto3 spelling
+        assert WithDecryption is True
+        self.gets += 1
+        if Name not in self.parameters:
+            raise ParameterNotFound(Name)
+        return {"Parameter": {"Name": Name, "Value": self.parameters[Name]["Value"]}}
+
+    def delete_parameter(self, Name):  # noqa: N803 - boto3 spelling
+        if Name not in self.parameters:
+            raise ParameterNotFound(Name)
+        del self.parameters[Name]
 
 
-def test_dynamo_store_round_trip_keeps_headers_encrypted():
-    table, cipher = FakeTable(), FakeCipher()
-    store = mcp_store.DynamoMcpStore(table, cipher)
+def _dynamo(table=None):
+    ssm = FakeSsm()
+    secrets = mcp_store.SsmHeaderSecrets("/nimbus/stack/mcp/", "us-east-1", client=ssm)
+    return mcp_store.DynamoMcpStore(table if table is not None else FakeTable(), secrets), ssm
+
+
+def test_dynamo_store_keeps_header_values_out_of_the_table():
+    table = FakeTable()
+    store, ssm = _dynamo(table)
     created = store.create(name="One", url="https://x/mcp", headers={"Authorization": "tok"})
     store.create(name="Two", url="https://y/mcp", headers={})
 
@@ -262,27 +284,41 @@ def test_dynamo_store_round_trip_keeps_headers_encrypted():
     assert item["pk"] == f"MCP#{created.id}" and item["sk"] == "META"
     assert item["GSI1PK"] == "MCP"
     assert item["header_names"] == ["Authorization"]
-    assert "tok" not in json.dumps(item)
-    assert "headers_enc" not in table.items[1]
+    assert "tok" not in json.dumps(table.items)
+    assert list(ssm.parameters) == [f"/nimbus/stack/mcp/{created.id}"]
+    assert json.loads(ssm.parameters[f"/nimbus/stack/mcp/{created.id}"]["Value"]) == {
+        "Authorization": "tok"
+    }
 
     listed = store.list()
     assert [s.name for s in listed] == ["One", "Two"]
     assert listed[0].public().header_names == ["Authorization"]
-    assert cipher.decrypts == 0  # listing never decrypts
+    assert ssm.gets == 0  # listing never reads a secret
 
     assert store.get(created.id).headers == {"Authorization": "tok"}
     saved = store.save(store.get(created.id).model_copy(update={"headers": {}}))
     assert saved.headers == {}
-    assert (
-        "headers_enc" not in table.get_item(Key={"pk": f"MCP#{created.id}", "sk": "META"})["Item"]
-    )
+    assert ssm.parameters == {}  # no headers left: the parameter goes too
+    assert store.get(created.id).headers == {}
 
+    store.save(saved.model_copy(update={"headers": {"X-Key": "k"}}))
     store.delete(created.id)
+    assert ssm.parameters == {}
     assert [s.name for s in store.list()] == ["Two"]
     with pytest.raises(NotFoundError):
         store.get(created.id)
     with pytest.raises(NotFoundError):
         store.delete(created.id)
+    with pytest.raises(NotFoundError):
+        store.save(saved)
+
+
+def test_dynamo_store_reports_headers_that_went_missing():
+    store, ssm = _dynamo()
+    created = store.create(name="One", url="https://x/mcp", headers={"A": "b"})
+    ssm.parameters.clear()
+    with pytest.raises(mcp_store.McpStoreUnavailableError, match="missing"):
+        store.get(created.id)
 
 
 def test_dynamo_store_follows_list_pagination():
@@ -291,56 +327,37 @@ def test_dynamo_store_follows_list_pagination():
             kwargs["Limit"] = 1
             return super().query(**kwargs)
 
-    table = PagedTable()
-    store = mcp_store.DynamoMcpStore(table, FakeCipher())
+    store, _ = _dynamo(PagedTable())
     for name in ("a", "b", "c"):
         store.create(name=name, url="https://x/mcp", headers={})
     assert [s.name for s in store.list()] == ["a", "b", "c"]
 
 
-class FakeKms:
-    def __init__(self):
-        self.calls = []
-
-    def encrypt(self, **kwargs):
-        self.calls.append(("encrypt", kwargs))
-        return {"CiphertextBlob": b"C:" + kwargs["Plaintext"]}
-
-    def decrypt(self, **kwargs):
-        self.calls.append(("decrypt", kwargs))
-        return {"Plaintext": kwargs["CiphertextBlob"][2:]}
-
-
-def test_kms_cipher_binds_ciphertext_to_the_server():
-    kms = FakeKms()
-    cipher = mcp_store.KmsHeaderCipher("alias/nimbus", "us-east-1", client=kms)
-    blob = cipher.encrypt({"A": "b"}, "srv1")
-    assert cipher.decrypt(blob, "srv1") == {"A": "b"}
-    (_, enc), (_, dec) = kms.calls
-    assert enc["KeyId"] == "alias/nimbus"
-    assert enc["EncryptionContext"] == dec["EncryptionContext"] == {"nimbus:mcp-server": "srv1"}
-
-
-def test_kms_cipher_without_a_key_refuses_to_store_headers():
-    cipher = mcp_store.KmsHeaderCipher(None, "us-east-1", client=FakeKms())
-    with pytest.raises(mcp_store.McpStoreUnavailableError):
-        cipher.encrypt({"A": "b"}, "srv1")
-
-
-def test_kms_cipher_builds_its_client_lazily(monkeypatch):
+def test_ssm_secrets_build_their_client_lazily(monkeypatch):
     import boto3
 
-    kms = FakeKms()
-    monkeypatch.setattr(boto3, "client", lambda service, region_name: kms)
-    cipher = mcp_store.KmsHeaderCipher("k", "eu-west-1")
-    assert cipher.decrypt(cipher.encrypt({"A": "b"}, "s"), "s") == {"A": "b"}
+    ssm = FakeSsm()
+    monkeypatch.setattr(boto3, "client", lambda service, region_name: ssm)
+    secrets = mcp_store.SsmHeaderSecrets("/p", "eu-west-1")
+    secrets.put("s", {"A": "b"})
+    assert secrets.get("s") == {"A": "b"}
+
+
+def test_headers_must_fit_one_standard_parameter():
+    big = {f"X-{i}": "v" * 500 for i in range(9)}
+    with pytest.raises(ValidationError, match="bytes in total"):
+        McpServerCreate(name="s", url="https://x/mcp", headers=big)
+    with pytest.raises(ValueError, match="bytes in total"):
+        McpServerUpdate(headers={"X-9": "v" * 2000}).apply_headers(
+            {f"X-{i}": "v" * 500 for i in range(4)}
+        )
 
 
 def test_store_selection(monkeypatch):
     monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
     assert isinstance(mcp_store.build_mcp_store(Settings()), mcp_store.SqliteMcpStore)
 
-    dynamo = mcp_store.build_mcp_store(Settings(mcp_table="t", mcp_kms_key_id="k"))
+    dynamo = mcp_store.build_mcp_store(Settings(mcp_table="t"))
     assert isinstance(dynamo, mcp_store.DynamoMcpStore)
 
     monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "fn")

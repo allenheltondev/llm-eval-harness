@@ -233,8 +233,8 @@ export default function McpServerEditor({
         </CardHeader>
         <CardBody className="space-y-3" data-testid="mcp-header-rows">
           <Alert variant="info" data-testid="mcp-header-note">
-            Sent with every request to the server, e.g. <code>Authorization</code>. Values are
-            stored encrypted and are never shown again — only header names are.
+            Sent with every request to the server, e.g. <code>Authorization</code>. Values are kept
+            as secrets and are never shown again — only header names are.
           </Alert>
 
           {rows.map((row, index) => (

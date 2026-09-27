@@ -171,9 +171,11 @@ prefixed with a slug of its name (`github_search_issues`) so two servers can bot
 
 - **Headers are write-only secrets.** Put an API key in `Authorization` (or whatever the server
   wants); the API only ever returns header *names*. Runs and evaluations store server **ids**, never
-  URLs or headers, so history and the cloud worker's payload hold no secret. Deployed, headers are
-  encrypted with the stack's `McpHeadersKey` (KMS) before they reach DynamoDB; locally they sit in
-  your own SQLite history file, like a `.env`.
+  URLs or headers, so history and the cloud worker's payload hold no secret. Deployed, header values
+  never touch DynamoDB: each server's are one SSM Parameter Store `SecureString` under
+  `/nimbus/<stack>/mcp/`, encrypted with the account's AWS-managed `aws/ssm` key (no key to create,
+  free standard tier, 4 KB of headers per server). Locally they sit in your own SQLite history
+  file, like a `.env`.
 - **Deployed stacks only reach public HTTPS servers.** The server and worker are Lambda functions
   holding AWS credentials, so `http://`, `localhost`, private, link-local and other reserved
   addresses are refused — when the URL is saved and again (after DNS resolution) when a run
@@ -537,7 +539,7 @@ to `~/.config/nimbus` the first time it is read.
 | `NIMBUS_LOCAL_EVALS` | `auto` | `on` \| `off` \| `auto` (off inside Lambda) — whether evaluations may run in this process |
 | `NIMBUS_AUTH_USER_POOL_ID` | *(unset)* | Cognito user pool to verify bearer tokens against. With `NIMBUS_AUTH_CLIENT_ID`, every route but `/health` requires a token; unset locally means no gate. The deployed stack injects both |
 | `NIMBUS_MCP_TABLE` | *(unset)* | DynamoDB table for saved MCP servers; unset keeps them in the SQLite history file. The deployed stack sets it to its table |
-| `NIMBUS_MCP_KMS_KEY_ID` | *(unset)* | KMS key that encrypts saved MCP servers' headers in `NIMBUS_MCP_TABLE` (stack resource `McpHeadersKey`) |
+| `NIMBUS_MCP_SSM_PREFIX` | `/nimbus/mcp` | SSM Parameter Store path for saved MCP servers' header values (one `SecureString` per server) when `NIMBUS_MCP_TABLE` is set. The deployed stack uses `/nimbus/<stack>/mcp` |
 | `NIMBUS_AUTH_CLIENT_ID` | *(unset)* | The pool's app client id — what the SPA signs in with and what every accepted token's `aud`/`client_id` must equal |
 
 AWS credentials themselves are **not** a setting — they come from the standard boto3 credential

@@ -58,7 +58,7 @@ class McpServerRow(SQLModel, table=True):
 
     ``headers`` is plain JSON here: the SQLite store is the developer's own
     file on their own machine, like a ``.env``. Deployed stacks keep these in
-    DynamoDB with the headers KMS-encrypted instead.
+    DynamoDB, with the header values in SSM ``SecureString`` parameters.
     """
 
     __tablename__ = "mcp_server"

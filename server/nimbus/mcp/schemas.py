@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -25,6 +26,14 @@ RESERVED_HEADERS = frozenset(
 )
 MAX_HEADERS = 10
 MAX_HEADER_VALUE_LENGTH = 2048
+#: A server's headers, serialized, must fit one standard-tier (free) SSM
+#: parameter, which holds 4 KB; see :class:`nimbus.mcp.store.SsmHeaderSecrets`.
+MAX_HEADERS_BYTES = 4000
+
+
+def _check_total(headers: dict[str, str]) -> None:
+    if len(json.dumps(headers).encode()) > MAX_HEADERS_BYTES:
+        raise ValueError(f"a server's headers are limited to {MAX_HEADERS_BYTES} bytes in total")
 
 
 def _check_header_name(name: str) -> str:
@@ -68,7 +77,9 @@ class McpServerCreate(BaseModel):
         if len(value) > MAX_HEADERS:
             raise ValueError(f"at most {MAX_HEADERS} headers")
         _check_unique(value)
-        return {_check_header_name(k): _check_header_value(v) for k, v in value.items()}
+        checked = {_check_header_name(k): _check_header_value(v) for k, v in value.items()}
+        _check_total(checked)
+        return checked
 
 
 class McpServerUpdate(BaseModel):
@@ -118,6 +129,7 @@ class McpServerUpdate(BaseModel):
                 merged[name] = value
         if len(merged) > MAX_HEADERS:
             raise ValueError(f"at most {MAX_HEADERS} headers")
+        _check_total(merged)
         return merged
 
 

@@ -229,26 +229,6 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # Encrypts saved MCP servers' auth headers (nimbus/mcp/store.py) before
-  # they are written to EvalTable, so a table read alone never yields a
-  # secret. Each ciphertext is bound to its server by encryption context.
-  # The key policy delegates to IAM: the two function roles below are what
-  # grant use of it.
-  McpHeadersKey:
-    Type: AWS::KMS::Key
-    Properties:
-      Description: !Sub Nimbus (${AWS::StackName}) saved MCP server auth headers
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: 2012-10-17
-        Statement:
-          - Sid: AccountAdministersThroughIam
-            Effect: Allow
-            Principal:
-              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
-            Action: kms:*
-            Resource: '*'
-
   ArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -347,9 +327,9 @@ Resources:
           # items it writes -- the same rule the server applies to its own.
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
           # Runs name saved MCP servers by id; the worker reads each MCP#
-          # item (GetItem) and decrypts its headers when the run starts.
+          # item (GetItem) and its headers' SecureString when the run starts.
           NIMBUS_MCP_TABLE: !Ref EvalTable
-          NIMBUS_MCP_KMS_KEY_ID: !Ref McpHeadersKey
+          NIMBUS_MCP_SSM_PREFIX: !Sub /nimbus/${AWS::StackName}/mcp
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -377,9 +357,11 @@ Resources:
                 - dynamodb:UpdateItem
               Resource: !GetAtt EvalTable.Arn
             # Saved MCP servers' headers: read-only, the worker never saves one.
+            # SecureString under the AWS-managed aws/ssm key, whose key policy
+            # already lets SSM decrypt for this account, so no KMS grant here.
             - Effect: Allow
-              Action: kms:Decrypt
-              Resource: !GetAtt McpHeadersKey.Arn
+              Action: ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nimbus/${AWS::StackName}/mcp/*
   ServerFunction:
     Type: AWS::Serverless::Function
     Condition: DeployServer
@@ -434,9 +416,9 @@ Resources:
           NIMBUS_EVAL_TABLE: !Ref EvalTable
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
           # Saved MCP servers (the Tools page): MCP# items in the same table,
-          # auth headers encrypted with McpHeadersKey.
+          # auth header values as SSM SecureString parameters under this path.
           NIMBUS_MCP_TABLE: !Ref EvalTable
-          NIMBUS_MCP_KMS_KEY_ID: !Ref McpHeadersKey
+          NIMBUS_MCP_SSM_PREFIX: !Sub /nimbus/${AWS::StackName}/mcp
           NIMBUS_EVAL_FUNCTION_NAME: !If
             - ServerHasEvalWorker
             - !Ref EvalWorkerFunction
@@ -503,12 +485,14 @@ Resources:
             - Effect: Allow
               Action: dynamodb:Query
               Resource: !Sub ${EvalTable.Arn}/index/GSI1
-            # Saving (Encrypt) and using (Decrypt) MCP server auth headers.
+            # Saving, using and deleting MCP server auth headers (SecureString
+            # under aws/ssm; see the worker's matching statement).
             - Effect: Allow
               Action:
-                - kms:Encrypt
-                - kms:Decrypt
-              Resource: !GetAtt McpHeadersKey.Arn
+                - ssm:PutParameter
+                - ssm:GetParameter
+                - ssm:DeleteParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nimbus/${AWS::StackName}/mcp/*
             # Dispatching an evaluation to the cloud lane.
             - !If
               - ServerHasEvalWorker

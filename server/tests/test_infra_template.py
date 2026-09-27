@@ -338,28 +338,30 @@ def _actions(statement: dict) -> set[str]:
     return {action} if isinstance(action, str) else set(action)
 
 
-def test_saved_mcp_servers_reach_both_runners_with_their_key(resources: dict) -> None:
+def test_saved_mcp_servers_reach_both_runners(resources: dict) -> None:
     """Server saves and uses MCP servers; the worker only uses them.
 
-    Both need the table and the key, or a run naming a saved server fails in
-    whichever lane lacks them -- and only the server may encrypt (save) one.
+    Both need the table and the parameter path, or a run naming a saved server
+    fails in whichever lane lacks them -- and only the server may write or
+    delete a server's headers. SSM access is confined to the stack's own path.
     """
-    key = resources["McpHeadersKey"]
-    assert key["Type"] == "AWS::KMS::Key"
-    assert key["Properties"]["EnableKeyRotation"] is True
-    key_arn = {"Fn::GetAtt": "McpHeadersKey.Arn"}
+    prefix = {"Fn::Sub": "/nimbus/${AWS::StackName}/mcp"}
+    parameters = {
+        "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}"
+        ":parameter/nimbus/${AWS::StackName}/mcp/*"
+    }
     expected = {
-        "ServerFunction": {"kms:Encrypt", "kms:Decrypt"},
-        "EvalWorkerFunction": {"kms:Decrypt"},
+        "ServerFunction": {"ssm:PutParameter", "ssm:GetParameter", "ssm:DeleteParameter"},
+        "EvalWorkerFunction": {"ssm:GetParameter"},
     }
     for function, actions in expected.items():
         env = _env(resources, function)
         assert env["NIMBUS_MCP_TABLE"] == {"Fn::Ref": "EvalTable"}
-        assert env["NIMBUS_MCP_KMS_KEY_ID"] == {"Fn::Ref": "McpHeadersKey"}
-        granted = {
-            action
+        assert env["NIMBUS_MCP_SSM_PREFIX"] == prefix
+        ssm = {
+            (action, statement.get("Resource") == parameters)
             for statement in _statements(resources, function)
-            if statement.get("Resource") == key_arn
             for action in _actions(statement)
+            if action.startswith("ssm:")
         }
-        assert granted == actions, function
+        assert ssm == {(action, True) for action in actions}, function

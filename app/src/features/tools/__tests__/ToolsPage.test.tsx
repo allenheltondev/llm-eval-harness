@@ -164,7 +164,7 @@ describe('ToolsPage add', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add MCP server' }))
     expect(screen.getByTestId('mcp-header-note')).toHaveTextContent(
-      'Values are stored encrypted and are never shown again'
+      'Values are kept as secrets and are never shown again'
     )
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: '  Linear ' } })
     fireEvent.change(screen.getByLabelText('URL'), {
