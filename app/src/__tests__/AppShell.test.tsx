@@ -32,6 +32,7 @@ const {
   DEFAULT_SETTINGS,
   INITIAL_RUN_STATE,
   useGuardrailStore,
+  useMcpServerStore,
   useModelStore,
   useRunConfigStore,
   useRunStore,
@@ -44,6 +45,7 @@ const PAGE_TEST_IDS: Record<string, string> = {
   evals: 'evals-page',
   history: 'history-page',
   guardrails: 'guardrails-page',
+  tools: 'tools-page',
   about: 'about-page'
 }
 
@@ -56,7 +58,8 @@ beforeEach(() => {
   getEvaluationMock.mockReturnValue(new Promise(() => {}))
   localStorage.clear()
   toolsMock.mockReset()
-  toolsMock.mockResolvedValue({ toolsets: [] })
+  // Never settles: the Workbench's tool picker is not under test here.
+  toolsMock.mockReturnValue(new Promise(() => {}))
   useRunStore.setState({ ...INITIAL_RUN_STATE })
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
   useSettingsStore.setState({ ...DEFAULT_SETTINGS })
@@ -68,6 +71,11 @@ beforeEach(() => {
     guardrails: [],
     loadGuardrails: vi.fn().mockResolvedValue(undefined)
   })
+  useMcpServerStore.setState({
+    servers: [],
+    loaded: true,
+    loadServers: vi.fn().mockResolvedValue(undefined)
+  })
 })
 
 describe('AppShell', () => {
@@ -77,7 +85,7 @@ describe('AppShell', () => {
       name
     })
 
-  it('renders the Nimbus rail with exactly the five sections, and no Scenarios', () => {
+  it('renders the Nimbus rail with exactly the six sections, and no Scenarios', () => {
     render(<AppShell />)
 
     expect(screen.getByText('Nimbus')).toBeInTheDocument()
@@ -86,7 +94,7 @@ describe('AppShell', () => {
       within(nav)
         .getAllByRole('link')
         .map(item => item.textContent)
-    ).toEqual(['Workbench', 'Evals', 'History', 'Guardrails', 'About'])
+    ).toEqual(['Workbench', 'Evals', 'History', 'Guardrails', 'Tools', 'About'])
     expect(within(nav).queryByRole('link', { name: 'Scenarios' })).not.toBeInTheDocument()
   })
 

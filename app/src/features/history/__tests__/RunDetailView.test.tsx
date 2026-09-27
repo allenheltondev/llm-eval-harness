@@ -9,7 +9,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import RunDetailView from '../RunDetailView'
-import { INITIAL_HISTORY_STATE, useHistoryStore } from '../../../stores'
+import {
+  INITIAL_HISTORY_STATE,
+  INITIAL_MCP_SERVER_STATE,
+  useHistoryStore,
+  useMcpServerStore
+} from '../../../stores'
 import type { RunDetail } from '../../../api'
 
 const getRunDetail = vi.fn().mockResolvedValue(null)
@@ -53,9 +58,13 @@ function detail(overrides: Partial<RunDetail> = {}): RunDetail {
   }
 }
 
+const loadServers = vi.fn().mockResolvedValue(undefined)
+
 beforeEach(() => {
   getRunDetail.mockClear()
+  loadServers.mockClear()
   useHistoryStore.setState({ ...INITIAL_HISTORY_STATE, getRunDetail })
+  useMcpServerStore.setState({ ...INITIAL_MCP_SERVER_STATE, loadServers })
 })
 
 describe('RunDetailView', () => {
@@ -112,6 +121,43 @@ describe('RunDetailView', () => {
     render(<RunDetailView runId="r1" />)
 
     expect(screen.queryByTestId('run-detail-toolset')).not.toBeInTheDocument()
+  })
+
+  it('shows no MCP servers line for a run that used none, and loads nothing for it', () => {
+    useHistoryStore.setState({ details: { r1: detail() } })
+    render(<RunDetailView runId="r1" />)
+
+    expect(screen.queryByTestId('run-detail-mcp-servers')).not.toBeInTheDocument()
+    expect(loadServers).not.toHaveBeenCalled()
+  })
+
+  it('names the MCP servers a run used, falling back to the id of a deleted one', () => {
+    useMcpServerStore.setState({
+      servers: [
+        {
+          id: 'mcp-1',
+          name: 'GitHub MCP',
+          url: 'https://mcp.github.example/mcp',
+          header_names: [],
+          created_at: '2026-09-01T00:00:00Z',
+          updated_at: '2026-09-01T00:00:00Z'
+        }
+      ],
+      loaded: true
+    })
+    useHistoryStore.setState({
+      details: {
+        r1: detail({
+          config: { ...detail().config, mcp_servers: ['mcp-1', 'mcp-gone'] }
+        })
+      }
+    })
+    render(<RunDetailView runId="r1" />)
+
+    expect(loadServers).toHaveBeenCalled()
+    const line = screen.getByTestId('run-detail-mcp-servers')
+    expect(line).toHaveTextContent('MCP servers: GitHub MCP, mcp-gone')
+    expect(screen.getByTitle('Deleted MCP server')).toHaveTextContent('mcp-gone')
   })
 
   it('shows an error payload when the run failed', () => {

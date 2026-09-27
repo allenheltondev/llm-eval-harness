@@ -12,8 +12,10 @@ const {
   toRunRequest,
   selectCanRun,
   DEFAULT_RUN_CONFIG,
-  RUN_CONFIG_STORAGE_KEY
+  RUN_CONFIG_STORAGE_KEY,
+  mergePersistedRunConfig
 } = await import('../runConfigStore')
+const { MAX_RUN_MCP_SERVERS } = await import('../mcpServerStore')
 
 beforeEach(() => {
   localStorage.clear()
@@ -237,6 +239,7 @@ describe('persistence', () => {
     state.setUserPrompt('where is B456?')
     state.setInference({ temperature: 0.3 })
     state.setToolset('fraud-detection')
+    state.setMcpServers(['mcp-1'])
     state.setGuardrail({ id: 'gr-1', version: 'DRAFT', trace: true })
 
     const raw = localStorage.getItem(RUN_CONFIG_STORAGE_KEY)
@@ -250,12 +253,13 @@ describe('persistence', () => {
       user_prompt: 'where is B456?',
       inference: { temperature: 0.3 },
       toolset: 'fraud-detection',
+      mcp_servers: ['mcp-1'],
       max_tool_iterations: 10,
       guardrail: { id: 'gr-1', version: 'DRAFT', trace: true },
       stream: true
     })
     // no functions leaked into the persisted payload
-    expect(Object.keys(parsed.state)).toHaveLength(9)
+    expect(Object.keys(parsed.state)).toHaveLength(10)
   })
 
   it('round-trips: a stored payload rehydrates back into the store', async () => {
@@ -286,5 +290,94 @@ describe('persistence', () => {
     expect(state.stream).toBe(false)
     // actions survive rehydration
     expect(typeof state.setToolset).toBe('function')
+  })
+})
+
+describe('MCP server selection', () => {
+  it('defaults to none', () => {
+    expect(useRunConfigStore.getState().mcp_servers).toEqual([])
+    expect(toRunRequest(useRunConfigStore.getState())).not.toHaveProperty('mcp_servers')
+  })
+
+  it('toggleMcpServer adds and removes, and stops adding at the maximum', () => {
+    const state = useRunConfigStore.getState()
+    state.toggleMcpServer('a')
+    state.toggleMcpServer('b')
+    expect(useRunConfigStore.getState().mcp_servers).toEqual(['a', 'b'])
+
+    state.toggleMcpServer('a')
+    expect(useRunConfigStore.getState().mcp_servers).toEqual(['b'])
+
+    for (const id of ['c', 'd', 'e', 'f']) state.toggleMcpServer(id)
+    expect(useRunConfigStore.getState().mcp_servers).toEqual(['b', 'c', 'd', 'e', 'f'])
+
+    state.toggleMcpServer('g')
+    expect(useRunConfigStore.getState().mcp_servers).toHaveLength(MAX_RUN_MCP_SERVERS)
+    expect(useRunConfigStore.getState().mcp_servers).not.toContain('g')
+  })
+
+  it('setMcpServers deduplicates, drops non-strings and caps at the maximum', () => {
+    useRunConfigStore
+      .getState()
+      .setMcpServers(['a', 'a', '', 'b', 7 as unknown as string, 'c', 'd', 'e', 'f'])
+    expect(useRunConfigStore.getState().mcp_servers).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  it('toRunRequest sends the selection, dropping ids no longer in the known list', () => {
+    useRunConfigStore.setState({ mcp_servers: ['keep', 'gone'] })
+    const config = useRunConfigStore.getState()
+
+    expect(toRunRequest(config).mcp_servers).toEqual(['keep', 'gone'])
+    expect(toRunRequest(config, ['keep', 'other']).mcp_servers).toEqual(['keep'])
+    expect(toRunRequest(config, [])).not.toHaveProperty('mcp_servers')
+  })
+
+  it('reset clears the selection', () => {
+    useRunConfigStore.getState().setMcpServers(['a'])
+    useRunConfigStore.getState().reset()
+    expect(useRunConfigStore.getState().mcp_servers).toEqual([])
+  })
+})
+
+describe('hydration of older persisted state', () => {
+  function persist(state: Record<string, unknown>) {
+    localStorage.setItem(RUN_CONFIG_STORAGE_KEY, JSON.stringify({ version: 0, state }))
+  }
+
+  it('fills in mcp_servers when the stored blob predates it', async () => {
+    useRunConfigStore.setState({ mcp_servers: ['stale'] })
+    const legacy: Record<string, unknown> = { ...DEFAULT_RUN_CONFIG }
+    delete legacy.mcp_servers
+    persist({ ...legacy, model_id: 'legacy-model', toolset: 'fraud-detection' })
+
+    await useRunConfigStore.persist.rehydrate()
+
+    const state = useRunConfigStore.getState()
+    expect(state.model_id).toBe('legacy-model')
+    expect(state.toolset).toBe('fraud-detection')
+    expect(state.mcp_servers).toEqual([])
+    expect(toRunRequest(state)).not.toHaveProperty('mcp_servers')
+  })
+
+  it('replaces a non-array mcp_servers with none', async () => {
+    persist({ ...DEFAULT_RUN_CONFIG, mcp_servers: 'mcp-1' })
+
+    await useRunConfigStore.persist.rehydrate()
+
+    expect(useRunConfigStore.getState().mcp_servers).toEqual([])
+  })
+
+  it('keeps a valid stored selection, cleaned', async () => {
+    persist({ ...DEFAULT_RUN_CONFIG, mcp_servers: ['a', 'a', null, 'b'] })
+
+    await useRunConfigStore.persist.rehydrate()
+
+    expect(useRunConfigStore.getState().mcp_servers).toEqual(['a', 'b'])
+  })
+
+  it('ignores a persisted value that is not an object', () => {
+    const current = useRunConfigStore.getState()
+    expect(mergePersistedRunConfig(null, current)).toBe(current)
+    expect(mergePersistedRunConfig('junk', current)).toBe(current)
   })
 })

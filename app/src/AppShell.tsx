@@ -26,6 +26,7 @@ import AboutPage from './features/about/AboutPage'
 import EvalsPage from './features/evals/EvalsPage'
 import GuardrailsPage from './features/guardrails/GuardrailsPage'
 import HistoryPage from './features/history/HistoryPage'
+import ToolsPage from './features/tools/ToolsPage'
 import WorkbenchPage from './features/workbench/WorkbenchPage'
 import { parseRoute, routeHash, useHashRoute, type Route, type TabId } from './routing'
 
@@ -117,6 +118,17 @@ export const TABS: TabDef[] = [
     )
   },
   {
+    id: 'tools',
+    label: 'Tools',
+    section: 'Manage',
+    description: 'Save remote MCP servers and see every tool a run can use, built-in or remote.',
+    icon: (
+      <Icon>
+        <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4 2.5-2.5z" />
+      </Icon>
+    )
+  },
+  {
     id: 'about',
     label: 'About',
     description: 'What Nimbus is for, and the principles it is built on.',
@@ -164,6 +176,8 @@ function TabPage({ route, navigate }: { route: Route; navigate: (next: Route) =>
       )
     case 'guardrails':
       return <GuardrailsPage />
+    case 'tools':
+      return <ToolsPage />
     case 'about':
       return <AboutPage />
   }

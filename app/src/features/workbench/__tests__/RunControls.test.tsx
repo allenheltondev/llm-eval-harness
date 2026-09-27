@@ -1,6 +1,7 @@
 /**
- * RunControls: the toolset picker (fed by `GET /tools`, gating the
- * max-iterations field), the guardrail x provider invariant (guardrails only
+ * RunControls: the tool picker (built-in toolsets from `GET /tools` plus saved
+ * MCP servers, gating the max-iterations field; the picker's own behavior is
+ * `ToolPicker.test.tsx`), the guardrail x provider invariant (guardrails only
  * run against Bedrock, so the select must be disabled off of it, and switching
  * the provider away from bedrock must clear any already-selected guardrail —
  * enforced centrally in `runConfigStore`, exercised here through the real
@@ -8,8 +9,8 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { GuardrailSummary, ToolsResponse } from '../../../api'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { GuardrailSummary, McpServer, ToolsResponse } from '../../../api'
 
 const toolsMock = vi.fn<() => Promise<ToolsResponse>>()
 
@@ -19,8 +20,15 @@ vi.mock('../../../api', async importOriginal => {
 })
 
 const RunControls = (await import('../RunControls')).default
-const { DEFAULT_RUN_CONFIG, INITIAL_RUN_STATE, useGuardrailStore, useRunConfigStore, useRunStore } =
-  await import('../../../stores')
+const {
+  DEFAULT_RUN_CONFIG,
+  INITIAL_MCP_SERVER_STATE,
+  INITIAL_RUN_STATE,
+  useGuardrailStore,
+  useMcpServerStore,
+  useRunConfigStore,
+  useRunStore
+} = await import('../../../stores')
 
 const TOOLSETS: ToolsResponse = {
   toolsets: [
@@ -42,12 +50,31 @@ const GUARDRAILS: GuardrailSummary[] = [
   }
 ]
 
-/** Renders and waits for the toolset fetch to settle into the select. */
+const MCP_SERVERS: McpServer[] = [
+  {
+    id: 'mcp-1',
+    name: 'GitHub MCP',
+    url: 'https://mcp.github.example/mcp',
+    header_names: ['Authorization'],
+    created_at: '2026-09-01T00:00:00Z',
+    updated_at: '2026-09-01T00:00:00Z'
+  },
+  {
+    id: 'mcp-2',
+    name: 'Docs MCP',
+    url: 'http://localhost:9000/mcp',
+    header_names: [],
+    created_at: '2026-09-02T00:00:00Z',
+    updated_at: '2026-09-02T00:00:00Z'
+  }
+]
+
+/** Renders and waits for the toolset fetch to settle into the picker. */
 async function renderSettled() {
   const result = render(<RunControls />)
   await waitFor(() => expect(toolsMock).toHaveBeenCalledTimes(1))
   await waitFor(() =>
-    expect(screen.getByRole('option', { name: 'fraud-detection' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'fraud-detection' })).toBeInTheDocument()
   )
   return result
 }
@@ -62,55 +89,66 @@ beforeEach(() => {
     loaded: true,
     loadGuardrails: vi.fn().mockResolvedValue(undefined)
   })
+  useMcpServerStore.setState({
+    ...INITIAL_MCP_SERVER_STATE,
+    servers: MCP_SERVERS,
+    loaded: true,
+    loadServers: vi.fn().mockResolvedValue(undefined)
+  })
 })
 
-describe('RunControls tools select', () => {
-  it('fetches GET /tools once and offers "None" plus one option per toolset', async () => {
+describe('RunControls tools', () => {
+  it('fetches GET /tools once and offers one checkbox per built-in toolset and saved MCP server', async () => {
     await renderSettled()
 
-    const select = screen.getByLabelText('Tools') as HTMLSelectElement
-    expect(select.value).toBe('')
-    expect(Array.from(select.options).map(option => option.textContent)).toEqual([
-      'None',
-      'fraud-detection',
-      'empty-set'
+    const group = screen.getByRole('group', { name: 'Tools' })
+    expect(
+      within(group)
+        .getAllByRole('checkbox')
+        .map(box => box.getAttribute('id'))
+    ).toEqual([
+      'workbench-tools-toolset-fraud-detection',
+      'workbench-tools-toolset-empty-set',
+      'workbench-tools-mcp-mcp-1',
+      'workbench-tools-mcp-mcp-2'
     ])
-    expect(screen.queryByTestId('toolset-tools')).not.toBeInTheDocument()
+    for (const box of within(group).getAllByRole('checkbox')) expect(box).not.toBeChecked()
+    expect(toolsMock).toHaveBeenCalledTimes(1)
   })
 
-  it('picking a toolset stores its name, lists its tools and enables max-iterations', async () => {
+  it('ticking a toolset stores its name and enables max-iterations', async () => {
     await renderSettled()
 
     const maxIterations = screen.getByLabelText('Max tool iterations')
     expect(maxIterations).toBeDisabled()
 
-    fireEvent.change(screen.getByLabelText('Tools'), { target: { value: 'fraud-detection' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'fraud-detection' }))
 
     expect(useRunConfigStore.getState().toolset).toBe('fraud-detection')
-    expect(screen.getByTestId('toolset-tools')).toHaveTextContent('lookupAccount, flagTransaction')
     expect(maxIterations).toBeEnabled()
   })
 
-  it('an empty toolset says so instead of rendering a blank help line', async () => {
+  it('ticking an MCP server alone also enables max-iterations', async () => {
     await renderSettled()
 
-    fireEvent.change(screen.getByLabelText('Tools'), { target: { value: 'empty-set' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'GitHub MCP' }))
 
-    expect(screen.getByTestId('toolset-tools')).toHaveTextContent('No tools in this toolset')
+    expect(useRunConfigStore.getState().mcp_servers).toEqual(['mcp-1'])
+    expect(screen.getByLabelText('Max tool iterations')).toBeEnabled()
   })
 
-  it('choosing "None" clears the toolset back to null and disables max-iterations', async () => {
+  it('unticking the toolset clears it back to null and disables max-iterations', async () => {
     useRunConfigStore.setState({ toolset: 'fraud-detection' })
     await renderSettled()
     expect(screen.getByLabelText('Max tool iterations')).toBeEnabled()
 
-    fireEvent.change(screen.getByLabelText('Tools'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'fraud-detection' }))
 
     expect(useRunConfigStore.getState().toolset).toBeNull()
     expect(screen.getByLabelText('Max tool iterations')).toBeDisabled()
   })
 
-  it('surfaces a GET /tools failure inline and still offers "None"', async () => {
+  it('surfaces a GET /tools failure inline', async () => {
     toolsMock.mockReset()
     toolsMock.mockRejectedValue(new Error('tools unavailable'))
 
@@ -119,38 +157,7 @@ describe('RunControls tools select', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not load toolsets: tools unavailable'
     )
-    const select = screen.getByLabelText('Tools') as HTMLSelectElement
-    expect(Array.from(select.options).map(option => option.textContent)).toEqual(['None'])
-  })
-
-  it('reports a non-Error rejection with a generic message', async () => {
-    toolsMock.mockReset()
-    toolsMock.mockRejectedValue('boom')
-
-    render(<RunControls />)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Could not load toolsets: Could not load toolsets'
-    )
-  })
-
-  it('ignores a fetch that resolves after unmount', async () => {
-    let resolveTools!: (value: ToolsResponse) => void
-    toolsMock.mockReset()
-    toolsMock.mockImplementation(
-      () =>
-        new Promise<ToolsResponse>(resolve => {
-          resolveTools = resolve
-        })
-    )
-
-    const { unmount } = render(<RunControls />)
-    unmount()
-    await act(async () => {
-      resolveTools(TOOLSETS)
-    })
-
-    expect(screen.queryByRole('option', { name: 'fraud-detection' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'fraud-detection' })).not.toBeInTheDocument()
   })
 
   it('typing a max-iterations value updates the store; a non-numeric value falls back to 1', async () => {
@@ -291,6 +298,22 @@ describe('RunControls run/cancel buttons', () => {
       })
     )
     expect(startRun.mock.calls[0][0]).not.toHaveProperty('tools_enabled')
+    expect(startRun.mock.calls[0][0]).not.toHaveProperty('mcp_servers')
+  })
+
+  it('sends the ticked MCP servers, dropping ids that were deleted since', async () => {
+    const startRun = vi.fn().mockResolvedValue(undefined)
+    useRunStore.setState({ startRun })
+    useRunConfigStore.setState({
+      model_id: 'claude-3',
+      user_prompt: 'hello',
+      mcp_servers: ['mcp-2', 'deleted-server']
+    })
+
+    await renderSettled()
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ mcp_servers: ['mcp-2'] }))
   })
 
   it('while running, Run is disabled and shows "Running…"; Cancel is enabled and calls cancelRun', async () => {
