@@ -1,7 +1,12 @@
 /**
- * Launches a `kind: "determinism"` evaluation of the *current* workbench run
- * config (read from `runConfigStore`, never duplicated into local state) plus
- * N / grader settings that are local to this form.
+ * Launches a `kind: "determinism"` evaluation of a run config plus N / grader
+ * settings that are local to this form.
+ *
+ * The model under test and the prompts are chosen right here, but they are
+ * the Workbench's run config (`runConfigStore`), not a copy: editing them in
+ * either place edits both, so a prompt tried in the Workbench is already the
+ * one an evaluation will run, and vice versa. Tools, inference parameters and
+ * the guardrail stay Workbench settings; the summary line says which apply.
  *
  * `run_config` is built with `toRunRequest` at submit time — same helper the
  * Workbench's Run button uses — so an evaluation always replays exactly the
@@ -41,6 +46,7 @@ import {
   useRunConfigStore,
   useSettingsStore
 } from '../../stores'
+import ModelPicker from '../../components/ModelPicker'
 import { api } from '../../api'
 import type {
   EvaluationExecution,
@@ -65,23 +71,17 @@ function clampN(value: number): number {
   return Math.min(N_MAX, Math.max(N_MIN, Math.round(value)))
 }
 
-/** Trim to a single-line preview; empty text renders as an em dash. */
-function truncate(text: string, max = 140): string {
-  const trimmed = text.trim()
-  if (trimmed === '') return '—'
-  return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`
-}
-
 interface DeterminismLauncherProps {
   /** Called with the new evaluation's id once `POST /evaluations` succeeds. */
   onStarted?: (evaluationId: string) => void
 }
 
 export default function DeterminismLauncher({ onStarted }: DeterminismLauncherProps) {
-  const modelId = useRunConfigStore(state => state.model_id)
   const toolset = useRunConfigStore(state => state.toolset)
   const systemPrompt = useRunConfigStore(state => state.system_prompt)
   const userPrompt = useRunConfigStore(state => state.user_prompt)
+  const setSystemPrompt = useRunConfigStore(state => state.setSystemPrompt)
+  const setUserPrompt = useRunConfigStore(state => state.setUserPrompt)
   const canRun = useRunConfigStore(selectCanRun)
 
   const models = useModelStore(state => state.models)
@@ -150,7 +150,6 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
     setDefaultEvalExecution(next)
   }
 
-  const model = findModel(models, modelId)
   const graderReady = graderModelId.trim() !== ''
   const graderGroups = groupModelsBySource(models, modelProviders).groups
 
@@ -194,34 +193,29 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
         </h2>
       </CardHeader>
       <CardBody>
-        {!canRun ? (
-          <Alert variant="info" className="mb-4">
-            Set a model and a user prompt in the Workbench tab before starting a determinism
-            evaluation.
-          </Alert>
-        ) : (
-          <dl
-            className="text-sm text-muted-foreground space-y-1 mb-4"
-            data-testid="workbench-config-summary"
-          >
-            <div>
-              <dt className="inline font-medium text-foreground">Model: </dt>
-              <dd className="inline font-mono text-xs">{model?.name ?? modelId}</dd>
-            </div>
-            <div>
-              <dt className="inline font-medium text-foreground">Tools: </dt>
-              <dd className="inline">{toolset ?? 'None'}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-foreground">System prompt</dt>
-              <dd className="text-xs text-muted-foreground font-mono">{truncate(systemPrompt)}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-foreground">User prompt</dt>
-              <dd className="text-xs text-muted-foreground font-mono">{truncate(userPrompt)}</dd>
-            </div>
-          </dl>
-        )}
+        <div className="space-y-4 mb-6" data-testid="evaluated-run-config">
+          <ModelPicker label="Model to evaluate" />
+          <TextArea
+            label="System prompt"
+            className="font-mono text-sm"
+            rows={3}
+            placeholder="You are a helpful assistant…"
+            value={systemPrompt}
+            onChange={event => setSystemPrompt(event.target.value)}
+          />
+          <TextArea
+            label="User prompt"
+            className="font-mono text-sm"
+            rows={4}
+            placeholder="The prompt every run of the evaluation sends…"
+            value={userPrompt}
+            onChange={event => setUserPrompt(event.target.value)}
+          />
+          <p className="field-hint">
+            Shared with the Workbench. Tools: {toolset ?? 'none'}; inference settings and guardrail
+            come from the Workbench too.
+          </p>
+        </div>
 
         <div className="space-y-4">
           <div className="field">
