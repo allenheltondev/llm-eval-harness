@@ -126,7 +126,9 @@ Two conventions worth knowing up front:
   API serves, so scripts and wrappers read one format.
 - **Exit codes mean something**: `0` finished, `1` the harness failed, `2` bad invocation, `130`
   cancelled. A grade of F is still `0` — the evaluation worked; it is telling you the answer is
-  bad.
+  bad — unless you gate on it: `eval --fail-under SCORE`, `--fail-on-case-failure` or `--gate`
+  exit `3` when the evaluation ran but missed the bar, and `--junit PATH` writes a report CI can
+  show. See [docs/cli.md](docs/cli.md#exit-codes).
 
 ## Runs and toolsets
 

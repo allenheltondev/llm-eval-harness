@@ -106,14 +106,64 @@ byte-for-byte the event stream the API serves, so anything wrapping the harness
 
 | Code | Meaning |
 |---|---|
-| `0` | The run or evaluation finished. |
+| `0` | The run or evaluation finished (and met the bar, when a gate flag set one). |
 | `1` | The harness failed — a provider error, an unknown toolset, a missing id. |
 | `2` | The invocation was wrong. |
+| `3` | The evaluation ran, but did not meet the bar a gate flag set. |
 | `130` | Cancelled (Ctrl-C). |
 
-A **grade of F is exit `0`**, and so is a suite with failing cases. The
-evaluation succeeded; it is telling you the answer is bad. Reserve `1` for "the harness could not do its job", so `set -e`
-in a script means what you want it to mean.
+Without a gate flag a **grade of F is exit `0`**, and so is a suite with failing
+cases. The evaluation succeeded; it is telling you the answer is bad. Reserve
+`1` for "the harness could not do its job", so `set -e` in a script means what
+you want it to mean.
+
+`3` exists for CI, where "the answers are bad" has to fail the job. It only
+happens when you ask for it, with one of the gate flags on `eval`:
+
+| Flag | Exit `3` when |
+|---|---|
+| `--fail-under SCORE` | The overall score (0–100, the `score` in the result) is below `SCORE`, or there is no score. Any kind of evaluation. |
+| `--fail-on-case-failure` | Any suite case did not pass — `failed`, `error` or `judge_error`. Suites only. |
+| `--gate` | The suite's pass rate is below the file's `min_pass_rate` (every case must pass when it sets none). Cases pass at the file's `pass_threshold`. Suites only. |
+
+The flags combine; every bar that is missed is named on stderr (`| gate failed:
+…`). The harness's own verdict comes first: an evaluation that errored is `1`
+and a cancelled one `130`, whatever the gate says — there is no result to hold
+to a bar. The gates work the same with `--remote` (the stack's result is
+judged here); `--detach` returns before there is a result, so combining it with
+a gate flag or `--junit` is a usage error.
+
+`--junit PATH` (suites only) writes a JUnit XML report: one `<testcase>` per
+suite case, a `<failure>` carrying the score and the judge's reasoning for a
+case that scored too low, and an `<error>` for one that never ran or went
+unjudged. It is written whether or not a gate is set, and even when the
+evaluation errored (as a single errored testcase), so CI always has a report
+to show.
+
+### In GitHub Actions
+
+```yaml
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv tool install "git+https://github.com/allenheltondev/llm-eval-harness#subdirectory=server"
+      - name: Run the suite
+        env:
+          AWS_REGION: us-east-1   # plus credentials for whichever provider the suite uses
+        run: nimbus eval --suite evals/support.yaml --gate --fail-under 80 --junit evals-junit.xml
+      - name: Report
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: evals-junit.xml
+```
+
+The job fails on exit `3` (or `1`); the report step still runs and annotates
+each failing case. To run on a deployed stack instead, sign in first
+(`nimbus login`) — the same flags apply.
 
 ## `run`
 
@@ -187,6 +237,10 @@ nimbus eval --suite cases.yaml -m <other>      # same cases, another model
 | `--rubric` | Extra rubric text for the judge. |
 | `--remote` | Insist on the stack you signed in to with `login` (already the default once signed in); fails rather than running here when you are not — see [Running on a deployed stack](#running-on-a-deployed-stack). |
 | `--detach` | On a stack: submit, print the evaluation's id and link, and return without following it. |
+| `--fail-under SCORE` | Exit `3` when the overall score (0–100) is below `SCORE` — see [Exit codes](#exit-codes). |
+| `--fail-on-case-failure` | Suites: exit `3` when any case does not pass. |
+| `--gate` | Suites: exit `3` when the pass rate is below the file's `min_pass_rate` (default: every case). |
+| `--junit PATH` | Suites: write a JUnit XML report, one testcase per case. |
 | `--grader-model`, `--grader-provider`, `--grader-system` | The judge. Independent of the graded runs — an OpenAI judge grading Bedrock runs is a reasonable setup. A non-Bedrock `--grader-provider` **requires** `--grader-model`: the built-in default is a Bedrock model id, and no default is invented for the other providers. |
 
 Plus every `run` option above, which describes the repeats.
