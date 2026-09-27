@@ -173,7 +173,7 @@ whose mapping *is* the schema. A check with no fields takes `true`
 | `regex` | `pattern` | `flags`: any of `i` `m` `s` `x` | `pattern` is found anywhere in the answer (Python `re.search`; anchor with `^`/`$` to match the whole answer) |
 | `equals` | `value` | `case_sensitive` (default `true`), `strip` (default `true`: ignore surrounding whitespace) | the answer is exactly `value` |
 | `json_valid` | — | — | the whole answer (surrounding whitespace aside) parses as JSON — an answer wrapped in a Markdown code fence does not |
-| `json_schema` | `schema` | — | the answer parses as JSON and validates against `schema`, written inline (Draft 2020-12 unless the schema's own `$schema` names another) |
+| `json_schema` | `schema` | — | the answer parses as JSON and validates against `schema`, written inline (Draft 2020-12 unless the schema's own `$schema` names another). `$ref`s must point inside the schema (`#/$defs/...`): nothing is ever fetched |
 | `max_length` | `value` | `unit`: `chars` (default) or `words` | the answer is at most `value` long |
 | `min_length` | `value` | `unit`: `chars` (default) or `words` | the answer is at least `value` long |
 | `max_latency_ms` | `value` | — | the run took at most `value` ms, wall clock, tool calls included |

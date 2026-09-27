@@ -40,10 +40,43 @@ from typing import Annotated, Any, Literal
 from jsonschema import exceptions as jsonschema_exceptions
 from jsonschema import validators as jsonschema_validators
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from referencing import Registry
+from referencing.exceptions import NoSuchResource, Unresolvable
 
 #: At most this many checks on one case. Every check is recorded on every
 #: repeat, and the whole result has a byte budget (``engine.MAX_RESULT_BYTES``).
 MAX_CASE_ASSERTIONS = 10
+
+
+def _refuse_retrieval(uri: str) -> Any:
+    raise NoSuchResource(ref=uri)
+
+
+#: The only registry a suite's schema is validated with. jsonschema's default
+#: one *fetches* any ``$ref`` it cannot resolve locally -- an arbitrary network
+#: request from the server or cloud worker, metadata endpoint included -- so
+#: every retrieval is refused. Local ``#/...`` refs and the bundled draft
+#: meta-schemas still resolve.
+_NO_RETRIEVAL = Registry(retrieve=_refuse_retrieval)
+
+#: The keywords that point elsewhere; only same-document targets are allowed.
+_REF_KEYWORDS = ("$ref", "$dynamicRef", "$recursiveRef")
+
+
+def _non_local_refs(node: Any) -> list[str]:
+    """Every ``$ref``-like value in a schema that is not a ``#`` fragment."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _REF_KEYWORDS and isinstance(value, str) and not value.startswith("#"):
+                found.append(value)
+            else:
+                found.extend(_non_local_refs(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_non_local_refs(item))
+    return found
+
 
 #: The regex flags an assertion may set, by letter.
 _REGEX_FLAGS = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL, "x": re.VERBOSE}
@@ -141,6 +174,12 @@ class JsonSchemaAssertion(_Assertion):
             validator.check_schema(schema)
         except jsonschema_exceptions.SchemaError as exc:
             raise ValueError(f"invalid JSON Schema: {exc.message}") from exc
+        remote = _non_local_refs(schema)
+        if remote:
+            raise ValueError(
+                "JSON Schema $refs must point inside the schema (#/...); "
+                f"not allowed: {', '.join(remote[:3])}"
+            )
         return schema
 
 
@@ -410,8 +449,12 @@ def _check_output(check: Any, output: str, duration_ms: int) -> dict[str, Any]:
             ok, value, problem = _parse_json(output)
             if not ok:
                 return _verdict(check, False, problem)
-            validator = jsonschema_validators.validator_for(check.schema_)(check.schema_)
-            error = jsonschema_exceptions.best_match(validator.iter_errors(value))
+            validator_class = jsonschema_validators.validator_for(check.schema_)
+            validator = validator_class(check.schema_, registry=_NO_RETRIEVAL)
+            try:
+                error = jsonschema_exceptions.best_match(validator.iter_errors(value))
+            except Unresolvable as exc:
+                return _verdict(check, False, f"cannot resolve $ref {exc.ref!r}")
             if error is None:
                 return _verdict(check, True, "matches the schema")
             return _verdict(check, False, f"at {_json_path(error.absolute_path)}: {error.message}")

@@ -864,3 +864,63 @@ def test_the_largest_suite_result_with_assertions_fits_its_byte_budget(char):
     assert all(case["status"] == "failed" for case in result["cases"])
     first = result["cases"][0]["repeats"][0]["assertions"][0]
     assert (first["type"], first["passed"]) == ("tool_not_called", False)
+
+
+# --------------------------------------------------------------------------- #
+# JSON Schema $refs never leave the schema
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "http://169.254.169.254/latest/meta-data/",
+        "https://example.com/schema.json",
+        "file:///etc/passwd",
+        "other.json#/defs/x",
+    ],
+)
+def test_a_schema_ref_outside_the_schema_is_rejected_at_submission(ref):
+    for schema in (
+        {"$ref": ref},
+        {"type": "object", "properties": {"a": {"$ref": ref}}},
+        {"anyOf": [{"type": "string"}, {"$dynamicRef": ref}]},
+    ):
+        with pytest.raises(ValidationError, match=r"must point inside the schema"):
+            checks({"json_schema": schema})
+
+
+def test_local_refs_still_work():
+    schema = {"$defs": {"name": {"type": "string", "minLength": 2}}, "$ref": "#/$defs/name"}
+    assert check({"json_schema": schema}, '"ok"')["passed"] is True
+    assert check({"json_schema": schema}, '"x"')["passed"] is False
+
+
+def test_evaluation_never_fetches_a_ref_even_past_validation(monkeypatch):
+    """Belt and braces: a schema that skipped submission checks still can't fetch.
+
+    ``model_construct`` bypasses the validator, as a stored or hand-built
+    suite could; the evaluation-time registry must refuse on its own, without
+    a socket ever being opened.
+    """
+    import socket
+    import urllib.request
+
+    opened: list[object] = []
+
+    def refuse(*args, **kwargs):
+        opened.append(args)
+        raise AssertionError("a network connection was attempted")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+
+    unchecked = assertions.JsonSchemaAssertion.model_construct(
+        type="json_schema", schema_={"$ref": "http://169.254.169.254/latest/meta-data/"}
+    )
+    [verdict] = assertions.evaluate([unchecked], output='{"a": 1}')
+
+    assert verdict["passed"] is False
+    assert "cannot resolve $ref" in verdict["detail"]
+    assert opened == []
