@@ -198,10 +198,12 @@ same way, lists element by element (same length). A value written
 `{regex: <pattern>}` matches any string the pattern is found in.
 
 **MCP tools are named with their server's prefix.** A tool `search_issues` on a
-saved MCP server named “GitHub” is `github_search_issues` to the model and in
-the transcript, and that prefixed name is what an assertion matches —
-`tool_called: github_search_issues`, or `tool_not_called: github_*` to keep a
-case away from that server entirely. `nimbus mcp test <id>` lists a server's
+saved MCP server named “GitHub” is `mcp-github_search_issues` to the model and
+in the transcript (`mcp-<server slug>_<tool>`, so it can never clash with a
+built-in tool), and that prefixed name is what an assertion matches —
+`tool_called: mcp-github_search_issues`, `tool_not_called: mcp-github_*` to
+keep a case away from that server entirely, or `tool_not_called: mcp-*` to
+allow built-in tools only. `nimbus mcp test <id>` lists a server's
 tools without the prefix; a run's tool transcript shows them with it.
 
 Calls are recorded in the order they *finished*. Calls the model makes one after
