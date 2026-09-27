@@ -45,6 +45,8 @@ cases:
 | `cases[].input` | yes | The prompt for this case. |
 | `cases[].expected` | no | A reference answer. The judge compares **facts, not wording**: extra correct detail is fine; a contradiction or a missing key fact is not. |
 | `cases[].criteria` | no | What *this* answer must do, in plain language (“must say 10am”, “must not promise a refund”). Every criterion must be met. |
+| `cases[].assert` | no | Up to 10 deterministic checks every repeat's answer must pass — see [Assertions](#assertions). |
+| `cases[].judge` | no | `false` skips the LLM judge for this case: it is scored from its `assert` checks alone. Default `true`. |
 | `repeats` | no | Runs per case, 1–10 (default 1). A case's score is the mean across its repeats, so more than one catches a case that passes only some of the time. |
 | `pass_threshold` | no | A case passes when its score (0–1) reaches this (default 0.7). |
 | `rubric` | no | How every case is judged. Defaults to the built-in suite rubric. |
@@ -54,8 +56,9 @@ A case may have `expected`, `criteria`, both, or neither. With neither it is
 judged on the rubric alone: is this a correct, helpful answer?
 
 Limits are **rejected when exceeded, never clamped**: at most 100 cases, 10
-repeats, and 200 runs in total (cases × repeats). Quietly dropping cases would
-report a pass rate for tests nobody ran.
+repeats, 200 runs in total (cases × repeats), 10 `assert` checks per case, and
+1,000 assertion checks in total (each case's checks × repeats, summed). Quietly
+dropping cases would report a pass rate for tests nobody ran.
 
 ## Running one
 
@@ -112,6 +115,160 @@ each `Case` as `expected_assertion` (the library's field for human-authored
 success assertions) and a small subclass appends them to the judge prompt
 through `_build_prompt`, the library's documented override point.
 
+## Assertions
+
+Some requirements do not need a judge: “must mention store credit”, “must be
+valid JSON”, “under 200 words”, “must call `freeze_account`”, “must never call
+`delete_*`”. A case's `assert:` list settles them by looking — instantly, for
+free, and with the same answer every time.
+
+```yaml
+cases:
+  - id: sunday-hours
+    input: What time do you open on Sunday?
+    criteria: Must say 10am.          # still judged...
+    assert:                           # ...and these must pass too
+      - regex: '\b10(:00)?\s*a\.?m\b'
+        flags: i
+      - not_contains: 9am
+      - max_length: 60
+        unit: words
+
+  - id: order-json
+    input: 'Return order B456 as JSON: {"order_id", "status"}'
+    judge: false                      # no judge: scored by the checks alone
+    assert:
+      - json_schema:
+          type: object
+          required: [order_id, status]
+          properties:
+            order_id: {type: string, pattern: '^B\d+$'}
+            status: {enum: [delayed, shipped, delivered]}
+```
+
+Each entry is written either as `type:` plus its fields, or — shorter — with
+the type as its key, whose value fills the check's main field. These two are the
+same check:
+
+```yaml
+- type: contains
+  value: store credit
+  case_sensitive: false
+
+- contains: store credit
+  case_sensitive: false
+```
+
+The key's value may instead be a mapping of the check's fields
+(`- tool_called: {name: freeze_account, times: 1}`) — except for `json_schema`,
+whose mapping *is* the schema. A check with no fields takes `true`
+(`- json_valid: true`).
+
+### On the answer
+
+| Type | Main field | Other fields | Passes when |
+|---|---|---|---|
+| `contains` | `value` | `case_sensitive` (default `true`) | the answer contains `value` |
+| `not_contains` | `value` | `case_sensitive` (default `true`) | it does not |
+| `regex` | `pattern` | `flags`: any of `i` `m` `s` `x` | `pattern` is found anywhere in the answer (Python `re.search`; anchor with `^`/`$` to match the whole answer) |
+| `equals` | `value` | `case_sensitive` (default `true`), `strip` (default `true`: ignore surrounding whitespace) | the answer is exactly `value` |
+| `json_valid` | — | — | the whole answer (surrounding whitespace aside) parses as JSON — an answer wrapped in a Markdown code fence does not |
+| `json_schema` | `schema` | — | the answer parses as JSON and validates against `schema`, written inline (Draft 2020-12 unless the schema's own `$schema` names another) |
+| `max_length` | `value` | `unit`: `chars` (default) or `words` | the answer is at most `value` long |
+| `min_length` | `value` | `unit`: `chars` (default) or `words` | the answer is at least `value` long |
+| `max_latency_ms` | `value` | — | the run took at most `value` ms, wall clock, tool calls included |
+
+### On the tool calls
+
+Every run records its tool calls — name, input, output, error and duration —
+and these checks read that transcript. Names may be globs (`delete_*`,
+`github_*`).
+
+| Type | Main field | Other fields | Passes when |
+|---|---|---|---|
+| `tool_called` | `name` | `args`, `times`, `min_times`, `max_times` | enough calls match `name` (and `args`): exactly `times`, or between `min_times` and `max_times`; with none of the three, at least one |
+| `tool_not_called` | `name` | — | no call matches `name` |
+| `tool_sequence` | `tools` (a list) | `mode`: `subsequence` (default) or `exact` | `subsequence`: these calls happened in this order, other calls allowed in between. `exact`: these were *all* the calls, in exactly this order |
+| `max_tool_calls` | `value` | — | the run made at most `value` tool calls |
+| `no_tool_errors` | — | — | no tool call returned an error |
+
+`args` is a **partial match**: every key you give must be in the call's input
+with a matching value; keys you leave out are ignored. Nested objects match the
+same way, lists element by element (same length). A value written
+`{regex: <pattern>}` matches any string the pattern is found in.
+
+**MCP tools are named with their server's prefix.** A tool `search_issues` on a
+saved MCP server named “GitHub” is `github_search_issues` to the model and in
+the transcript, and that prefixed name is what an assertion matches —
+`tool_called: github_search_issues`, or `tool_not_called: github_*` to keep a
+case away from that server entirely. `nimbus mcp test <id>` lists a server's
+tools without the prefix; a run's tool transcript shows them with it.
+
+Calls are recorded in the order they *finished*. Calls the model makes one after
+another come out in that order; calls it makes in parallel, in one turn, may be
+recorded in either order — use `subsequence` or `tool_called` for those rather
+than an `exact` sequence.
+
+An agent example, with the built-in `fraud-detection` toolset:
+
+```yaml
+name: fraud-agent
+run_config:
+  model_id: amazon.nova-pro-v1:0
+  toolset: fraud-detection
+  system_prompt: >-
+    You are a fraud analyst. Freeze an account only for confirmed takeover;
+    otherwise flag the transaction for review.
+  inference: {temperature: 0}
+repeats: 3
+cases:
+  - id: takeover-freezes
+    input: >-
+      Account A1234 had 14 logins from new countries in an hour, then T9001
+      moved $4,800 out. Handle it.
+    criteria: Explains why the account was frozen.
+    assert:
+      - tool_called:
+          name: freeze_account
+          args:
+            account_id: A1234
+            severity: {regex: '^(high|critical)$'}
+          times: 1
+      - tool_sequence: [freeze_account, create_fraud_alert]
+      - no_tool_errors: true
+      - max_tool_calls: 4
+
+  - id: odd-purchase-is-only-flagged
+    input: T5512 on account A2001 is a $60 purchase in a new city. Anything to do?
+    judge: false
+    assert:
+      - tool_called: {name: flag_suspicious_transaction, args: {transaction_id: T5512}}
+      - tool_not_called: freeze_account
+      - tool_not_called: update_*
+```
+
+### How assertions are scored
+
+- **Every check is pass/fail, on every repeat.** Each repeat that answered gets
+  one verdict per check, `{type, passed, detail}`, in the order of the list.
+- **A case passes only if every repeat that answered passed all its checks, and
+  its score meets `pass_threshold`.** The score is still the judge's; the
+  checks are a gate on top of it. One failed check makes the case `failed` —
+  even if the judge could not score it, because that much is already certain.
+- **`judge: false`** skips the judge for that case. Each repeat scores `1.0` if
+  it passed every check and `0.0` if not, so the case needs every repeat to
+  pass. A suite whose cases all skip the judge never builds one, and runs with
+  no judge credentials at all.
+- A repeat that failed to run has no verdicts (it already scores `0`, as in any
+  suite).
+- **A bad check is rejected when the suite is submitted** — an unknown type, a
+  regex that does not compile, a JSON Schema that is not one: a `422` over
+  HTTP, exit `2` from `nimbus eval --suite`. It never surfaces after the runs
+  have been paid for.
+
+A suite whose cases have no `assert:` runs, scores and reports exactly as it
+did before assertions existed — its result carries none of the fields below.
+
 ## Reading the result
 
 Every case gets a line:
@@ -124,10 +281,19 @@ Every case gets a line:
 ▎   ERR     -   off-topic  model unavailable
 ```
 
+A case that failed an assertion lists each failed check under its line, with
+the repeats it failed on and what was seen the first time:
+
+```
+▎   FAIL  0.90  sunday-hours  2 of 9 assertion checks failed
+▎           x regex (repeats 1, 3 of 3): no match for "/\\b10(:00)?\\s*a\\.?m\\b/i"
+▎           x not_contains (repeat 3 of 3): output contains "9am" at char 14
+```
+
 | `status` | Meaning | Counts as passed? |
 |---|---|---|
-| `passed` | Scored at or above `pass_threshold`. | yes |
-| `failed` | Scored below it. The judge's reason is shown. | no |
+| `passed` | Scored at or above `pass_threshold`, and passed every assertion on every repeat that answered. | yes |
+| `failed` | Scored below it (the judge's reason is shown), or failed an assertion (the failed checks are shown). | no |
 | `error` | No run of this case completed — the answer never came back. | no |
 | `judge_error` | At least one answer came back but the judge returned no verdict for it. | no |
 
@@ -158,6 +324,19 @@ succeeded}` and `error`; and at the top level
 `case_id`, and its `run_id` when the failed run was recorded, as in every
 evaluation's result), and `suite: {name, repeats, pass_threshold}`.
 
+A case with an `assert:` list also carries:
+
+| Field | Meaning |
+|---|---|
+| `judged` | `false` when the case set `judge: false`. |
+| `assertions` | `{total, passed, failed}`: every check on every repeat that answered. |
+| `repeats[].assertions` | One `{type, passed, detail}` per check, in the order of the case's list; `null` for a repeat that did not run. `detail` is a one-line account of what was seen, clipped to 200 bytes as stored. |
+| `repeats[].assertions_passed` | `true` when that repeat passed every check; `null` when it did not run. |
+
+and the result's `metrics` gains `assertions_total` and `assertions_failed`
+(summed over the cases). A case without assertions carries none of these, and
+a suite without any has no new `metrics` keys.
+
 Progress events are the same as any evaluation's, and each run event also
 carries the `case_id` it belongs to. Determinism and grade events do not carry
 the field at all, so their wire format is unchanged.
@@ -180,15 +359,17 @@ cases of a couple of kilobytes each. The local lane has no such limit.
 
 The result is held to **180,000 bytes** for the same reason, measured as stored
 (JSON with non-ASCII escaped, so a CJK character is six bytes and an emoji
-twelve). Ids, statuses and scores always survive; if the judge's reasoning and
-error messages would push past that, they are cut shorter — dropped entirely
-if need be — and the result carries `truncated: true`.
+twelve). Ids, statuses, scores and assertion verdicts always survive; if the
+judge's reasoning, assertion details and error messages would push past that,
+they are cut shorter — dropped entirely (`null`) if need be — and the result
+carries `truncated: true`. A text cut short ends in `…`.
 
 ## Not built yet
 
-- **Suites in the web UI.** A suite evaluation already appears in the Evals tab
-  with its grade, score and pass summary (“3/4 cases passed; failed: …”), but
-  launching one and the per-case table are CLI and API only.
+- **Launching suites from the web UI.** A suite evaluation already appears in
+  the Evals tab with its grade, score and pass summary (“3/4 cases passed;
+  failed: …”), and its page has the per-case table — verdicts, scores,
+  assertion results and runs — but launching one is CLI and API only.
 - **`--fail-under`** for CI, as above.
 - **Comparing two runs of a suite** — which cases changed between yesterday's
   prompt and today's.

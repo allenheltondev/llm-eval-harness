@@ -17,6 +17,8 @@ dependencies = [
     "pyjwt[crypto]>=2.8",
     # `nimbus eval --suite` reads test suites as YAML (and so JSON).
     "pyyaml>=6.0",
+    # Suite cases' `json_schema` assertions (nimbus/evals/assertions.py).
+    "jsonschema>=4.0",
 ]
 
 # The CLI is the primary entry point (docs/cli.md); the HTTP API is one of the

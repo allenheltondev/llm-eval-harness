@@ -8,6 +8,7 @@ All error responses share a uniform envelope::
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -89,7 +90,13 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=_envelope("validation_error", "Request validation failed", exc.errors()),
+        # A custom validator's own exception rides along in `ctx.error`; it is
+        # not JSON, so it is reported as its message.
+        content=_envelope(
+            "validation_error",
+            "Request validation failed",
+            jsonable_encoder(exc.errors(), custom_encoder={BaseException: str}),
+        ),
     )
 
 
