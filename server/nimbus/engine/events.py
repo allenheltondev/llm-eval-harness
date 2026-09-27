@@ -90,8 +90,14 @@ class MetricsEvent(_Event):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    #: Prompt-cache traffic, when the provider reports it (zero otherwise).
+    cache_read_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
     latency_ms: int = 0
     cycle_count: int = 0
+    #: Estimated USD for this run's tokens (:mod:`nimbus.pricing`); ``None``
+    #: when the model has no known price -- unknown, never zero.
+    cost_usd: float | None = None
 
 
 class ErrorEvent(_Event):

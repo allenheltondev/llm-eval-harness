@@ -23,6 +23,7 @@ import {
 } from '@readysetcloud/ui'
 import { statusTone } from '../../components/status'
 import { useNotify } from '../../components/notify'
+import { COST_ESTIMATE_NOTE, formatUsd } from '../../components/cost'
 import { api } from '../../api'
 import type { Page, RunDetail, RunSummary } from '../../api'
 import {
@@ -45,6 +46,10 @@ function formatTs(ts: string): string {
 function formatTokens(run: RunSummary): string {
   const total = run.metrics?.total_tokens
   return total === undefined || total === null ? '—' : total.toLocaleString()
+}
+
+function formatCost(run: RunSummary): string {
+  return formatUsd(run.metrics?.cost_usd)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -178,6 +183,13 @@ function RunRow({
         </StatusBadge>
       </td>
       <td className="py-2 pr-4 text-sm text-muted-foreground tabular-nums">{formatTokens(run)}</td>
+      <td
+        className="py-2 pr-4 text-sm text-muted-foreground tabular-nums"
+        title={COST_ESTIMATE_NOTE}
+        data-testid="history-run-cost"
+      >
+        {formatCost(run)}
+      </td>
       <td className="py-2 pl-2 text-right" onClick={event => event.stopPropagation()}>
         {confirmingDelete ? (
           <div className="flex items-center justify-end gap-2">
@@ -395,6 +407,7 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
                       <th className="py-2 pr-4">Model</th>
                       <th className="py-2 pr-4">Status</th>
                       <th className="py-2 pr-4">Tokens</th>
+                      <th className="py-2 pr-4">Est. cost</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -417,6 +430,9 @@ function CloudRunsPanel({ filters }: { filters: HistoryFilters }) {
                         </td>
                         <td className="py-2 pr-4 text-sm text-muted-foreground tabular-nums">
                           {formatTokens(run)}
+                        </td>
+                        <td className="py-2 pr-4 text-sm text-muted-foreground tabular-nums">
+                          {formatCost(run)}
                         </td>
                       </tr>
                     ))}
@@ -574,6 +590,7 @@ export default function HistoryPage({ runId = null, onSelectRun }: HistoryPagePr
                         <th className="py-2 pr-4">Model</th>
                         <th className="py-2 pr-4">Status</th>
                         <th className="py-2 pr-4">Tokens</th>
+                        <th className="py-2 pr-4">Est. cost</th>
                         <th className="py-2 pl-2 text-right">Actions</th>
                       </tr>
                     </thead>

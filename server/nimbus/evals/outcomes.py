@@ -26,6 +26,9 @@ class RunOutcome:
     error: dict[str, Any] | None = None
     #: The suite case this run answered; ``None`` outside a suite.
     case_id: str | None = None
+    #: Estimated USD across every attempt (throttled retries included);
+    #: ``None`` when no attempt recorded a priced usage.
+    cost_usd: float | None = None
 
     @property
     def succeeded(self) -> bool:

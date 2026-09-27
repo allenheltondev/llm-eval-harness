@@ -34,7 +34,7 @@ from strands import Agent
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent
 from strands.tools.mcp.mcp_client import MCPClientInitializationError
 
-from nimbus import deployment
+from nimbus import deployment, pricing
 from nimbus.config import Settings, get_settings
 from nimbus.engine.events import (
     ErrorEvent,
@@ -266,6 +266,9 @@ async def execute_run(
             case TextDeltaEvent():
                 text_parts.append(event.text)
             case MetricsEvent():
+                event.cost_usd = pricing.cost_usd(
+                    request.provider, request.model_id, event.model_dump()
+                )
                 metrics = event.model_dump(exclude={"type"})
             case GuardrailTraceEvent():
                 assessments.append(event.assessment)

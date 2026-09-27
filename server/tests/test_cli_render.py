@@ -68,8 +68,12 @@ class TestRunProgressLine:
             cycle_count=3,
         )
         assert render.run_progress_line(event) == (
-            "| tokens in=1,234 out=56,789 total=58,023  latency=2.3s  cycles=3"
+            "| tokens in=1,234 out=56,789 total=58,023  latency=2.3s  cycles=3  cost=unknown"
         )
+
+    def test_metrics_show_the_estimated_cost_when_priced(self):
+        event = MetricsEvent(input_tokens=10, output_tokens=5, cost_usd=0.01234)
+        assert render.run_progress_line(event).endswith("cost=~$0.0123")
 
     def test_guardrail_trace_is_announced_without_dumping_the_assessment(self):
         event = GuardrailTraceEvent(assessment={"topicPolicy": {"topics": ["x"]}})

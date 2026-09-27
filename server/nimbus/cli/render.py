@@ -84,7 +84,8 @@ def run_progress_line(event: RunEvent) -> str | None:
                 f"out={_count(event.output_tokens)} "
                 f"total={_count(event.total_tokens)}  "
                 f"latency={_duration(event.latency_ms)}  "
-                f"cycles={event.cycle_count}"
+                f"cycles={event.cycle_count}  "
+                f"cost={usd(event.cost_usd)}"
             )
         case GuardrailTraceEvent():
             return _line("guardrail assessment recorded")
@@ -156,6 +157,34 @@ def _error_text(error: Any) -> str:
     return str(error)
 
 
+def usd(value: Any) -> str:
+    """An estimated cost for a human: ``~$0.0123``, or ``unknown`` when unpriced."""
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return "unknown"
+    return f"~${value:.4f}" if value < 1 else f"~${value:,.2f}"
+
+
+def cost_lines(result: dict[str, Any]) -> list[str]:
+    """The spend summary of a result, plus a note when the budget stopped it."""
+    cost = result.get("cost")
+    if not isinstance(cost, dict):
+        return []
+    lines = [
+        _line(
+            f"cost {usd(cost.get('total_usd'))}  "
+            f"(runs {usd(cost.get('runs_usd'))}, judge {usd(cost.get('judge_usd'))}; estimate)"
+        )
+    ]
+    if result.get("budget_exhausted"):
+        lines.append(
+            _line(
+                f"budget of {usd(cost.get('max_cost_usd'))} reached: "
+                f"{result.get('skipped_runs', 0)} runs not started"
+            )
+        )
+    return lines
+
+
 def eval_result_lines(result: dict[str, Any] | None) -> list[str]:
     """The grade summary printed to stderr once an evaluation settles.
 
@@ -170,7 +199,7 @@ def eval_result_lines(result: dict[str, Any] | None) -> list[str]:
     reasoning = result.get("reasoning")
     if reasoning:
         lines.append(_line(f"       {_one_line(reasoning, 160)}"))
-    return lines
+    return lines + cost_lines(result)
 
 
 #: How each suite-case status reads in the summary. Fixed width, so the scores
@@ -208,7 +237,7 @@ def suite_result_lines(result: dict[str, Any]) -> list[str]:
         lines.append(_line(line))
     if result.get("judge_error"):
         lines.append(_line(f"judge error: {_one_line(result['judge_error'], 160)}"))
-    return lines
+    return lines + cost_lines(result)
 
 
 def table(rows: list[list[str]], headers: list[str]) -> str:

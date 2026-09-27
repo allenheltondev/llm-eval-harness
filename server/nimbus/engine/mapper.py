@@ -198,6 +198,8 @@ class EventMapper:
                 input_tokens=usage.get("inputTokens", 0),
                 output_tokens=usage.get("outputTokens", 0),
                 total_tokens=usage.get("totalTokens", 0),
+                cache_read_input_tokens=usage.get("cacheReadInputTokens", 0),
+                cache_write_input_tokens=usage.get("cacheWriteInputTokens", 0),
                 latency_ms=latency.get("latencyMs", 0),
                 cycle_count=getattr(metrics, "cycle_count", 0),
             )
