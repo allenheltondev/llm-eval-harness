@@ -31,6 +31,7 @@ export interface ModelPickerProps {
 export default function ModelPicker({ label }: ModelPickerProps) {
   const models = useModelStore(state => state.models)
   const loading = useModelStore(state => state.modelsLoading)
+  const loaded = useModelStore(state => state.modelsLoaded)
   const error = useModelStore(state => state.modelsError)
   const providers = useModelStore(state => state.modelProviders)
   const loadModels = useModelStore(state => state.loadModels)
@@ -54,7 +55,10 @@ export default function ModelPicker({ label }: ModelPickerProps) {
   // was unavailable, then persisted -- is still what a run or evaluation will
   // send, so it stays visible (as its own option, and editable below) rather
   // than leaving the select on its placeholder.
-  const unlisted = modelId !== '' && !selected
+  // Only once the catalog has resolved (or failed): while it loads, `models`
+  // is empty and every persisted id would look unlisted for a moment.
+  const catalogSettled = (loaded && !loading) || error !== null
+  const unlisted = modelId !== '' && !selected && catalogSettled
   const showManual = error !== null || (!loading && models.length === 0) || unlisted
 
   function handleSelect(id: string) {

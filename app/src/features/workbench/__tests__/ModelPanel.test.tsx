@@ -303,6 +303,47 @@ describe('ModelPanel', () => {
     expect(within(select).queryByRole('option', { name: /entered manually/ })).toBeNull()
   })
 
+  it('does not call a persisted model unlisted while the catalog is still loading', () => {
+    // A valid catalog model, persisted from last time, with the fetch in flight:
+    // `models` is still empty, but nothing is known to be missing yet.
+    useRunConfigStore.setState({ model_id: 'amazon.nova-pro-v1:0', provider: 'bedrock' })
+    useModelStore.setState({ models: [], modelsLoading: true, modelsLoaded: false })
+
+    const { rerender } = render(<ModelPanel />)
+
+    const select = screen.getByRole('combobox', { name: 'Model' })
+    expect(within(select).queryByRole('option', { name: /entered manually/ })).toBeNull()
+    expect(screen.queryByText(/is not in the model list/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Enter model id manually')).not.toBeInTheDocument()
+
+    // The catalog arrives with that model: it is simply selected.
+    useModelStore.setState({
+      models: MODELS,
+      modelsLoading: false,
+      modelsLoaded: true,
+      modelProviders: ALL_CONFIGURED
+    })
+    rerender(<ModelPanel />)
+    expect(select).toHaveValue('amazon.nova-pro-v1:0')
+    expect(screen.queryByText(/is not in the model list/)).not.toBeInTheDocument()
+  })
+
+  it('shows an unlisted persisted id alongside the error when the catalog fails', () => {
+    useRunConfigStore.setState({ model_id: 'my.custom-model', provider: 'openai' })
+    useModelStore.setState({
+      models: [],
+      modelsLoading: false,
+      modelsLoaded: false,
+      modelsError: { message: 'boom', code: 'upstream_error' }
+    })
+
+    render(<ModelPanel />)
+
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('my.custom-model')
+    expect(screen.getByText(/Could not load models/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Enter model id manually')).toHaveValue('my.custom-model')
+  })
+
   it('does not offer the manual row while the catalog is still loading', () => {
     useModelStore.setState({ models: [], modelsLoading: true })
 
