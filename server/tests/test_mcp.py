@@ -325,6 +325,74 @@ def test_dynamo_store_reports_headers_that_went_missing():
         store.get(created.id)
 
 
+class FlakyTable(FakeTable):
+    """A table whose next put/delete can be told to fail, like a throttled write."""
+
+    def __init__(self):
+        super().__init__()
+        self.fail_next: str | None = None
+
+    def put_item(self, Item):  # noqa: N803 - boto3 spelling
+        if self.fail_next == "put":
+            self.fail_next = None
+            raise RuntimeError("ProvisionedThroughputExceeded")
+        return super().put_item(Item=Item)
+
+    def delete_item(self, Key):  # noqa: N803 - boto3 spelling
+        if self.fail_next == "delete":
+            self.fail_next = None
+            raise RuntimeError("ProvisionedThroughputExceeded")
+        return super().delete_item(Key=Key)
+
+
+def test_a_failed_create_leaves_no_parameter_behind():
+    table = FlakyTable()
+    store, ssm = _dynamo(table)
+    table.fail_next = "put"
+    with pytest.raises(RuntimeError):
+        store.create(name="One", url="https://x/mcp", headers={"Authorization": "tok"})
+    assert ssm.parameters == {}  # the id was never returned: nothing may remain
+    assert store.list() == []
+
+
+@pytest.mark.parametrize("new_headers", [{"Authorization": "new"}, {}])
+def test_a_failed_update_restores_the_previous_headers(new_headers):
+    table = FlakyTable()
+    store, ssm = _dynamo(table)
+    created = store.create(name="One", url="https://x/mcp", headers={"Authorization": "old"})
+    table.fail_next = "put"
+    with pytest.raises(RuntimeError):
+        store.save(created.model_copy(update={"headers": new_headers}))
+    # The item still names the old header, and its value is the old one.
+    assert store.get(created.id).headers == {"Authorization": "old"}
+
+
+def test_a_delete_that_fails_part_way_can_be_retried():
+    table = FlakyTable()
+    store, ssm = _dynamo(table)
+    created = store.create(name="One", url="https://x/mcp", headers={"Authorization": "tok"})
+
+    # SSM fails: nothing is gone yet, so the server is still there to retry.
+    def unavailable(**_kwargs):
+        raise RuntimeError("ssm unavailable")
+
+    original = ssm.delete_parameter
+    ssm.delete_parameter = unavailable
+    with pytest.raises(RuntimeError, match="ssm unavailable"):
+        store.delete(created.id)
+    assert store.get(created.id).headers == {"Authorization": "tok"}
+    ssm.delete_parameter = original
+
+    # The table fails after the secret is gone: the retry still finds the
+    # server and finishes, the missing parameter being no obstacle.
+    table.fail_next = "delete"
+    with pytest.raises(RuntimeError):
+        store.delete(created.id)
+    assert ssm.parameters == {}
+    store.delete(created.id)
+    assert store.list() == []
+
+
 def test_dynamo_store_follows_list_pagination():
     class PagedTable(FakeTable):
         def query(self, **kwargs):

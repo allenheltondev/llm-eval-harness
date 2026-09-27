@@ -16,6 +16,7 @@ Item shape (single-table, alongside runs and evaluations)::
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -28,6 +29,8 @@ from nimbus import deployment
 from nimbus.config import Settings, get_settings
 from nimbus.errors import AppError, NotFoundError
 from nimbus.mcp.schemas import McpServer
+
+logger = logging.getLogger(__name__)
 
 PK_PREFIX = "MCP#"
 GSI1_PARTITION = "MCP"
@@ -215,7 +218,7 @@ class SsmHeaderSecrets:
             # without them would fail anyway, and less legibly.
             raise McpStoreUnavailableError(
                 f"The saved headers for MCP server {server_id!r} are missing; "
-                "set them again with an update",
+                "remove the server and add it again",
                 detail={"mcp_server_id": server_id},
             ) from exc
         return json.loads(response["Parameter"]["Value"])
@@ -268,14 +271,31 @@ class DynamoMcpStore:
             updated_at=datetime.fromisoformat(str(item["updated_at"])),
         )
 
-    def _write(self, server: McpServer) -> None:
-        # Secrets first: an item that names headers must never point at a
-        # parameter that was not written.
-        if server.headers:
-            self._secrets.put(server.id, server.headers)
+    def _write(self, server: McpServer, previous: dict[str, str] | None) -> None:
+        """Write the secret, then the item -- undoing the secret if the item fails.
+
+        Secret first, so an item that names headers never points at a
+        parameter that was not written. If the item write then fails, the
+        secret is put back to ``previous`` (the headers the stored item still
+        names; ``None`` for a server that did not exist), so the two stores
+        never disagree and a create never strands a parameter nobody knows
+        the id of.
+        """
+        self._put_secret(server.id, server.headers)
+        try:
+            self._table.put_item(Item=self._item(server))
+        except Exception:
+            try:
+                self._put_secret(server.id, previous or {})
+            except Exception:  # pragma: no cover - the original failure matters more
+                logger.warning("could not restore headers for MCP server %s", server.id)
+            raise
+
+    def _put_secret(self, server_id: str, headers: dict[str, str]) -> None:
+        if headers:
+            self._secrets.put(server_id, headers)
         else:
-            self._secrets.delete(server.id)
-        self._table.put_item(Item=self._item(server))
+            self._secrets.delete(server_id)
 
     def list(self) -> list[McpServer]:
         from boto3.dynamodb.conditions import Key
@@ -312,19 +332,26 @@ class DynamoMcpStore:
         server = McpServer(
             id=uuid4().hex, name=name, url=url, headers=headers, created_at=now, updated_at=now
         )
-        self._write(server)
+        self._write(server, previous=None)
         return server
 
     def save(self, server: McpServer) -> McpServer:
-        self._get_item(server.id)
+        previous = self.get(server.id).headers
         saved = server.model_copy(update={"updated_at": _now()})
-        self._write(saved)
+        self._write(saved, previous=previous)
         return saved
 
     def delete(self, server_id: str) -> None:
+        """Secret first, then the item, so a failure part-way can be retried.
+
+        The other order strands the parameter if SSM fails after the item is
+        gone: the retry finds no server, and nothing names the parameter any
+        more. This way a failed delete leaves the server in place to delete
+        again, and a parameter already gone (an earlier attempt) is fine.
+        """
         self._get_item(server_id)
-        self._table.delete_item(Key={"pk": PK_PREFIX + server_id, "sk": META_SK})
         self._secrets.delete(server_id)
+        self._table.delete_item(Key={"pk": PK_PREFIX + server_id, "sk": META_SK})
 
 
 # --------------------------------------------------------------------------- #
