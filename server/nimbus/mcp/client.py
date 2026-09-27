@@ -5,9 +5,9 @@ streamable HTTP transport, passed straight into the agent's ``tools``. The
 agent starts it (connects and lists its tools) when it is built and stops it
 on ``agent.cleanup()``, so a client lives exactly as long as its run.
 
-Tool names are prefixed with a slug of the server's name (``github_search``),
-so two servers that both offer ``search`` stay distinguishable to the model
-and in the run's tool transcript.
+Tool names are prefixed with ``mcp-`` and a slug of the server's name
+(``mcp-github_search``), so two servers that both offer ``search`` stay
+distinguishable, and no MCP tool can take a built-in tool's name.
 """
 
 from __future__ import annotations
@@ -20,12 +20,15 @@ from typing import Any
 from nimbus.errors import AppError, BadRequestError, NotFoundError
 from nimbus.mcp.schemas import McpServer, McpToolInfo
 from nimbus.mcp.store import McpServerStore
+from nimbus.mcp.transport import build_http_client
 from nimbus.mcp.urls import check_reachable
 
 #: How long to wait for a server to accept the MCP handshake.
 STARTUP_TIMEOUT_SECONDS = 20
+#: Every MCP tool name starts with this; see :func:`tool_prefix`.
+MCP_TOOL_NAMESPACE = "mcp-"
 #: Room left for the tool's own name within a provider's 64-character limit.
-MAX_PREFIX_LENGTH = 16
+MAX_SLUG_LENGTH = 16
 MAX_SERVERS_PER_RUN = 5
 
 
@@ -37,16 +40,26 @@ class McpConnectionError(AppError):
 
 
 def tool_prefix(name: str, taken: Iterable[str] = ()) -> str:
-    """A tool-name-safe slug of a server's name, unique among ``taken``."""
-    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")[:MAX_PREFIX_LENGTH].strip("_")
-    slug = slug or "mcp"
-    if slug[0].isdigit():
-        slug = f"mcp_{slug}"[:MAX_PREFIX_LENGTH]
+    """The tool-name prefix for a server: ``mcp-<slug>``, unique among ``taken``.
+
+    MCP tools are named ``<prefix>_<tool>``. The prefix lives in a namespace no
+    other tool can reach:
+
+    * it contains ``-``, which a built-in ``@tool`` name (a Python identifier)
+      never does, so no MCP tool can collide with a built-in one; and
+    * the slug uses ``-`` between words, never ``_``, so the first ``_`` in a
+      tool name always ends the prefix: two servers with distinct prefixes can
+      never produce the same full name (``a`` + ``b_c`` vs ``a_b`` + ``c``).
+
+    Hyphens are valid in tool names for every provider (``[a-zA-Z0-9_-]``).
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:MAX_SLUG_LENGTH].strip("-")
+    base = f"{MCP_TOOL_NAMESPACE}{slug or 'server'}"
     used = set(taken)
-    candidate, n = slug, 2
+    candidate, n = base, 2
     while candidate in used:
-        suffix = f"_{n}"
-        candidate = slug[: MAX_PREFIX_LENGTH - len(suffix)] + suffix
+        suffix = f"-{n}"
+        candidate = base[: len(MCP_TOOL_NAMESPACE) + MAX_SLUG_LENGTH - len(suffix)] + suffix
         n += 1
     return candidate
 
@@ -71,17 +84,17 @@ def resolve(ids: Iterable[str], store: McpServerStore) -> list[McpServer]:
     return servers
 
 
-def _transport(server: McpServer) -> Any:
+def _transport(server: McpServer, *, deployed: bool) -> Any:
     """The ``transport_callable`` for one server: a fresh connection per call."""
     from mcp.client.streamable_http import streamable_http_client
-    from mcp.shared._httpx_utils import create_mcp_http_client
 
     @asynccontextmanager
     async def connect() -> AsyncIterator[Any]:
         # The transport only closes an HTTP client it created itself; this one
-        # carries the saved headers, so it is opened and closed here.
+        # carries the saved headers and the connection rules, so it is opened
+        # and closed here.
         async with (
-            create_mcp_http_client(headers=dict(server.headers)) as http_client,
+            build_http_client(dict(server.headers), deployed=deployed) as http_client,
             streamable_http_client(server.url, http_client=http_client) as streams,
         ):
             yield streams
@@ -106,7 +119,7 @@ def build_clients(servers: list[McpServer], *, deployed: bool) -> list[Any]:
         prefixes.append(prefix)
         clients.append(
             MCPClient(
-                _transport(server),
+                _transport(server, deployed=deployed),
                 startup_timeout=STARTUP_TIMEOUT_SECONDS,
                 prefix=prefix,
                 application_name="nimbus",

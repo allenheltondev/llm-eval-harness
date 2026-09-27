@@ -38,7 +38,13 @@ def _parse(url: str) -> tuple[str, str, int | None]:
     return parts.scheme, parts.hostname, port
 
 
-def _is_public(address: str) -> bool:
+def is_public_address(address: str) -> bool:
+    """Whether an IP address is globally routable (IPv4-mapped IPv6 unwrapped).
+
+    A scoped IPv6 address (``fe80::1%eth0``) is link-local by definition.
+    """
+    if "%" in address:
+        return False
     ip = ipaddress.ip_address(address)
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
@@ -63,17 +69,17 @@ def validate_url(url: str, *, deployed: bool) -> str:
             literal = ipaddress.ip_address(host)
         except ValueError:
             literal = None
-        if literal is not None and not _is_public(host):
+        if literal is not None and not is_public_address(host):
             raise McpUrlError("MCP server URLs must be publicly reachable", detail={"url": url})
     return url.strip()
 
 
 def check_reachable(url: str, *, deployed: bool) -> None:
-    """Re-check a saved URL just before connecting.
+    """Re-check a saved URL just before connecting, for an early, legible error.
 
-    Deployed, the host is resolved and every address it resolves to must be
-    public -- a name that pointed somewhere public when it was saved can point
-    somewhere else now.
+    This is *not* the guard: a name can resolve differently between this lookup
+    and the connection. :class:`nimbus.mcp.transport.PublicOnlyBackend`
+    enforces the rule on every socket the MCP client actually opens.
     """
     validate_url(url, deployed=deployed)
     if not deployed:
@@ -83,5 +89,5 @@ def check_reachable(url: str, *, deployed: bool) -> None:
         infos = socket.getaddrinfo(host, port or 443, proto=socket.IPPROTO_TCP)
     except OSError as exc:
         raise McpUrlError(f"Cannot resolve {host}: {exc}", detail={"url": url}) from exc
-    if not infos or not all(_is_public(str(info[4][0])) for info in infos):
+    if not infos or not all(is_public_address(str(info[4][0])) for info in infos):
         raise McpUrlError("MCP server URLs must be publicly reachable", detail={"url": url})

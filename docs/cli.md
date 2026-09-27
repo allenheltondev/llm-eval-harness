@@ -298,8 +298,8 @@ nimbus run -m <model> -p '...' --mcp-server <id> # use it on a run (or eval, or 
 
 `add` prints the new id alone on stdout, so `id=$(nimbus mcp add ...)` works.
 Header values are never printed; `update` keeps every header it is not told to
-set or remove. Tools are named with a slug of the server's name as a prefix
-(`github_search_issues`). On a deployed stack, only public `https` URLs are
+set or remove. Tools are named `mcp-<server slug>_<tool>`
+(`mcp-github_search_issues`), so they never collide with built-in tools. On a deployed stack, only public `https` URLs are
 accepted.
 
 ## `runs`, `show`

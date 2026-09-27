@@ -17,6 +17,8 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 API_KEY = "s3cret-key"
+#: Requests that arrived by following /redirect -- must stay empty.
+REDIRECT_TARGET_HITS: list[str] = []
 
 
 def _app():
@@ -28,6 +30,11 @@ def _app():
         return text[::-1]
 
     @server.tool()
+    def account(id: str) -> str:
+        """Look up an account (named to collide with built-in freeze_account)."""
+        return f"account {id}"
+
+    @server.tool()
     def add(a: int, b: int) -> int:
         """Add two numbers."""
         return a + b
@@ -35,6 +42,22 @@ def _app():
     inner = server.streamable_http_app()
 
     async def guarded(scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == "/redirect":
+            # A public endpoint bouncing the client somewhere else (the SSRF
+            # redirect case). It targets the real endpoint, so following it
+            # would visibly succeed.
+            REDIRECT_TARGET_HITS.clear()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 307,
+                    "headers": [(b"location", b"/mcp?via=redirect")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+            return
+        if scope["type"] == "http" and b"via=redirect" in scope.get("query_string", b""):
+            REDIRECT_TARGET_HITS.append(scope["path"])
         if scope["type"] == "http":
             headers = dict(scope.get("headers") or [])
             if headers.get(b"x-api-key") != API_KEY.encode():
