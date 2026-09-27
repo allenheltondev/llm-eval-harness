@@ -837,6 +837,49 @@ class TestSuite:
         assert result.code == 2
         assert "--suite: No such file or directory" in result.err
 
+    def test_failed_assertions_are_shown_per_case(self, cli, suite_file):
+        text = """\
+run_config: {model_id: fake.model}
+repeats: 2
+cases:
+  - id: echoes
+    input: hi
+    judge: false
+    assert:
+      - contains: "[fake-model]"
+      - regex: "for fake\\\\.model\\\\.$"
+  - id: wrong
+    input: hi
+    assert:
+      - contains: refund
+      - max_tool_calls: 0
+"""
+        result = cli("eval", "--suite", suite_file(text))
+
+        assert result.code == 0, result.err
+        cases = {case["id"]: case for case in json.loads(result.out)["result"]["cases"]}
+        assert cases["echoes"]["status"] == "passed"
+        assert cases["echoes"]["judged"] is False
+        assert cases["wrong"]["status"] == "failed"
+        assert cases["wrong"]["repeats"][1]["assertions"][0] == {
+            "type": "contains",
+            "passed": False,
+            "detail": 'output does not contain "refund"',
+        }
+        assert re.search(r"PASS\s+1\.00\s+echoes", result.err)
+        assert re.search(r"FAIL\s+0\.95\s+wrong  2 of 4 assertion checks failed", result.err)
+        assert 'x contains (repeats 1, 2 of 2): output does not contain "refund"' in result.err
+
+    def test_a_bad_assertion_is_a_usage_error_before_anything_runs(self, cli, suite_file):
+        text = "run_config: {model_id: m}\ncases:\n  - {id: a, input: x, assert: [{regex: '('}]}\n"
+        path = suite_file(text)
+
+        result = cli("eval", "--suite", path)
+
+        assert result.code == 2
+        assert result.err.count("\n") == 1, result.err
+        assert "cases.0.assert.0.regex: Value error, invalid regex '('" in result.err
+
 
 class TestSuiteOverrides:
     """Every override path, down to the request the engine receives."""

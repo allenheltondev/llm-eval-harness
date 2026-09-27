@@ -250,3 +250,38 @@ def test_an_unset_min_pass_rate_is_not_sent_so_older_stacks_accept_the_suite():
 
     gated = Suite.model_validate({**base, "min_pass_rate": 0.9})
     assert gated.model_dump(mode="json")["min_pass_rate"] == 0.9
+
+
+async def test_junit_reports_assertions_from_a_real_suite_result(tmp_path):
+    """End to end: #33's engine produces the result, the JUnit writer reads it.
+
+    Guards the two against drifting apart: the verdicts must come out of the
+    real per-repeat shape, not a hand-written copy of it.
+    """
+    from nimbus.store import db
+    from tests.test_evals_suite import AnswerBook, RoutingJudge, run_suite, suite_request
+
+    db.init_db(str(tmp_path / "junit.db"))
+    request = suite_request(
+        [
+            {"id": "refund", "input": "refund?", "assert": [{"contains": "30 days"}]},
+            {
+                "id": "json",
+                "input": "json?",
+                "judge": False,
+                "assert": [{"json_valid": True}, {"max_length": 5}],
+            },
+        ],
+        repeats=2,
+    )
+    answers = AnswerBook({"refund?": "Refunds within 30 days.", "json?": "not json at all"})
+    terminal, _ = await run_suite(request, answers, RoutingJudge([], default=0.9))
+
+    assert failed_cases(terminal["result"]) == ["json"]
+    root = ET.fromstring(junit_xml(terminal))
+    cases = {case.get("name"): case for case in root.iter("testcase")}
+    assert cases["refund"].find("failure") is None
+    lines = cases["json"].find("failure").text.splitlines()
+    for kind in ("json_valid", "max_length"):
+        expected = f"assertion failed: {kind} (repeats 1, 2 of 2)"
+        assert any(line.startswith(expected) for line in lines), lines
