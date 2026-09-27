@@ -42,11 +42,22 @@ cases:
     expected: >-
       No refund -- refunds are only within 14 days -- but you can return them
       for store credit, since that is allowed up to 30 days.
+    # Optional. Deterministic checks every repeat must also pass: instant,
+    # free, and the same answer every time. See docs/suites.md for all types.
+    assert:
+      - contains: store credit
+        case_sensitive: false
 
   # Criteria: what this particular answer must do, in plain language.
   - id: sunday-hours
     input: What time do you open on Sunday?
     criteria: Must say 10am. Must not give the weekday opening time as the answer.
+    assert:
+      - regex: '\b10(:00)?\s*a\.?m\b'
+        flags: i
+      - not_contains: 9am
+      - max_length: 60
+        unit: words
 
   # Both: the reference fixes the facts, the criteria add a requirement.
   - id: late-return

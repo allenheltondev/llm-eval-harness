@@ -6,9 +6,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { ToastProvider } from '@readysetcloud/ui'
-import EvaluationDetailView, { batchSlots, sourceLabel } from '../EvaluationDetailView'
+import EvaluationDetailView, {
+  batchSlots,
+  describeAssertion,
+  failedChecks,
+  sourceLabel
+} from '../EvaluationDetailView'
 import { INITIAL_MCP_SERVER_STATE, useMcpServerStore } from '../../../stores'
-import type { EvaluationDetail, EvaluationResult } from '../../../api'
+import type { EvaluationDetail, EvaluationResult, SuiteCaseResult } from '../../../api'
 
 const JUDGE = { model_id: 'amazon.nova-pro-v1:0', system_prompt_used: false, rubric_used: true }
 
@@ -366,5 +371,151 @@ describe('EvaluationDetailView', () => {
       'title',
       'Repeat 3 failed before a run was recorded'
     )
+  })
+
+  describe('assertions', () => {
+    const checked: SuiteCaseResult = {
+      id: 'format',
+      status: 'failed',
+      passed: false,
+      score: 0.9,
+      scores: [0.9, 0.9, 0],
+      reasoning: 'Reads well.',
+      error: null,
+      run_ids: ['r-1', 'r-2'],
+      runs: { total: 3, succeeded: 2 },
+      judged: true,
+      assertions: { total: 4, passed: 1, failed: 3 },
+      repeats: [
+        {
+          run_id: 'r-1',
+          ran: true,
+          score: 0.9,
+          assertions_passed: false,
+          assertions: [
+            { type: 'contains', passed: false, detail: 'output does not contain "30"' },
+            { type: 'json_valid', passed: true, detail: 'valid JSON' }
+          ]
+        },
+        {
+          run_id: 'r-2',
+          ran: true,
+          score: 0.9,
+          assertions_passed: false,
+          assertions: [
+            { type: 'contains', passed: false, detail: 'second time' },
+            { type: 'json_valid', passed: false, detail: null }
+          ]
+        },
+        { run_id: null, ran: false, score: 0, assertions: null, assertions_passed: null }
+      ]
+    }
+    const unjudged: SuiteCaseResult = {
+      ...suiteResult.cases![0],
+      id: 'checks-only',
+      judged: false,
+      reasoning: null,
+      assertions: { total: 1, passed: 1, failed: 0 },
+      repeats: [
+        {
+          run_id: 'r-a1',
+          ran: true,
+          score: 1,
+          assertions_passed: true,
+          assertions: [{ type: 'max_tool_calls', passed: true, detail: '1 tool calls <= 2' }]
+        }
+      ]
+    }
+    const evaluation: EvaluationDetail = {
+      ...suiteEvaluation,
+      config: {
+        ...suiteEvaluation.config,
+        suite: {
+          ...suiteEvaluation.config.suite!,
+          cases: [
+            {
+              id: 'format',
+              input: 'Answer in JSON',
+              assert: [
+                { type: 'contains', value: '30', case_sensitive: true },
+                { type: 'json_valid' }
+              ]
+            },
+            {
+              id: 'checks-only',
+              input: 'Go',
+              judge: false,
+              assert: [{ type: 'max_tool_calls', value: 2 }]
+            }
+          ]
+        }
+      }
+    }
+
+    it('shows each case’s tally and failed checks, with the repeats they failed on', () => {
+      render(
+        <EvaluationDetailView
+          evaluation={evaluation}
+          result={{ ...suiteResult, cases: [checked, unjudged, suiteResult.cases![2]] }}
+        />
+      )
+
+      expect(screen.getByRole('columnheader', { name: 'Assertions' })).toBeInTheDocument()
+      const cell = screen.getByTestId('eval-case-format-assertions')
+      expect(within(cell).getByText('1/4 passed')).toBeInTheDocument()
+      const failures = within(cell).getAllByRole('listitem').slice(0, 2)
+      expect(failures[0]).toHaveTextContent(
+        'contains (repeats 1, 2 of 3): output does not contain "30"'
+      )
+      expect(failures[1]).toHaveTextContent('json_valid (repeat 2 of 3)')
+      // Every verdict of every repeat, behind a disclosure; a repeat that did not run says so.
+      expect(within(cell).getByText('By repeat')).toBeInTheDocument()
+      expect(within(cell).getByText('did not run', { exact: false })).toBeInTheDocument()
+      expect(within(cell).getByText('— valid JSON')).toBeInTheDocument()
+
+      const only = screen.getByTestId('eval-case-checks-only')
+      expect(within(only).getByText('Not judged: scored by its assertions.')).toBeInTheDocument()
+      expect(within(only).getByText('1/1 passed')).toBeInTheDocument()
+      // A case without checks in a suite that has some: a dash, not an empty cell.
+      expect(within(screen.getByTestId('eval-case-off-topic')).getAllByText('—')).toHaveLength(2)
+    })
+
+    it('shows the checks each case was defined with', () => {
+      render(
+        <EvaluationDetailView
+          evaluation={evaluation}
+          result={{ ...suiteResult, cases: [checked, unjudged] }}
+        />
+      )
+
+      const row = screen.getByTestId('eval-case-format')
+      expect(
+        within(row).getByText('contains {"value":"30","case_sensitive":true}')
+      ).toBeInTheDocument()
+      const definition = within(row).getByText('Case').closest('details')!
+      expect(within(definition).getByText('Assertions')).toBeInTheDocument()
+      expect(within(definition).getByText('json_valid')).toBeInTheDocument()
+    })
+
+    it('adds no column to a suite without assertions', () => {
+      render(<EvaluationDetailView evaluation={suiteEvaluation} result={suiteResult} />)
+
+      expect(screen.queryByRole('columnheader', { name: 'Assertions' })).not.toBeInTheDocument()
+    })
+
+    it('describes a check by its type and the fields it sets', () => {
+      expect(describeAssertion({ type: 'no_tool_errors' })).toBe('no_tool_errors')
+      expect(
+        describeAssertion({ type: 'tool_called', name: 'f', args: null, times: 1, min_times: null })
+      ).toBe('tool_called {"name":"f","times":1}')
+    })
+
+    it('groups a case’s failures by check, in list order', () => {
+      expect(failedChecks(checked)).toEqual([
+        { position: 0, type: 'contains', repeats: [1, 2], detail: 'output does not contain "30"' },
+        { position: 1, type: 'json_valid', repeats: [2], detail: null }
+      ])
+      expect(failedChecks({ ...checked, repeats: undefined })).toEqual([])
+    })
   })
 })

@@ -5,10 +5,19 @@ from __future__ import annotations
 from collections import Counter
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import BadRequestError
+from nimbus.evals.assertions import MAX_CASE_ASSERTIONS, Assertion, expand_shorthand
 from nimbus.evals.judge import DEFAULT_JUDGE_MODEL_ID
 from nimbus.providers import DEFAULT_PROVIDER, Provider
 
@@ -21,6 +30,11 @@ DEFAULT_DETERMINISM_RUNS = 10
 MAX_SUITE_CASES = 100
 MAX_SUITE_REPEATS = 10
 MAX_SUITE_RUNS = 200
+#: At most this many assertion verdicts in one suite (checks x repeats, summed
+#: over the cases). Each is recorded in the result, which has a byte budget
+#: (``engine.MAX_RESULT_BYTES``); this keeps the verdicts inside it even when
+#: every other part of the result is at its own limit.
+MAX_SUITE_ASSERTION_CHECKS = 1_000
 #: A case passes when its mean judge score (0-1) reaches this, unless the suite
 #: sets its own ``pass_threshold``.
 DEFAULT_PASS_THRESHOLD = 0.7
@@ -112,12 +126,46 @@ class SuiteCase(BaseModel):
     a case with neither is judged on the rubric by itself.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
 
     id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     input: str = Field(min_length=1)
     expected: str | None = None
     criteria: str | None = None
+    #: Deterministic checks every repeat's answer must pass (see
+    #: :mod:`nimbus.evals.assertions`). ``assert`` is a Python keyword, hence
+    #: the alias.
+    assert_: list[Assertion] = Field(
+        default_factory=list, alias="assert", max_length=MAX_CASE_ASSERTIONS
+    )
+    #: ``False`` skips the LLM judge for this case: it is scored 1.0 / 0.0 per
+    #: repeat from its assertions alone.
+    judge: bool = True
+
+    @field_validator("assert_", mode="before")
+    @classmethod
+    def _expand_shorthand(cls, value: object) -> object:
+        if isinstance(value, list):
+            return [expand_shorthand(entry) for entry in value]
+        return value
+
+    @model_validator(mode="after")
+    def _something_scores_it(self) -> SuiteCase:
+        if not self.judge and not self.assert_:
+            raise ValueError("a case with `judge: false` needs at least one `assert` check")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_defaults(self, handler: SerializerFunctionWrapHandler) -> dict:
+        """Leave ``assert`` / ``judge`` out when unset, so a suite without them
+        serializes (and is stored) exactly as it did before they existed."""
+        data = handler(self)
+        if not self.assert_:
+            data.pop("assert", None)
+            data.pop("assert_", None)
+        if self.judge:
+            data.pop("judge", None)
+        return data
 
 
 class Suite(BaseModel):
@@ -156,11 +204,26 @@ class Suite(BaseModel):
                 detail={"runs": self.planned_runs, "max_runs": MAX_SUITE_RUNS},
                 code="suite_too_large",
             )
+        if self.planned_checks > MAX_SUITE_ASSERTION_CHECKS:
+            raise BadRequestError(
+                f"{self.planned_checks} assertion checks (each case's `assert` entries x "
+                f"{self.repeats} repeats); a suite may make at most {MAX_SUITE_ASSERTION_CHECKS}",
+                detail={
+                    "checks": self.planned_checks,
+                    "max_checks": MAX_SUITE_ASSERTION_CHECKS,
+                },
+                code="suite_too_large",
+            )
         return self
 
     @property
     def planned_runs(self) -> int:
         return len(self.cases) * self.repeats
+
+    @property
+    def planned_checks(self) -> int:
+        """Assertion verdicts the result will record: every check, on every repeat."""
+        return sum(len(case.assert_) for case in self.cases) * self.repeats
 
 
 class EvaluationRequest(BaseModel):

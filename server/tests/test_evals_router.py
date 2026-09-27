@@ -227,6 +227,47 @@ async def test_an_unknown_source_is_rejected(client):
     assert response.status_code == 422
 
 
+def suite_body(*asserts: dict) -> dict:
+    return {
+        "kind": "suite",
+        "suite": {
+            "run_config": {"model_id": "m"},
+            "cases": [{"id": "a", "input": "B456?", "judge": False, "assert": list(asserts)}],
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "bad", [{"regex": "(unclosed"}, {"json_schema": {"type": 5}}, {"teleport": True}]
+)
+async def test_a_bad_assertion_is_a_422_and_nothing_is_created(client, models, bad):
+    response = await client.post("/api/v1/evaluations", json=suite_body(bad))
+
+    assert response.status_code == 422
+    assert models.call_count == 0
+    assert (await client.get("/api/v1/evaluations")).json()["items"] == []
+
+
+async def test_assertion_results_are_stored_with_the_evaluation(client):
+    accepted = await client.post(
+        "/api/v1/evaluations",
+        json=suite_body({"contains": "B456"}, {"not_contains": "escalate"}),
+    )
+    assert accepted.status_code == 202, accepted.text
+
+    finished = await wait_for_terminal(client, accepted.json()["id"])
+
+    case = finished["result"]["cases"][0]
+    assert case["status"] == "failed"
+    assert [check["passed"] for check in case["repeats"][0]["assertions"]] == [True, False]
+    # The stored config keeps the checks exactly as they were run.
+    assert finished["config"]["suite"]["cases"][0]["assert"][1] == {
+        "type": "not_contains",
+        "value": "escalate",
+        "case_sensitive": True,
+    }
+
+
 def test_an_evaluation_stored_before_sources_existed_has_none():
     from nimbus.schemas.runs import EvaluationDetail
 

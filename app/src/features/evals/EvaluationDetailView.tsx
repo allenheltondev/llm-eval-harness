@@ -15,11 +15,13 @@ import { Alert, Badge, Button, Card, CardBody, CardHeader, StatusBadge } from '@
 import { useNotify } from '../../components/notify'
 import { statusTone } from '../../components/status'
 import type {
+  AssertionVerdict,
   EvaluationDetail,
   EvaluationResult,
   EvaluationStoredConfig,
   RunRequest,
   StoredSuite,
+  SuiteAssertion,
   SuiteCaseResult
 } from '../../api'
 import { evaluationHref, runHref } from '../../routing'
@@ -187,8 +189,113 @@ export function batchSlots(
   })
 }
 
+/** A check as written in the suite: its type, then its fields (`contains {"value":"x"}`). */
+export function describeAssertion(check: SuiteAssertion): string {
+  const { type, ...fields } = check
+  const shown = Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== null && value !== undefined)
+  )
+  return Object.keys(shown).length ? `${type} ${JSON.stringify(shown)}` : type
+}
+
+/** One check that failed on at least one repeat, with the repeats it failed on. */
+export interface FailedCheck {
+  /** The check's place in the case's `assert:` list. */
+  position: number
+  type: string
+  /** 1-based repeat numbers. */
+  repeats: number[]
+  /** The first failure's detail. */
+  detail: string | null
+}
+
+/** A case's failed checks, one entry per check (not per repeat), in list order. */
+export function failedChecks(result: SuiteCaseResult): FailedCheck[] {
+  const byPosition = new Map<number, FailedCheck>()
+  ;(result.repeats ?? []).forEach((repeat, repeatIndex) => {
+    ;(repeat.assertions ?? []).forEach((verdict, position) => {
+      if (verdict.passed) return
+      const entry = byPosition.get(position)
+      if (entry) entry.repeats.push(repeatIndex + 1)
+      else
+        byPosition.set(position, {
+          position,
+          type: verdict.type,
+          repeats: [repeatIndex + 1],
+          detail: verdict.detail
+        })
+    })
+  })
+  return [...byPosition.values()].sort((a, b) => a.position - b.position)
+}
+
+function VerdictLine({ verdict }: { verdict: AssertionVerdict }) {
+  return (
+    <li className={verdict.passed ? 'text-muted-foreground' : 'text-error-700'}>
+      <span className="font-medium">{verdict.passed ? 'pass' : 'fail'}</span>{' '}
+      <span className="font-mono">{verdict.type}</span>
+      {verdict.detail && <span className="break-words"> — {verdict.detail}</span>}
+    </li>
+  )
+}
+
+/**
+ * A case's assertion results: the tally, each failed check (with the repeats
+ * it failed on), and every verdict of every repeat behind a disclosure.
+ */
+function Assertions({ result }: { result: SuiteCaseResult }) {
+  const tally = result.assertions
+  if (!tally) return <span className="text-muted-foreground">—</span>
+  const failed = failedChecks(result)
+  const repeats = result.repeats ?? []
+  return (
+    <div className="space-y-1" data-testid={`eval-case-${result.id}-assertions`}>
+      <p className={tally.failed ? 'text-error-700' : 'text-muted-foreground'}>
+        {tally.passed}/{tally.total} passed
+      </p>
+      {failed.length > 0 && (
+        <ul className="space-y-0.5">
+          {failed.map(check => (
+            <li key={check.position} className="text-error-700">
+              <span className="font-mono">{check.type}</span>
+              {repeats.length > 1 && (
+                <span>
+                  {' '}
+                  (repeat{check.repeats.length > 1 ? 's' : ''} {check.repeats.join(', ')} of{' '}
+                  {repeats.length})
+                </span>
+              )}
+              {check.detail && <span className="break-words">: {check.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <details>
+        <summary className="cursor-pointer">By repeat</summary>
+        <ol className="mt-1 space-y-1">
+          {repeats.map((repeat, index) => (
+            <li key={index}>
+              <span className="font-medium">#{index + 1}</span>
+              {repeat.assertions ? (
+                <ul className="ml-3">
+                  {repeat.assertions.map((verdict, position) => (
+                    <VerdictLine key={position} verdict={verdict} />
+                  ))}
+                </ul>
+              ) : (
+                <span className="text-muted-foreground"> did not run</span>
+              )}
+            </li>
+          ))}
+        </ol>
+      </details>
+    </div>
+  )
+}
+
 function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: StoredSuite }) {
   const definitions = new Map((suite?.cases ?? []).map(definition => [definition.id, definition]))
+  const anyAssertions = cases.some(result => result.assertions)
   return (
     <section aria-labelledby="eval-cases-heading" data-testid="eval-cases">
       <h3 id="eval-cases-heading" className="text-sm font-semibold text-foreground mb-2">
@@ -202,6 +309,7 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
               <th className="py-2 pr-3">Result</th>
               <th className="py-2 pr-3">Score</th>
               <th className="py-2 pr-3">Repeats</th>
+              {anyAssertions && <th className="py-2 pr-3">Assertions</th>}
               <th className="py-2 pr-3">Judge</th>
               <th className="py-2">Runs</th>
             </tr>
@@ -237,6 +345,18 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
                               <dd className="whitespace-pre-wrap">{definition.criteria}</dd>
                             </>
                           )}
+                          {definition.assert && definition.assert.length > 0 && (
+                            <>
+                              <dt className="font-medium">Assertions</dt>
+                              <dd>
+                                <ul className="font-mono break-words">
+                                  {definition.assert.map((check, position) => (
+                                    <li key={position}>{describeAssertion(check)}</li>
+                                  ))}
+                                </ul>
+                              </dd>
+                            </>
+                          )}
                         </dl>
                       </details>
                     )}
@@ -250,7 +370,13 @@ function SuiteCases({ cases, suite }: { cases: SuiteCaseResult[]; suite?: Stored
                   <td className="py-2 pr-3 font-mono text-xs text-muted-foreground">
                     {result.scores.map(formatScore).join(' · ') || '—'}
                   </td>
+                  {anyAssertions && (
+                    <td className="py-2 pr-3 text-xs max-w-md">
+                      <Assertions result={result} />
+                    </td>
+                  )}
                   <td className="py-2 pr-3 text-xs text-muted-foreground max-w-md">
+                    {result.judged === false && <p>Not judged: scored by its assertions.</p>}
                     {problem && <p className="text-error-700">{problem}</p>}
                     {result.reasoning && <p className="whitespace-pre-wrap">{result.reasoning}</p>}
                   </td>
