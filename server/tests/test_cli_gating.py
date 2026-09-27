@@ -218,3 +218,17 @@ class TestJUnit:
         _assert_common_schema(root)
         [case] = root.findall("testsuite/testcase")
         assert list(case) == []
+
+
+def test_an_unset_min_pass_rate_is_not_sent_so_older_stacks_accept_the_suite():
+    from nimbus.evals.schemas import Suite
+
+    base = {"run_config": {"model_id": "m"}, "cases": [{"id": "c1", "input": "hi"}]}
+    unset = Suite.model_validate(base)
+    assert "min_pass_rate" not in unset.model_dump(mode="json")
+    assert "min_pass_rate" not in unset.model_dump()
+    # What an older server would do with it: forbid-extra validation passes.
+    assert Suite.model_validate(unset.model_dump(mode="json")) == unset
+
+    gated = Suite.model_validate({**base, "min_pass_rate": 0.9})
+    assert gated.model_dump(mode="json")["min_pass_rate"] == 0.9

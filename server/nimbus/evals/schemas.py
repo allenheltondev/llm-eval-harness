@@ -5,7 +5,14 @@ from __future__ import annotations
 from collections import Counter
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import BadRequestError
@@ -135,6 +142,19 @@ class Suite(BaseModel):
     #: The fraction of cases (0-1) that must pass for ``nimbus eval --gate`` to
     #: succeed. Unset means every case. Read by the CLI's gate, not the engine.
     min_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_min_pass_rate(self, handler: SerializerFunctionWrapHandler) -> dict:
+        """Leave ``min_pass_rate`` out when it is unset.
+
+        ``Suite`` forbids unknown fields, and the CLI sends suites to stacks
+        that may run older server code. An unset gate setting is the old
+        behaviour, so not sending it keeps those stacks accepting the suite.
+        """
+        data = handler(self)
+        if isinstance(data, dict) and data.get("min_pass_rate") is None:
+            data.pop("min_pass_rate", None)
+        return data
 
     @model_validator(mode="after")
     def _cases_are_distinct_and_bounded(self) -> Suite:
