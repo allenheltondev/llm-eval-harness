@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { HealthResponse, ModelInfo, ModelProviders } from '../../../api'
 
 /**
@@ -91,19 +91,37 @@ beforeEach(() => {
 })
 
 describe('DeterminismLauncher', () => {
-  it('disables Start until the workbench config is valid and shows a hint', async () => {
+  it('picks the model and prompts right in the launcher', async () => {
+    render(<DeterminismLauncher />)
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
+    const start = screen.getByRole('button', { name: 'Start evaluation' })
+    expect(start).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Model to evaluate'), {
+      target: { value: MODELS[0].model_id }
+    })
+    fireEvent.change(screen.getByLabelText('System prompt'), { target: { value: 'Be terse.' } })
+    fireEvent.change(screen.getByLabelText('User prompt'), {
+      target: { value: 'Summarise this.' }
+    })
+
+    expect(start).toBeEnabled()
+    // The Workbench's run config, not a copy: both tabs see the same values.
+    expect(useRunConfigStore.getState()).toMatchObject({
+      model_id: MODELS[0].model_id,
+      provider: MODELS[0].source,
+      system_prompt: 'Be terse.',
+      user_prompt: 'Summarise this.'
+    })
+  })
+
+  it('shows what the Workbench already has', async () => {
+    useRunConfigStore.setState({ model_id: MODELS[0].model_id, user_prompt: 'From the Workbench' })
     render(<DeterminismLauncher />)
     await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
 
-    expect(
-      screen.getByText(/Set a model and a user prompt in the Workbench tab/i)
-    ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Start evaluation' })).toBeDisabled()
-
-    act(() =>
-      useRunConfigStore.setState({ model_id: MODELS[0].model_id, user_prompt: 'Summarise this.' })
-    )
-
+    expect(screen.getByLabelText('Model to evaluate')).toHaveValue(MODELS[0].model_id)
+    expect(screen.getByLabelText('User prompt')).toHaveValue('From the Workbench')
     expect(screen.getByRole('button', { name: 'Start evaluation' })).toBeEnabled()
   })
 

@@ -268,4 +268,88 @@ describe('ModelPanel', () => {
       'Not shown: OpenAI (not configured), Ollama (local) (not configured)'
     )
   })
+
+  it('keeps a persisted model id the catalog does not list visible and editable', () => {
+    // Typed by hand while the catalog was down, persisted, and the catalog has
+    // since recovered with other models: the select must not fall back to its
+    // placeholder while Start would still send the hidden id.
+    useRunConfigStore.setState({ model_id: 'my.custom-model', provider: 'anthropic' })
+    useModelStore.setState({
+      models: MODELS,
+      modelsLoaded: true,
+      modelProviders: ALL_CONFIGURED
+    })
+
+    render(<ModelPanel />)
+
+    const select = screen.getByRole('combobox', { name: 'Model' })
+    expect(select).toHaveValue('my.custom-model')
+    expect(
+      within(select).getByRole('option', { name: 'my.custom-model (entered manually)' })
+    ).toBeInTheDocument()
+    expect(screen.getByText(/is not in the model list/)).toHaveTextContent(
+      'my.custom-model is not in the model list; it runs as entered, with the provider below.'
+    )
+    expect(screen.getByLabelText('Enter model id manually')).toHaveValue('my.custom-model')
+    expect(screen.getByLabelText('Provider')).toHaveValue('anthropic')
+
+    // Picking a listed model replaces it, and the manual row goes away.
+    fireEvent.change(select, { target: { value: 'amazon.nova-pro-v1:0' } })
+    expect(useRunConfigStore.getState()).toMatchObject({
+      model_id: 'amazon.nova-pro-v1:0',
+      provider: 'bedrock'
+    })
+    expect(screen.queryByLabelText('Enter model id manually')).not.toBeInTheDocument()
+    expect(within(select).queryByRole('option', { name: /entered manually/ })).toBeNull()
+  })
+
+  it('does not call a persisted model unlisted while the catalog is still loading', () => {
+    // A valid catalog model, persisted from last time, with the fetch in flight:
+    // `models` is still empty, but nothing is known to be missing yet.
+    useRunConfigStore.setState({ model_id: 'amazon.nova-pro-v1:0', provider: 'bedrock' })
+    useModelStore.setState({ models: [], modelsLoading: true, modelsLoaded: false })
+
+    const { rerender } = render(<ModelPanel />)
+
+    const select = screen.getByRole('combobox', { name: 'Model' })
+    expect(within(select).queryByRole('option', { name: /entered manually/ })).toBeNull()
+    expect(screen.queryByText(/is not in the model list/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Enter model id manually')).not.toBeInTheDocument()
+
+    // The catalog arrives with that model: it is simply selected.
+    useModelStore.setState({
+      models: MODELS,
+      modelsLoading: false,
+      modelsLoaded: true,
+      modelProviders: ALL_CONFIGURED
+    })
+    rerender(<ModelPanel />)
+    expect(select).toHaveValue('amazon.nova-pro-v1:0')
+    expect(screen.queryByText(/is not in the model list/)).not.toBeInTheDocument()
+  })
+
+  it('shows an unlisted persisted id alongside the error when the catalog fails', () => {
+    useRunConfigStore.setState({ model_id: 'my.custom-model', provider: 'openai' })
+    useModelStore.setState({
+      models: [],
+      modelsLoading: false,
+      modelsLoaded: false,
+      modelsError: { message: 'boom', code: 'upstream_error' }
+    })
+
+    render(<ModelPanel />)
+
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('my.custom-model')
+    expect(screen.getByText(/Could not load models/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Enter model id manually')).toHaveValue('my.custom-model')
+  })
+
+  it('does not offer the manual row while the catalog is still loading', () => {
+    useModelStore.setState({ models: [], modelsLoading: true })
+
+    render(<ModelPanel />)
+
+    expect(screen.queryByLabelText('Enter model id manually')).not.toBeInTheDocument()
+    expect(screen.queryByText(/No models available/)).not.toBeInTheDocument()
+  })
 })

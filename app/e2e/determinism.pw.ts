@@ -1,26 +1,25 @@
 import { expect, test } from '@playwright/test'
-import { configureWorkbench, gotoTab } from './helpers'
+import { gotoTab } from './helpers'
 
 const MODEL_ID = 'fake.model-v1-det'
+const USER_PROMPT = 'Say hello in exactly one sentence.'
 
 /**
- * Configures a run in the Workbench, launches a 3-run determinism evaluation
- * from the Evals tab against the fake model + fake judge, and checks the
- * progress, the finished result, and that History gained the 3 underlying
- * runs (a model id unique to this spec keeps the count exact).
+ * Picks the model and prompt in the Evals tab itself, launches a 3-run
+ * determinism evaluation against the fake model + fake judge, and checks the
+ * progress, the finished result, that History gained the 3 underlying runs (a
+ * model id unique to this spec keeps the count exact), and that the Workbench
+ * shows the same model and prompt -- the launcher edits the shared run config.
  */
 test('runs a determinism evaluation to completion and records its runs', async ({ page }) => {
   await page.goto('/')
-
-  await configureWorkbench(page, {
-    modelId: MODEL_ID,
-    userPrompt: 'Say hello in exactly one sentence.'
-  })
-
   await gotoTab(page, 'Evals')
 
-  await expect(page.getByTestId('workbench-config-summary')).toBeVisible()
-  await expect(page.getByTestId('workbench-config-summary')).toContainText(MODEL_ID)
+  // `/models` has no providers in this environment, so the picker offers its
+  // manual-entry fallback -- the same one the Workbench shows.
+  const launcher = page.getByTestId('evaluated-run-config')
+  await launcher.getByLabel('Enter model id manually').fill(MODEL_ID)
+  await launcher.getByLabel('User prompt').fill(USER_PROMPT)
 
   await page.getByLabel(/Number of runs/).fill('3')
   // Grader model defaults to a non-empty id (`amazon.nova-pro-v1:0`) from
@@ -50,4 +49,8 @@ test('runs a determinism evaluation to completion and records its runs', async (
   await gotoTab(page, 'History')
   await page.getByTestId('history-filter-model').fill(MODEL_ID)
   await expect(page.getByTestId('history-row').filter({ hasText: MODEL_ID })).toHaveCount(3)
+
+  await gotoTab(page, 'Workbench')
+  await expect(page.getByLabel('Enter model id manually')).toHaveValue(MODEL_ID)
+  await expect(page.getByLabel('User prompt')).toHaveValue(USER_PROMPT)
 })
