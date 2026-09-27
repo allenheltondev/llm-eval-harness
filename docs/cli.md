@@ -145,6 +145,7 @@ usage error rather than sent.
 | `-p`, `--prompt` | The user prompt; `-` or omitted reads stdin. |
 | `-s`, `--system` / `--system-file` | The system prompt, inline or from a file. |
 | `--toolset` | A toolset from `nimbus tools`. |
+| `--mcp-server` | A saved MCP server's id from `nimbus mcp list` (repeatable, at most 5). |
 | `--max-tool-iterations` | Cap on agent loop turns (default 10). |
 | `--temperature`, `--top-p`, `--max-tokens` | Sampling knobs. |
 | `--guardrail-id`, `--guardrail-version` | Apply a Bedrock guardrail (Bedrock only). |
@@ -277,6 +278,28 @@ The `PROVIDER` column is the value to pass back as `--provider`.
 
 `tools` lists the registered toolsets and the tool names each exposes to the
 model — the valid values for `--toolset`.
+
+## `mcp`
+
+Remote MCP servers (streamable HTTP) whose tools a run may call. Like `tools`,
+it acts on the signed-in stack — through its API, so the stack encrypts the
+headers — or on this machine with `--local`.
+
+```bash
+nimbus mcp add GitHub https://mcp.example.com/mcp --header Authorization   # prompts, no echo
+nimbus mcp add Docs https://docs.example.com/mcp --header 'X-Api-Key: k'  # inline (lands in shell history)
+nimbus mcp list                                  # ID, NAME, URL, HEADERS (names only)
+nimbus mcp test <id>                             # connect and list its tools; exit 1 if it cannot
+nimbus mcp update <id> --url https://... --header 'X-Api-Key: new' --remove-header Old
+nimbus mcp remove <id>
+nimbus run -m <model> -p '...' --mcp-server <id> # use it on a run (or eval, or a suite)
+```
+
+`add` prints the new id alone on stdout, so `id=$(nimbus mcp add ...)` works.
+Header values are never printed; `update` keeps every header it is not told to
+set or remove. Tools are named with a slug of the server's name as a prefix
+(`github_search_issues`). On a deployed stack, only public `https` URLs are
+accepted.
 
 ## `runs`, `show`
 

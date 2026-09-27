@@ -940,3 +940,77 @@ def test_the_documented_example_suite_is_valid(cli):
         "late-return",
         "off-topic",
     ]
+
+
+# --------------------------------------------------------------------------- #
+# mcp
+# --------------------------------------------------------------------------- #
+
+
+class TestMcp:
+    def test_add_list_update_remove_locally(self, cli, monkeypatch):
+        import getpass
+
+        prompts = []
+        monkeypatch.setattr(
+            getpass, "getpass", lambda prompt, stream=None: prompts.append(prompt) or "typed"
+        )
+        added = cli(
+            "mcp", "add", "GitHub", "http://localhost:9/mcp",
+            "--header", "Authorization: Bearer inline", "--header", "X-Team",
+        )
+        assert added.code == 0, added.err
+        server_id = added.out.strip()
+        assert prompts == ["X-Team: "]
+        assert "Bearer inline" not in added.out + added.err and "typed" not in added.err
+
+        from nimbus.mcp.store import SqliteMcpStore
+
+        assert SqliteMcpStore().get(server_id).headers == {
+            "Authorization": "Bearer inline",
+            "X-Team": "typed",
+        }
+
+        table = cli("mcp", "list")
+        assert table.out.splitlines()[0].split() == ["ID", "NAME", "URL", "HEADERS"]
+        assert server_id in table.out and "Authorization, X-Team" in table.out
+
+        updated = cli(
+            "mcp", "update", server_id, "--url", "http://localhost:10/mcp",
+            "--header", "X-New: 1", "--remove-header", "X-Team",
+        )
+        assert updated.code == 0, updated.err
+        assert SqliteMcpStore().get(server_id).headers == {
+            "Authorization": "Bearer inline",
+            "X-New": "1",
+        }
+
+        assert cli("mcp", "remove", server_id).code == 0
+        empty = cli("mcp", "list")
+        assert empty.out == "" and "no MCP servers saved" in empty.err
+        assert cli("mcp", "list", "--json").json() == {"servers": []}
+
+    def test_test_lists_tools_or_fails(self, cli):
+        from tests.mcp_http_server import API_KEY, running_mcp_server
+
+        with running_mcp_server() as url:
+            good = cli("mcp", "add", "T", url, "--header", f"X-Api-Key: {API_KEY}").out.strip()
+            bad = cli("mcp", "add", "T2", url).out.strip()
+            ok = cli("mcp", "test", good)
+            as_json = cli("mcp", "test", good, "--json").json()
+            refused = cli("mcp", "test", bad)
+        assert ok.code == 0 and "connected: 2 tool(s)" in ok.err
+        assert ok.out.splitlines()[0].split() == ["TOOL", "DESCRIPTION"]
+        assert "Echo the text back, reversed." in ok.out
+        assert as_json["ok"] is True
+        assert refused.code == 1 and "401" in refused.err
+
+    def test_bad_invocations(self, cli):
+        assert cli("mcp", "add", "x", "ftp://nope").code == 1
+        assert cli("mcp", "add", "x", "http://localhost/mcp", "--header", ": v").code == 1
+        saved = cli("mcp", "add", "x", "http://localhost/mcp", "--json").json()
+        nothing = cli("mcp", "update", saved["id"])
+        assert nothing.code == 1 and "nothing to change" in nothing.err
+        both = cli("mcp", "update", saved["id"], "--header", "A: 1", "--remove-header", "A")
+        assert both.code == 1 and "both set and removed" in both.err
+        assert cli("mcp", "test", "missing").code == 1

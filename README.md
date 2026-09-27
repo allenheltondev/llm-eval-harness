@@ -110,6 +110,8 @@ nimbus init && nimbus eval --suite suite.yaml    # a starter test suite, then ru
 nimbus eval --run <id> --run <id>                # grade runs you already have
 nimbus runs                                      # history, newest first
 nimbus show <id>                                 # one run or evaluation, as JSON
+nimbus mcp add GitHub https://host/mcp --header Authorization  # save a remote MCP server
+nimbus run -m <model-id> -p '...' --mcp-server <id>            #   and let a run use its tools
 nimbus serve                                     # the HTTP API the web UI talks to
 nimbus login --url https://<your-stack>          # from now on, commands run on that stack
 nimbus eval --suite suite.yaml                   #   so this shows in its web UI
@@ -160,8 +162,9 @@ _REGISTRY["support"] = [support.escalate_ticket]
 ### Remote MCP servers
 
 A run can also use the tools of remote [MCP](https://modelcontextprotocol.io) servers (streamable
-HTTP), alongside or instead of a toolset. Save a server once on the **Tools** page (or
-`POST /api/v1/mcp-servers` with `name`, `url` and optional `headers`), then tick it in the
+HTTP), alongside or instead of a toolset. Save a server once on the **Tools** page, with `nimbus mcp add` (see
+[docs/cli.md](docs/cli.md#mcp)), or with `POST /api/v1/mcp-servers` (`name`, `url`, optional
+`headers`), then tick it in the
 Workbench or the Evals launcher — or pass `"mcp_servers": ["<id>", ...]` on a run or an
 evaluation's `run_config` (at most 5), or `--mcp-server <id>` on the CLI. Each server's tools are
 prefixed with a slug of its name (`github_search_issues`) so two servers can both offer `search`.
