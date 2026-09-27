@@ -533,6 +533,168 @@ class TestRemoteEval:
         assert stored.kind == "suite"
         assert stored.config["suite"]["name"] == "smoke"
 
+
+REMOTE_SUITE = (
+    "name: smoke\nrun_config:\n  model_id: m1\ncases:\n"
+    "  - id: a\n    input: hi\n  - id: b\n    input: yo\n"
+)
+
+
+class TestRemoteGating:
+    """The same gates, judged on the result the stack serves."""
+
+    @pytest.fixture
+    def suite(self, tmp_path):
+        def write(extra: str = "") -> str:
+            path = tmp_path / "cases.yaml"
+            path.write_text(REMOTE_SUITE + extra, encoding="utf-8")
+            return str(path)
+
+        return write
+
+    @pytest.mark.parametrize(
+        ("extra", "flags", "code"),
+        [
+            ("", [], 0),
+            ("", ["--gate"], 0),
+            ("", ["--fail-on-case-failure"], 0),
+            ("", ["--fail-under", "95"], 0),
+            ("", ["--fail-under", "96"], 3),
+            ("pass_threshold: 0.99\n", [], 0),
+            ("pass_threshold: 0.99\n", ["--gate"], 3),
+            ("pass_threshold: 0.99\n", ["--fail-on-case-failure"], 3),
+            ("pass_threshold: 0.99\nmin_pass_rate: 0\n", ["--gate"], 0),
+            ("pass_threshold: 0.99\n", ["--fail-under", "90"], 0),
+        ],
+    )
+    def test_suite_exit_codes_on_the_stack(self, harness, suite, extra, flags, code):
+        sign_in(harness)
+
+        result = run_cli("eval", "--remote", "--suite", suite(extra), *flags)
+
+        assert result.code == code, result.err
+        assert json.loads(result.out)["status"] == "completed"
+        [stored] = stored_evaluations()  # it ran on the stack, not here
+        assert stored.status == "completed"
+
+    @pytest.mark.parametrize(("min_pass_rate", "code"), [("0", 0), ("1", 3)])
+    def test_min_pass_rate_never_reaches_a_stack_that_predates_it(
+        self, harness, suite, app, wired, min_pass_rate, code
+    ):
+        """A stack on older server code forbids ``suite.min_pass_rate``.
+
+        The gate is the CLI's own, so the field is never sent -- and the gate
+        still applies it, judged on the result that comes back.
+        """
+        sent: list[dict] = []
+
+        async def old_stack(scope, receive, send):
+            if scope["type"] == "http" and scope["method"] == "POST" and (
+                scope["path"] == "/api/v1/evaluations"
+            ):
+                chunks, more = [], True
+                while more:
+                    message = await receive()
+                    chunks.append(message.get("body", b""))
+                    more = message.get("more_body", False)
+                body = b"".join(chunks)
+                payload = json.loads(body)
+                sent.append(payload)
+                if "min_pass_rate" in (payload.get("suite") or {}):
+                    error = {
+                        "error": {
+                            "code": "validation_error",
+                            "message": "suite.min_pass_rate: Extra inputs are not permitted",
+                        }
+                    }
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 422,
+                            "headers": [(b"content-type", b"application/json")],
+                        }
+                    )
+                    await send({"type": "http.response.body", "body": json.dumps(error).encode()})
+                    return
+                replayed = False
+
+                async def replay():
+                    nonlocal replayed
+                    if not replayed:
+                        replayed = True
+                        return {"type": "http.request", "body": body, "more_body": False}
+                    return await receive()
+
+                await app(scope, replay, send)
+                return
+            await app(scope, receive, send)
+
+        wired._app = httpx.ASGITransport(app=old_stack)
+        sign_in(harness)
+
+        extra = f"pass_threshold: 0.99\nmin_pass_rate: {min_pass_rate}\n"
+        result = run_cli("eval", "--remote", "--suite", suite(extra), "--gate")
+
+        assert result.code == code, result.err
+        assert sent and "min_pass_rate" not in sent[0]["suite"]
+        [stored] = stored_evaluations()
+        assert stored.status == "completed"
+
+    @pytest.mark.parametrize(("bar", "code"), [("95", 0), ("96", 3)])
+    def test_fail_under_gates_a_determinism_experiment_on_the_stack(self, harness, bar, code):
+        sign_in(harness)
+
+        result = run_cli("eval", "--remote", "-m", "m1", "-p", "hi", "-n", "2", "--fail-under", bar)
+
+        assert result.code == code, result.err
+
+    def test_a_failed_evaluation_on_the_stack_is_one_not_three(self, harness, models, suite):
+        sign_in(harness)
+        models.default = [RuntimeError("provider down")]
+
+        result = run_cli("eval", "--remote", "--suite", suite(), "--gate", "--fail-under", "99")
+
+        # No run answered, so the evaluation itself errored: there is no result
+        # to hold to a bar, and that is the harness's failure, not the gate's.
+        assert result.code == 1, result.err
+        assert json.loads(result.out)["status"] == "error"
+        assert "gate" not in result.err
+
+    def test_junit_report_from_the_stack(self, harness, suite, tmp_path):
+        from xml.etree import ElementTree as ET
+
+        sign_in(harness)
+        report = tmp_path / "junit.xml"
+
+        result = run_cli(
+            "eval", "--remote", "--suite", suite("pass_threshold: 0.99\n"),
+            "--junit", str(report), "--fail-on-case-failure",
+        )
+
+        assert result.code == 3, result.err
+        suite_element = ET.parse(report).getroot().find("testsuite")
+        assert suite_element.get("name") == "smoke"
+        assert [case.get("name") for case in suite_element.findall("testcase")] == ["a", "b"]
+        assert suite_element.get("failures") == "2"
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ["--gate"],
+            ["--fail-on-case-failure"],
+            ["--junit", "r.xml"],
+            ["--fail-under", "80"],
+        ],
+    )
+    def test_detach_with_a_gate_is_a_usage_error(self, harness, suite, flags):
+        sign_in(harness)
+
+        result = run_cli("eval", "--remote", "--detach", "--suite", suite(), *flags)
+
+        assert result.code == 2
+        assert "--detach returns before there is a result" in result.err
+        assert stored_evaluations() == []
+
     def test_an_expired_token_is_refreshed_first_and_saved(self, harness, cognito):
         sign_in(harness, expires_at=time.time() - 5)
         harness.valid_tokens.add("id-1")

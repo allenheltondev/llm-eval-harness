@@ -49,6 +49,7 @@ cases:
 | `cases[].judge` | no | `false` skips the LLM judge for this case: it is scored from its `assert` checks alone. Default `true`. |
 | `repeats` | no | Runs per case, 1–10 (default 1). A case's score is the mean across its repeats, so more than one catches a case that passes only some of the time. |
 | `pass_threshold` | no | A case passes when its score (0–1) reaches this (default 0.7). |
+| `min_pass_rate` | no | The fraction of cases (0–1) that must pass for `nimbus eval --gate` to exit `0`. Unset means every case. Ignored without `--gate`. |
 | `rubric` | no | How every case is judged. Defaults to the built-in suite rubric. |
 | `grader` | no | The judge: `model_id`, `provider`, `system_prompt` — same as any evaluation. |
 
@@ -347,9 +348,18 @@ the field at all, so their wire format is unchanged.
 
 A suite with failing cases exits **`0`**, like an evaluation that earns an F:
 the evaluation worked, and it is telling you the answers are wrong. `1` still
-means the harness itself failed. Failing a CI job below a pass rate is not built
-yet — it would be an explicit option (`--fail-under 0.9`), not a change to what
-the existing exit codes mean.
+means the harness itself failed.
+
+To fail a CI job on the answers, ask for it: `--gate` exits **`3`** when the
+pass rate is below the file's `min_pass_rate` (every case, when unset),
+`--fail-on-case-failure` when any case does not pass, and `--fail-under SCORE`
+when the overall score (0–100) is below `SCORE`. `--junit PATH` writes a JUnit
+report with one testcase per case. See [the CLI's exit codes](cli.md#exit-codes)
+for the details and a GitHub Actions job.
+
+```bash
+nimbus eval --suite cases.yaml --gate --junit evals-junit.xml
+```
 
 ## Cost and budgets
 
@@ -450,6 +460,5 @@ carries `truncated: true`. A text cut short ends in `…`.
   the Evals tab with its grade, score and pass summary (“3/4 cases passed;
   failed: …”), and its page has the per-case table — verdicts, scores,
   assertion results and runs — but launching one is CLI and API only.
-- **`--fail-under`** for CI, as above.
 - **Comparing two runs of a suite** — which cases changed between yesterday's
   prompt and today's.

@@ -28,7 +28,7 @@ from typing import Annotated, Any, TextIO
 from pydantic import Field, TypeAdapter, ValidationError
 
 from nimbus.awscat.catalog import ModelCatalog
-from nimbus.cli import diagnose, remote, render
+from nimbus.cli import diagnose, gating, remote, render
 from nimbus.config import Settings
 from nimbus.engine.events import (
     ErrorEvent,
@@ -60,6 +60,8 @@ EXIT_OK = 0
 #: The run or evaluation settled as ``error``. A *grade* of F is still ``0``:
 #: the harness did its job. This code means the harness could not.
 EXIT_FAILED = 1
+# (``3`` -- ran, but missed the bar a gate flag set -- is
+# :data:`nimbus.cli.gating.EXIT_GATE_FAILED`; without a gate flag an F is ``0``.)
 #: Cancelled, by Ctrl-C or otherwise. Matches the shell's 128+SIGINT.
 EXIT_CANCELLED = 130
 
@@ -383,7 +385,49 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
             _write(err, line + "\n")
         _write(out, render.dumps(terminal) + "\n")
 
-    return _EXIT_FOR_STATUS.get(str(terminal.get("status")), EXIT_FAILED)
+    return _settle(args, request, terminal, err)
+
+
+def _gate_for(args: argparse.Namespace, request: EvaluationRequest) -> gating.Gate:
+    """The bar this invocation set. ``--gate`` brings in the suite file's own."""
+    min_pass_rate = None
+    if getattr(args, "gate", False) and request.suite is not None:
+        min_pass_rate = 1.0 if request.suite.min_pass_rate is None else request.suite.min_pass_rate
+    return gating.Gate(
+        fail_under=getattr(args, "fail_under", None),
+        fail_on_case_failure=getattr(args, "fail_on_case_failure", False),
+        min_pass_rate=min_pass_rate,
+    )
+
+
+def _settle(
+    args: argparse.Namespace, request: EvaluationRequest, terminal: dict[str, Any], err: TextIO
+) -> int:
+    """The exit code for a finished evaluation, after the JUnit report and the gate.
+
+    The harness's own verdict comes first: an evaluation that errored is ``1``
+    and a cancelled one ``130`` whatever the gate says, because there is no
+    result to hold to a bar. Only a completed one can be ``3``.
+    """
+    junit = getattr(args, "junit", None)
+    if junit is not None:
+        try:
+            junit.write_text(gating.junit_xml(terminal), encoding="utf-8")
+        except OSError as exc:
+            raise AppError(f"--junit {junit}: {exc.strerror or exc}") from None
+        _note(err, f"| JUnit report written to {junit}")
+    status = str(terminal.get("status"))
+    code = _EXIT_FOR_STATUS.get(status, EXIT_FAILED)
+    gate = _gate_for(args, request)
+    if code != EXIT_OK or not gate.active:
+        return code
+    reasons = gating.check(gate, terminal.get("result"))
+    if reasons:
+        for reason in reasons:
+            _note(err, f"| gate failed: {reason}")
+        return gating.EXIT_GATE_FAILED
+    _note(err, "| gate passed")
+    return EXIT_OK
 
 
 # --------------------------------------------------------------------------- #
@@ -409,6 +453,20 @@ def _choose_lane(health: dict[str, Any], url: str) -> str:
     raise remote.RemoteError(f"{url} has no evaluation lane configured")
 
 
+def _remote_payload(request: EvaluationRequest) -> dict[str, Any]:
+    """The evaluation request as sent to a stack: without CLI-only settings.
+
+    ``min_pass_rate`` is read by the CLI's own gate (on the local ``request``,
+    after the result comes back) and never by the server. ``Suite`` forbids
+    unknown fields, so a stack running older server code would reject a
+    suite that carried it; it is always left out of what is sent.
+    """
+    body = request.model_dump(mode="json")
+    if isinstance(body.get("suite"), dict):
+        body["suite"].pop("min_pass_rate", None)
+    return body
+
+
 async def evaluate_remote(
     args: argparse.Namespace, request: EvaluationRequest, out: TextIO, err: TextIO
 ) -> int:
@@ -428,7 +486,7 @@ async def evaluate_remote(
     async with remote.http_client() as http:
         api = remote.RemoteApi(http, login)
         execution = _choose_lane(await api.health(), login.url)
-        body = request.model_copy(update={"execution": execution}).model_dump(mode="json")
+        body = _remote_payload(request.model_copy(update={"execution": execution}))
         try:
             created = await api.submit(body)
         except remote.RemoteNotFoundError as exc:
@@ -475,7 +533,7 @@ async def evaluate_remote(
             _write(err, line + "\n")
         _write(out, render.dumps(terminal) + "\n")
         _note(err, f"| {link}")
-    return _EXIT_FOR_STATUS.get(str(terminal["status"]), EXIT_FAILED)
+    return _settle(args, request, terminal, err)
 
 
 def _prompt(err: TextIO, stdin: TextIO, label: str) -> str:

@@ -17,8 +17,10 @@ Conventions this file exists to enforce:
 * **``--json`` on every command.** Human output is for humans; ``--json`` is
   the contract for scripts and for anything wrapping this as an MCP server.
 * **Exit codes mean something.** ``0`` finished, ``1`` the harness failed,
-  ``2`` the invocation was wrong, ``130`` cancelled. An ``F`` grade is ``0``:
-  the evaluation succeeded in telling you the answer is bad.
+  ``2`` the invocation was wrong, ``3`` an evaluation ran but missed the bar a
+  gate flag set (``--fail-under``, ``--fail-on-case-failure``, ``--gate``),
+  ``130`` cancelled. Without a gate flag an ``F`` grade is ``0``: the
+  evaluation succeeded in telling you the answer is bad.
 """
 
 from __future__ import annotations
@@ -178,6 +180,17 @@ def _run_options() -> argparse.ArgumentParser:
     return parent
 
 
+def _score(text: str) -> float:
+    """``--fail-under``'s value: a score on the same 0-100 scale results use."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not 0 <= value <= 100:
+        raise argparse.ArgumentTypeError(f"a score is 0-100, not {text}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The whole command tree."""
     output = _global_options()
@@ -272,6 +285,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--detach",
         action="store_true",
         help="on a stack: submit, print the evaluation's id and link, and return",
+    )
+    gating = evaluate.add_argument_group(
+        "CI gating", "exit 3 when the evaluation ran but did not meet the bar"
+    )
+    gating.add_argument(
+        "--fail-under",
+        type=_score,
+        metavar="SCORE",
+        help="exit 3 when the overall score (0-100) is below SCORE",
+    )
+    gating.add_argument(
+        "--fail-on-case-failure",
+        action="store_true",
+        help="suites: exit 3 when any case does not pass",
+    )
+    gating.add_argument(
+        "--gate",
+        action="store_true",
+        help=(
+            "suites: exit 3 when the pass rate is under the file's min_pass_rate "
+            "(every case, when it sets none); cases pass at the file's pass_threshold"
+        ),
+    )
+    gating.add_argument(
+        "--junit",
+        type=Path,
+        metavar="PATH",
+        help="suites: write a JUnit XML report, one testcase per case, to PATH",
     )
 
     subparsers.add_parser(
@@ -491,6 +532,27 @@ def _prepare_suite(args: argparse.Namespace) -> None:
         raise _suite_problem(args.suite, exc) from None
 
 
+def _check_gating(args: argparse.Namespace) -> None:
+    """Gate flags need a result to judge, and the suite-only ones need a suite."""
+    suite_only = [
+        flag
+        for flag, given in (
+            ("--fail-on-case-failure", args.fail_on_case_failure),
+            ("--gate", args.gate),
+            ("--junit", args.junit is not None),
+        )
+        if given
+    ]
+    if args.detach and (suite_only or args.fail_under is not None):
+        flags = suite_only + (["--fail-under"] if args.fail_under is not None else [])
+        raise UsageError(
+            f"--detach returns before there is a result, so {', '.join(flags)} "
+            "cannot judge it; drop --detach to wait for the evaluation"
+        )
+    if suite_only and args.suite is None:
+        raise UsageError(f"{', '.join(suite_only)} judges the cases of a suite: pass --suite FILE")
+
+
 def _check_required(args: argparse.Namespace) -> None:
     """The requirements that depend on other arguments."""
     if args.command == "run" and not args.model:
@@ -500,6 +562,8 @@ def _check_required(args: argparse.Namespace) -> None:
             "eval needs --model (to execute new runs), --run (to grade stored ones), "
             "or --suite (to run a test suite)"
         )
+    if args.command == "eval":
+        _check_gating(args)
     if (
         args.command == "eval"
         and args.suite is None  # a suite file may name the model; checked once merged
