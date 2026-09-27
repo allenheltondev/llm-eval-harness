@@ -469,3 +469,37 @@ async def test_the_cloud_worker_stops_at_the_budget_and_completes(
     assert result["skipped_runs"] == 2
     assert result["cost"]["runs_usd"] == 2.0
     assert len(json.loads(meta["run_ids"]["S"])) == 2
+
+
+async def test_many_tiny_runs_still_spend_the_budget(
+    initialized_db, one_at_a_time, tmp_path, monkeypatch
+):
+    """Runs below $0.0000005 each must add up, not round to $0 one by one.
+
+    At $0.30/M input and one token per run, each run costs $0.0000003 --
+    $0.000000 at six decimals. A $0.000001 budget buys three of them.
+    """
+    path = tmp_path / "tiny-prices.json"
+    path.write_text(json.dumps({"models": {FAKE_MODEL: {"input": 0.3, "output": 0}}}))
+    monkeypatch.setenv(pricing.PRICING_FILE_ENV, str(path))
+    pricing.reset_cache()
+
+    def tiny_run(_request: RunRequest) -> FakeModel:
+        return FakeModel(script=[Text("done")], usage_per_turn=(1, 0))
+
+    recorder = Recorder()
+    terminal = await evals_engine.execute_evaluation_with_seam(
+        determinism(10, max_cost_usd=0.000001),
+        recorder.emit,
+        RecordingStore("eval-tiny"),
+        recorder.cancelled,
+        deps=evals_engine.EvalDeps(
+            settings=Settings(), model_factory=tiny_run, judge_factory=judge
+        ),
+    )
+
+    result = terminal["result"]
+    assert result["budget_exhausted"] is True
+    assert len(terminal["run_ids"]) == 3
+    assert result["skipped_runs"] == 7
+    assert result["cost"]["runs_usd"] > 0  # reported, not rounded away

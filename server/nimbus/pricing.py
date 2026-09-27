@@ -389,4 +389,6 @@ def cost_usd(provider: str, model_id: str, usage: Mapping[str, Any] | None) -> f
         + cache_read * read_rate
         + cache_write * write_rate
     ) / _PER_TOKEN
-    return round(total, 6)
+    # Full precision on purpose: budgets add these up, and rounding each one
+    # first would let many tiny runs count as $0. Round only for display.
+    return total

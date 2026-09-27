@@ -158,9 +158,15 @@ def _error_text(error: Any) -> str:
 
 
 def usd(value: Any) -> str:
-    """An estimated cost for a human: ``~$0.0123``, or ``unknown`` when unpriced."""
+    """An estimated cost for a human: ``~$0.0123``, or ``unknown`` when unpriced.
+
+    A positive cost too small for four decimals reads ``<$0.0001``, never
+    ``$0.0000``: it was not free, and zero means something else.
+    """
     if not isinstance(value, int | float) or isinstance(value, bool):
         return "unknown"
+    if 0 < value < 0.0001:
+        return "<$0.0001"
     return f"~${value:.4f}" if value < 1 else f"~${value:,.2f}"
 
 

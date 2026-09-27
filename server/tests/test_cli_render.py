@@ -75,6 +75,11 @@ class TestRunProgressLine:
         event = MetricsEvent(input_tokens=10, output_tokens=5, cost_usd=0.01234)
         assert render.run_progress_line(event).endswith("cost=~$0.0123")
 
+    def test_a_tiny_positive_cost_is_not_shown_as_zero(self):
+        assert render.usd(0.0000014) == "<$0.0001"
+        assert render.usd(0.0001) == "~$0.0001"
+        assert render.usd(0) == "~$0.0000"
+
     def test_guardrail_trace_is_announced_without_dumping_the_assessment(self):
         event = GuardrailTraceEvent(assessment={"topicPolicy": {"topics": ["x"]}})
         assert render.run_progress_line(event) == "| guardrail assessment recorded"

@@ -184,9 +184,12 @@ def test_no_usage_costs_nothing_on_a_priced_model():
     assert pricing.cost_usd("bedrock", "amazon.nova-micro-v1:0", None) == 0.0
 
 
-def test_costs_are_rounded_to_a_millionth_of_a_dollar():
+def test_costs_keep_full_precision_for_budgets_to_add_up():
+    # 11 in + 7 out on Nova Micro is ~$0.0000014: rounding to a millionth
+    # here would lose a third of it, and much smaller runs would become $0.
     cost = pricing.cost_usd("bedrock", "amazon.nova-micro-v1:0", usage(11, 7))
-    assert cost == round((11 * 0.035 + 7 * 0.14) / MILLION, 6)
+    assert cost == pytest.approx((11 * 0.035 + 7 * 0.14) / MILLION, rel=1e-12)
+    assert cost != round(cost, 6)
 
 
 def test_every_built_in_price_is_sane():

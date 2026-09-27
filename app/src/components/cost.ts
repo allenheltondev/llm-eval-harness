@@ -10,10 +10,18 @@
 
 export const UNKNOWN_COST = 'unknown'
 
-/** `$0.0123` under a dollar, `$12.50` above it; `unknown` for `null`, `—` when absent. */
+/** Anything positive but under this reads `<$0.0001`, never `$0.0000`. */
+const SMALLEST_SHOWN = 0.0001
+
+/**
+ * `$0.0123` under a dollar, `$12.50` above it; `unknown` for `null`, `—` when
+ * absent. A positive cost too small for four decimals reads `<$0.0001`: it
+ * was not free, and `$0.0000` would say it was.
+ */
 export function formatUsd(value: unknown): string {
   if (value === null) return UNKNOWN_COST
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  if (value > 0 && value < SMALLEST_SHOWN) return '<$0.0001'
   if (value < 1) return `$${value.toFixed(4)}`
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }

@@ -12,6 +12,14 @@ describe('formatUsd', () => {
     expect(formatUsd(0)).toBe('$0.0000')
   })
 
+  it('never shows a tiny positive cost as $0.0000', () => {
+    // A few Nova Micro tokens: real spend, below four decimals.
+    expect(formatUsd(0.0000014)).toBe('<$0.0001')
+    expect(formatUsd(0.00004999)).toBe('<$0.0001')
+    expect(formatUsd(0.0001)).toBe('$0.0001')
+    expect(formatUsd(0)).toBe('$0.0000')
+  })
+
   it('shows cents from a dollar up, with separators', () => {
     expect(formatUsd(1)).toBe('$1.00')
     expect(formatUsd(1234.5)).toBe('$1,234.50')
