@@ -74,7 +74,7 @@ from nimbus.engine.model_factory import ModelFactory, build_model, classify_erro
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import AppError
-from nimbus.evals import budget, grader, jobs, rubrics
+from nimbus.evals import assertions, budget, grader, jobs, rubrics
 from nimbus.evals.events import (
     EvalCompleteEvent,
     EvalEvent,
@@ -503,6 +503,11 @@ MAX_CASE_REASONING_BYTES = 1_000
 #: :func:`_fit_suite_result` enforces it, so it holds for any judge output.
 MAX_RESULT_BYTES = 180_000
 
+#: Longest assertion ``detail`` kept, in serialized bytes. A detail is a
+#: one-line account of what a check saw, and there can be one per check per
+#: repeat -- up to ``schemas.MAX_SUITE_ASSERTION_CHECKS`` of them.
+MAX_ASSERTION_DETAIL_BYTES = 200
+
 #: Successively tighter limits for the free-text fields of a result that is
 #: still over budget. ``0`` drops the text: the ids, statuses and scores --
 #: what a suite is *for* -- always survive.
@@ -531,10 +536,11 @@ def _clip(text: str, limit: int = MAX_CASE_REASONING_BYTES) -> str:
 def _fit_suite_result(result: dict[str, Any]) -> dict[str, Any]:
     """Shrink the free text of ``result`` until it serializes within budget.
 
-    Judge reasoning, run error messages and the judge error are the only parts
-    whose size the harness does not control; everything else is bounded by the
-    suite limits. When any of it had to be cut further than the per-case
-    limit, ``truncated`` says so, so a reader knows the prose is partial.
+    Judge reasoning, assertion details, run error messages and the judge error
+    are the only parts whose size the harness does not control; everything else
+    is bounded by the suite limits (``MAX_SUITE_ASSERTION_CHECKS`` included).
+    When any of it had to be cut further than its per-item limit, ``truncated``
+    says so, so a reader knows the prose is partial.
     """
     if _serialized_size(result) <= MAX_RESULT_BYTES:
         return result
@@ -545,6 +551,9 @@ def _fit_suite_result(result: dict[str, Any]) -> dict[str, Any]:
         for case in result["cases"]:
             if case["reasoning"] is not None:
                 case["reasoning"] = _clip(case["reasoning"], limit) or None
+            for check in _assertion_verdicts(case):
+                if check["detail"] is not None:
+                    check["detail"] = _clip(check["detail"], limit) or None
         errors = [case["error"] for case in result["cases"]]
         errors += [failed["error"] for failed in result["failed_runs"]]
         for error in errors:
@@ -557,12 +566,35 @@ def _fit_suite_result(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _assertion_verdicts(case: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every ``{type, passed, detail}`` recorded on a case entry, across its repeats."""
+    return [
+        check for repeat in case.get("repeats") or [] for check in repeat.get("assertions") or []
+    ]
+
+
+def _check_repeat(outcome: RunOutcome, checks: list[Any]) -> list[dict[str, Any]]:
+    """Run a case's assertions against one repeat's answer, details clipped."""
+    verdicts = assertions.evaluate(
+        checks,
+        output=outcome.output,
+        tool_transcript=outcome.tool_transcript,
+        duration_ms=outcome.duration_ms,
+    )
+    for verdict in verdicts:
+        verdict["detail"] = _clip(verdict["detail"], MAX_ASSERTION_DETAIL_BYTES)
+    return verdicts
+
+
 def _suite_case_result(
     case_id: str,
     runs: list[RunOutcome],
     verdict: grader.CaseVerdict,
     judge_error: str | None,
     pass_threshold: float,
+    *,
+    checks: list[Any] | None = None,
+    judged: bool = True,
 ) -> dict[str, Any]:
     """One case's line in a suite result.
 
@@ -582,23 +614,58 @@ def _suite_case_result(
     ``error`` when no repeat produced an answer at all, and ``judge_error`` when
     any answer went unjudged: that evidence is missing, and it is neither a pass
     nor a zero. Only a fully scored case can pass.
+
+    **Assertions.** A case with ``checks`` (its ``assert:`` list) runs them
+    against every repeat that answered: each repeat gains ``assertions`` (one
+    ``{type, passed, detail}`` per check, in the case's order; ``None`` for a
+    repeat that did not run) and ``assertions_passed``. The case can then pass
+    only if every repeat that answered passed every check *and* its score meets
+    ``pass_threshold``; one failed check makes the case ``failed`` even when the
+    judge could not score it, because that much is already certain. A case with
+    ``judged=False`` never reaches the judge: each repeat that answered scores
+    ``1.0`` if all its checks passed and ``0.0`` if not. A case with checks also
+    carries ``judged`` and an ``assertions: {total, passed, failed}`` tally over
+    every check on every repeat; a case without checks carries none of these
+    fields, so its line is exactly what it was before assertions existed.
     """
+    checks = list(checks or [])
     ordered = sorted(runs, key=lambda outcome: outcome.index)
     succeeded = [outcome for outcome in ordered if outcome.succeeded]
-    scores: list[float | None] = [
-        0.0 if not outcome.succeeded else verdict.scores.get(outcome.index) for outcome in ordered
+    checked: list[list[dict[str, Any]] | None] = [
+        _check_repeat(outcome, checks) if checks and outcome.succeeded else None
+        for outcome in ordered
     ]
+    repeat_passed = [
+        None if found is None else all(check["passed"] for check in found) for found in checked
+    ]
+
+    def repeat_score(outcome: RunOutcome, passed: bool | None) -> float | None:
+        if not outcome.succeeded:
+            return 0.0
+        if not judged:
+            return 1.0 if passed else 0.0
+        return verdict.scores.get(outcome.index)
+
+    scores = [
+        repeat_score(outcome, passed)
+        for outcome, passed in zip(ordered, repeat_passed, strict=True)
+    ]
+    repeats: list[dict[str, Any]] = []
+    for outcome, score, found, passed in zip(ordered, scores, checked, repeat_passed, strict=True):
+        repeat: dict[str, Any] = {
+            "run_id": outcome.run_id,
+            "ran": outcome.succeeded,
+            "score": None if score is None else round(score, 4),
+        }
+        if checks:
+            repeat["assertions"] = found
+            repeat["assertions_passed"] = passed
+        repeats.append(repeat)
+
     entry: dict[str, Any] = {
         "id": case_id,
         "run_ids": [outcome.run_id for outcome in succeeded],
-        "repeats": [
-            {
-                "run_id": outcome.run_id,
-                "ran": outcome.succeeded,
-                "score": None if score is None else round(score, 4),
-            }
-            for outcome, score in zip(ordered, scores, strict=True)
-        ],
+        "repeats": repeats,
         "runs": {"total": len(runs), "succeeded": len(succeeded)},
         "passed": False,
         "score": None,
@@ -606,6 +673,16 @@ def _suite_case_result(
         "reasoning": None,
         "error": None,
     }
+    if checks:
+        every = [check for found in checked if found for check in found]
+        failures = sum(1 for check in every if not check["passed"])
+        entry["judged"] = judged
+        entry["assertions"] = {
+            "total": len(every),
+            "passed": len(every) - failures,
+            "failed": failures,
+        }
+    assertions_failed = any(passed is False for passed in repeat_passed)
     if verdict.reasons:
         entry["reasoning"] = _clip(" | ".join(verdict.reasons))
     if not succeeded:
@@ -616,17 +693,17 @@ def _suite_case_result(
         )
         return entry
     if any(value is None for value in scores):
-        entry["status"] = "judge_error"
         unjudged = [outcome.index for outcome in succeeded if outcome.index not in verdict.scores]
         message = next(
             (verdict.judge_errors[index] for index in unjudged if index in verdict.judge_errors),
             judge_error or "The judge returned no verdict",
         )
         entry["error"] = {"code": "judge_error", "message": message}
+        entry["status"] = "failed" if assertions_failed else "judge_error"
         return entry
 
     score = sum(value for value in scores if value is not None) / len(scores)
-    entry["passed"] = score >= pass_threshold
+    entry["passed"] = score >= pass_threshold and not assertions_failed
     entry["status"] = "passed" if entry["passed"] else "failed"
     entry["score"] = round(score, 4)
     return entry
@@ -672,6 +749,8 @@ def _build_suite_result(
             judged.verdicts.get(case.id, grader.CaseVerdict()),
             judged.error,
             suite.pass_threshold,
+            checks=case.assert_,
+            judged=case.judge,
         )
         for case in suite.cases
     ]
@@ -696,6 +775,7 @@ def _build_suite_result(
             "cases_failed": sum(1 for case in cases if case["status"] == "failed"),
             "cases_errored": sum(1 for case in cases if case["status"] in ("error", "judge_error")),
             "judge_overall_score": mean,
+            **_assertion_metrics(cases),
         },
         "run_ids": [outcome.run_id for outcome in outcomes if outcome.succeeded],
         "failed_runs": [
@@ -718,6 +798,46 @@ def _build_suite_result(
     if judged.error is not None:
         result["judge_error"] = judged.error
     return _fit_suite_result(result)
+
+
+def _assertion_metrics(cases: list[dict[str, Any]]) -> dict[str, int]:
+    """``assertions_total`` / ``assertions_failed``; nothing when no case asserts."""
+    tallies = [case["assertions"] for case in cases if "assertions" in case]
+    if not tallies:
+        return {}
+    return {
+        "assertions_total": sum(tally["total"] for tally in tallies),
+        "assertions_failed": sum(tally["failed"] for tally in tallies),
+    }
+
+
+async def _judge_suite(
+    successes: list[RunOutcome],
+    request: EvaluationRequest,
+    seam: _Seam,
+    *,
+    judge_factory: JudgeFactory | None = None,
+) -> grader.SuiteJudgement:
+    """Judge a suite's answers, leaving out the cases that opted out of the judge.
+
+    A suite in which every case opted out never builds a judge at all -- which
+    is also what lets an assertion-only suite run without judge credentials.
+    ``judge_factory`` defaults to the deps' own; the engine passes the metered
+    one so judge spend is counted (:mod:`nimbus.evals.budget`).
+    """
+    suite = request.suite
+    assert suite is not None
+    skipped = {case.id for case in suite.cases if not case.judge}
+    to_judge = [outcome for outcome in successes if outcome.case_id not in skipped]
+    if successes and not to_judge:
+        return grader.SuiteJudgement()
+    return await grader.judge_suite(
+        to_judge,
+        suite=suite,
+        rubric=request.rubric,
+        grader=request.grader,
+        judge_factory=judge_factory or seam.deps.judge_factory,
+    )
 
 
 def _terminal(
@@ -830,13 +950,8 @@ async def execute_evaluation_with_seam(
 
         seam.publish(GradingStartedEvent())
         if request.kind == "suite":
-            assert request.suite is not None
-            suite_judgement = await grader.judge_suite(
-                successes,
-                suite=request.suite,
-                rubric=request.rubric,
-                grader=request.grader,
-                judge_factory=judge_meter.factory,
+            suite_judgement = await _judge_suite(
+                successes, request, seam, judge_factory=judge_meter.factory
             )
             result = _build_suite_result(outcomes, suite_judgement, request)
         else:

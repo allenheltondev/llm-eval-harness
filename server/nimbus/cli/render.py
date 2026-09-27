@@ -236,14 +236,48 @@ def suite_result_lines(result: dict[str, Any]) -> list[str]:
         score = case.get("score")
         shown = f"{score:.2f}" if isinstance(score, int | float) else "  - "
         line = f"  {label}  {shown}  {case.get('id', '')}"
-        if case.get("status") == "failed" and case.get("reasoning"):
+        tally = case.get("assertions") or {}
+        failed_checks = _failed_assertion_lines(case)
+        if failed_checks:
+            line += f"  {tally.get('failed', len(failed_checks))} of {tally.get('total', '?')}"
+            line += " assertion checks failed"
+        elif case.get("status") == "failed" and case.get("reasoning"):
             line += f"  {_one_line(case['reasoning'], 120)}"
         elif case.get("error"):
             line += f"  {_one_line(_error_text(case['error']), 120)}"
         lines.append(_line(line))
+        lines.extend(failed_checks)
     if result.get("judge_error"):
         lines.append(_line(f"judge error: {_one_line(result['judge_error'], 160)}"))
     return lines + cost_lines(result)
+
+
+def _failed_assertion_lines(case: dict[str, Any]) -> list[str]:
+    """One line per assertion that failed on any repeat, under its case's line.
+
+    A check that failed on several repeats is one line naming them (``repeats
+    1, 3 of 3``) with the first failure's detail, rather than one line per
+    repeat: the same broken check ten times over is one fact.
+    """
+    repeats = case.get("repeats") or []
+    failures: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+    for number, repeat in enumerate(repeats, start=1):
+        for position, check in enumerate(repeat.get("assertions") or []):
+            if not check.get("passed"):
+                failures.setdefault(position, []).append((number, check))
+    lines = []
+    for position in sorted(failures):
+        hits = failures[position]
+        first = hits[0][1]
+        text = f"          x {first.get('type', '?')}"
+        if len(repeats) > 1:
+            numbers = ", ".join(str(number) for number, _check in hits)
+            noun = "repeat" if len(hits) == 1 else "repeats"
+            text += f" ({noun} {numbers} of {len(repeats)})"
+        if first.get("detail"):
+            text += f": {_one_line(first['detail'], 120)}"
+        lines.append(_line(text))
+    return lines
 
 
 def table(rows: list[list[str]], headers: list[str]) -> str:

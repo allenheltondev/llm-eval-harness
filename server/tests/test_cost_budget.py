@@ -503,3 +503,33 @@ async def test_many_tiny_runs_still_spend_the_budget(
     assert len(terminal["run_ids"]) == 3
     assert result["skipped_runs"] == 7
     assert result["cost"]["runs_usd"] > 0  # reported, not rounded away
+
+
+async def test_a_suites_judge_spend_is_counted_and_judge_free_cases_cost_nothing(
+    initialized_db,
+):
+    # Suite judging runs through _judge_suite (which skips judge: false cases);
+    # the metered judge factory must reach it, or judge_usd silently reads 0.
+    request = EvaluationRequest.model_validate(
+        {
+            "kind": "suite",
+            "suite": {
+                "run_config": {"model_id": FAKE_MODEL},
+                "cases": [
+                    {"id": "judged", "input": "q1"},
+                    {
+                        "id": "checked",
+                        "input": "q2",
+                        "judge": False,
+                        "assert": [{"contains": "done"}],
+                    },
+                ],
+            },
+            "grader": {"model_id": FAKE_JUDGE},
+        }
+    )
+    terminal, _ = await run(request)
+
+    cost = terminal["result"]["cost"]
+    assert cost["judge_usd"] == pytest.approx(JUDGE_CALL_USD)  # one judged case, one call
+    assert cost["runs_usd"] == pytest.approx(2.0)

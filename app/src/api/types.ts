@@ -379,6 +379,15 @@ export interface EvaluationStoredConfig {
   [key: string]: unknown
 }
 
+/**
+ * One deterministic check in a suite case's `assert:` list, in its canonical
+ * form (`evals/assertions.py`): `type` plus that type's own fields.
+ */
+export interface SuiteAssertion {
+  type: string
+  [field: string]: unknown
+}
+
 /** A test suite as stored on its evaluation (`docs/suites.md`). */
 export interface StoredSuite {
   name: string | null
@@ -388,9 +397,32 @@ export interface StoredSuite {
     input: string
     expected?: string | null
     criteria?: string | null
+    /** Absent when the case has no checks. */
+    assert?: SuiteAssertion[]
+    /** Present (and `false`) only when the case skips the judge. */
+    judge?: boolean
   }>
   repeats: number
   pass_threshold: number
+}
+
+/** How one check came out on one repeat. */
+export interface AssertionVerdict {
+  type: string
+  passed: boolean
+  /** What the check saw; `null` when dropped to fit the stored result. */
+  detail: string | null
+}
+
+/** One repeat of a suite case (`evals/engine.py::_suite_case_result`). */
+export interface SuiteCaseRepeat {
+  run_id: string | null
+  ran: boolean
+  score: number | null
+  /** Cases with checks only: one per check, in order; `null` if the repeat did not run. */
+  assertions?: AssertionVerdict[] | null
+  /** Cases with checks only: every check passed; `null` if the repeat did not run. */
+  assertions_passed?: boolean | null
 }
 
 /** How one suite case came out (`evals/engine.py::_suite_case_result`). */
@@ -410,8 +442,12 @@ export interface SuiteCaseResult {
    * One per repeat, in run order (aligned with `scores`): its run, if one was
    * recorded, and whether it answered. Absent on results stored before it existed.
    */
-  repeats?: Array<{ run_id: string | null; ran: boolean; score: number | null }>
+  repeats?: SuiteCaseRepeat[]
   runs: { total: number; succeeded: number }
+  /** Cases with checks only: `false` when the case skipped the judge. */
+  judged?: boolean
+  /** Cases with checks only: every check on every repeat that answered. */
+  assertions?: { total: number; passed: number; failed: number }
 }
 
 /** Local determinism metrics merged with the judge's metrics (`evals/metrics.py`). */
@@ -426,6 +462,9 @@ export interface EvaluationMetrics {
   judge_scores?: number[]
   judge_pass_rate?: number
   tool_consistency_judge_score?: number
+  /** Suites with checks only: assertion verdicts recorded, and how many failed. */
+  assertions_total?: number
+  assertions_failed?: number
   [key: string]: unknown
 }
 

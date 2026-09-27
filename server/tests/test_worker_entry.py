@@ -1101,3 +1101,47 @@ async def test_a_suite_runs_on_the_cloud_lane(real_engine, client, store_factory
     assert sorted(e["case_id"] for e in run_events) == ["first", "second"]
     # Each case's run was mirrored to its own RUN# item.
     assert len(json.loads(item["run_ids"]["S"])) == 2
+
+
+async def test_suite_assertions_run_on_the_cloud_lane(real_engine, client, store_factory):
+    """Assertions are part of the shared engine, so the worker checks them too."""
+    from nimbus.evals import cloud
+    from nimbus.evals.schemas import EvaluationRequest
+
+    real_engine()
+    request = EvaluationRequest.model_validate(
+        {
+            "kind": "suite",
+            "execution": "cloud",
+            "suite": {
+                "run_config": {"model_id": "fake.model"},
+                "cases": [
+                    {
+                        "id": "checked",
+                        "input": "one?",
+                        "judge": False,
+                        "assert": [{"equals": "done"}, {"max_tool_calls": 0}],
+                    },
+                    {"id": "wrong", "input": "two?", "assert": [{"regex": "^never$"}]},
+                ],
+            },
+        }
+    )
+    suite_request = json.loads(cloud.encode_payload(cloud.worker_payload(EVAL_ID, request)))[
+        "request"
+    ]
+    store = store_factory(EVAL_ID)
+    store.begin(suite_request)
+    store.mark_running()
+
+    status = await lambda_app.execute(EVAL_ID, suite_request, store, None)
+
+    assert status == "completed"
+    result = json.loads(meta(client)["result"]["S"])
+    checked, wrong = result["cases"]
+    assert checked["status"] == "passed"
+    assert checked["judged"] is False
+    assert [v["passed"] for v in checked["repeats"][0]["assertions"]] == [True, True]
+    assert wrong["status"] == "failed"
+    assert wrong["repeats"][0]["assertions"][0]["detail"] == 'no match for "/^never$/"'
+    assert result["metrics"]["assertions_failed"] == 1

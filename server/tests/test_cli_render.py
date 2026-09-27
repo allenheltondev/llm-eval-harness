@@ -355,3 +355,66 @@ def test_run_progress_names_the_case_when_there_is_one():
     assert render.eval_progress_line({"type": "run_started", "index": 3}) == (
         f"{render.MARKER} run 3 started"
     )
+
+
+def _checked(*verdicts: tuple[str, bool, str | None]) -> dict:
+    """One repeat's assertion verdicts."""
+    found = [
+        {"type": kind, "passed": passed, "detail": detail} for kind, passed, detail in verdicts
+    ]
+    return {"assertions": found, "assertions_passed": all(v["passed"] for v in found)}
+
+
+def test_failed_assertions_are_listed_under_their_case():
+    case = {
+        "id": "b",
+        "status": "failed",
+        "score": 0.9,
+        "reasoning": "the judge liked it",
+        "assertions": {"total": 4, "passed": 1, "failed": 3},
+        "repeats": [
+            _checked(("contains", False, 'output does not contain "30"'), ("json_valid", True, "")),
+            _checked(("contains", False, "second failure"), ("json_valid", False, None)),
+        ],
+    }
+
+    lines = render.suite_result_lines(_suite_result(case))
+
+    # The checks are why it failed, so they replace the judge's (favourable) reason.
+    assert lines[1] == f"{render.MARKER}   FAIL  0.90  b  3 of 4 assertion checks failed"
+    assert lines[2] == (
+        f'{render.MARKER}           x contains (repeats 1, 2 of 2): output does not contain "30"'
+    )
+    assert lines[3] == f"{render.MARKER}           x json_valid (repeat 2 of 2)"
+    assert len(lines) == 4
+
+
+def test_a_single_repeat_does_not_name_its_repeat():
+    case = {
+        "id": "a",
+        "status": "failed",
+        "score": 0.0,
+        "repeats": [_checked(("max_tool_calls", False, "7 tool calls > 5"))],
+    }
+
+    lines = render.suite_result_lines(_suite_result(case))
+
+    assert lines[1] == f"{render.MARKER}   FAIL  0.00  a  1 of ? assertion checks failed"
+    assert lines[2] == f"{render.MARKER}           x max_tool_calls: 7 tool calls > 5"
+
+
+def test_passing_assertions_and_unrun_repeats_add_no_lines():
+    case = {
+        "id": "a",
+        "status": "passed",
+        "score": 1.0,
+        "assertions": {"total": 1, "passed": 1, "failed": 0},
+        "repeats": [
+            {"assertions": None, "assertions_passed": None},
+            _checked(("equals", True, "ok")),
+        ],
+    }
+
+    assert render.suite_result_lines(_suite_result(case))[1:] == [
+        f"{render.MARKER}   PASS  1.00  a"
+    ]
