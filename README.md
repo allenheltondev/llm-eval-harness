@@ -213,6 +213,13 @@ judge that can only fail at the provider. Progress
 streams as NDJSON from `GET /api/v1/evaluations/{id}/events`; results and history live alongside
 runs in the server's SQLite database.
 
+Every run records an estimated `cost_usd` in its metrics, and every evaluation reports the spend of
+the runs and of the judge separately. `max_cost_usd` (or `nimbus eval --max-cost`) caps an
+evaluation: once the projected spend would pass it, no more runs start and the evaluation completes
+on the runs it made, with `budget_exhausted: true`. Prices are **estimates** from a built-in table
+of list prices, overridable with `NIMBUS_PRICING_FILE`; a model without a price reports `null`,
+never `0`. See [docs/suites.md](docs/suites.md#cost-and-budgets).
+
 ### Execution lanes: local vs cloud
 
 Evaluations run in one of two lanes, chosen per launch with the **Run location** toggle in the
@@ -538,6 +545,7 @@ to `~/.config/nimbus` the first time it is read.
 | `NIMBUS_DB_PATH` | `~/.local/share/nimbus/history.db` | SQLite path for run/evaluation history (`$XDG_DATA_HOME/nimbus/` when set; `./data/nimbus.db` when that exists where the server starts) |
 | `NIMBUS_CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins (JSON list) |
 | `NIMBUS_FAKE_MODEL` | `false` | Use the scripted fake model + judge instead of a real provider (test infrastructure) |
+| `NIMBUS_PRICING_FILE` | *(unset)* | JSON file of per-model prices (USD per 1M tokens) that adds to or overrides the built-in table behind run and evaluation cost estimates — see [docs/suites.md](docs/suites.md#cost-and-budgets) |
 | `NIMBUS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
 | `NIMBUS_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
 | `NIMBUS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |

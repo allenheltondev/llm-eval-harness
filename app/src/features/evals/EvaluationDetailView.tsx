@@ -26,6 +26,7 @@ import type {
 } from '../../api'
 import { evaluationHref, runHref } from '../../routing'
 import { useMcpServerStore } from '../../stores'
+import EvaluationCost from './EvaluationCost'
 
 const SOURCE_LABELS: Record<string, string> = { cli: 'CLI', ui: 'Web UI', api: 'API' }
 
@@ -510,6 +511,8 @@ export default function EvaluationDetailView({ evaluation, result }: EvaluationD
         {result?.cases && result.cases.length > 0 && (
           <SuiteCases cases={result.cases} suite={evaluation.config.suite} />
         )}
+
+        <EvaluationCost result={result} />
 
         <Configuration config={evaluation.config} />
 

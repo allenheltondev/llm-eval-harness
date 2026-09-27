@@ -235,6 +235,7 @@ nimbus eval --suite cases.yaml -m <other>      # same cases, another model
 | `--suite FILE` | Run a test suite from a YAML or JSON file. Run options given on the command line override the file's `run_config`; `-p`, `-n` and `--run` are errors with it. |
 | `--run RUN_ID` | Grade this stored run instead of executing new ones; repeatable. |
 | `--rubric` | Extra rubric text for the judge. |
+| `--max-cost USD` | Stop starting new runs once the estimated spend would pass this many dollars; the evaluation still completes, graded on the runs it made, with `budget_exhausted: true`. Overrides a suite file's `max_cost_usd`. Costs are estimates — see [Cost and budgets](suites.md#cost-and-budgets). |
 | `--remote` | Insist on the stack you signed in to with `login` (already the default once signed in); fails rather than running here when you are not — see [Running on a deployed stack](#running-on-a-deployed-stack). |
 | `--detach` | On a stack: submit, print the evaluation's id and link, and return without following it. |
 | `--fail-under SCORE` | Exit `3` when the overall score (0–100) is below `SCORE` — see [Exit codes](#exit-codes). |

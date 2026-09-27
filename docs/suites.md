@@ -361,6 +361,84 @@ for the details and a GitHub Actions job.
 nimbus eval --suite cases.yaml --gate --junit evals-junit.xml
 ```
 
+## Cost and budgets
+
+Every run records an **estimated** cost, `metrics.cost_usd`, next to its token
+counts, and every evaluation's result carries a `cost` block:
+
+```json
+"cost": {
+  "currency": "USD", "estimate": true, "pricing_as_of": "2026-09-27",
+  "runs_usd": 0.0412, "judge_usd": 0.0087, "total_usd": 0.0499,
+  "judge_tokens": {"input_tokens": 9120, "output_tokens": 1402, ...},
+  "max_cost_usd": 0.25
+},
+"budget_exhausted": false
+```
+
+`runs_usd` is the model under test (every attempt, throttled retries
+included); `judge_usd` is the grader, measured separately. A `grade`
+evaluation executes no runs, so its `runs_usd` is `0`.
+
+**These are estimates, not a bill.** A cost is the model's published on-demand
+list price per million tokens (input, output, prompt-cache reads and writes)
+times the token counts the provider reported. It knows nothing of negotiated
+discounts, free tiers, batch or provisioned pricing, or taxes. Bedrock prices
+are `us-east-1`'s; the `global.` inference profile is priced at the base rate,
+and for the models that charge more on regional and geographic (`us.`, `eu.`,
+...) endpoints (Claude 4.5 and later, Nova 2 Lite) the 10% premium is applied.
+The table lives in `server/nimbus/pricing.py`, with its sources and the date it
+was checked.
+
+**Unknown is `null`, never `0`.** A model that is not in the table reports
+`cost_usd: null`, and any total that includes it is `null` too. Ollama is
+priced at `0` because it runs on your hardware.
+
+### Overriding prices
+
+Point `NIMBUS_PRICING_FILE` at a JSON file to add a model or replace a price
+without a code change. Prices are USD per 1M tokens:
+
+```json
+{
+  "models": {
+    "bedrock:amazon.nova-pro-v1:0": {"input": 0.8, "output": 3.2, "cache_read": 0.2},
+    "openai:gpt-4o-mini": {"input": 0.15, "output": 0.6},
+    "my-fine-tune": {"input": 1.0, "output": 2.0},
+    "anthropic:claude-opus-4-1": null
+  }
+}
+```
+
+A key is `provider:model_id` or a bare `model_id`, matched as given and in its
+normalized form (region prefix, `:0` suffix and snapshot date dropped), so
+`bedrock:amazon.nova-pro` covers `us.amazon.nova-pro-v1:0` too. `cache_read`
+and `cache_write` are optional and default to the input price. `null` marks a
+model as unpriced. The file wins over the built-in table, is re-read when it
+changes, and a malformed one is logged and ignored. It must exist where the
+runs execute: for a cloud evaluation that is the worker Lambda's environment.
+
+### A budget
+
+`max_cost_usd` caps what an evaluation's runs may spend — in the request
+(`"max_cost_usd": 5`), at the top level of a suite file (next to `rubric`), or
+with `nimbus eval --max-cost 5`, which overrides the file.
+
+Before each run starts, the engine projects the spend: what has been spent so
+far, plus the runs in flight and the new one at the mean cost of the runs
+finished so far. Once that would exceed the budget it stops starting runs —
+for good — and the evaluation finishes normally: `completed`, graded on the
+runs that did happen, with `budget_exhausted: true` and `skipped_runs`. It is
+not an error. In a suite, a case that never ran is an `error` case whose error
+code is `budget_exhausted`, so it counts against `pass_rate`.
+
+Runs already in flight always finish, and before the first run finishes there is
+no estimate, so the first batch of concurrent runs (up to 3) always starts: the
+spend can pass the budget by that much. The judge's cost is reported but not
+budgeted — it runs after the last run is scheduled, and grading the runs that
+did happen is the point. A budget needs a price: `max_cost_usd` on a model the
+table does not know is a `400 budget_model_unpriced` up front.
+
 ## Limits on the cloud lane
 
 The cloud lane stores the whole request on the evaluation's DynamoDB `META`

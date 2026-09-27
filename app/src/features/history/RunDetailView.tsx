@@ -22,6 +22,7 @@ import {
   StatusBadge
 } from '@readysetcloud/ui'
 import { statusTone } from '../../components/status'
+import { formatUsd } from '../../components/cost'
 
 export interface RunDetailHighlight {
   model_id?: boolean
@@ -300,6 +301,11 @@ function RunDetailBody({
               label="Cycles"
               value={formatCount(detail.metrics?.cycle_count)}
               highlighted={highlight?.metrics?.cycle_count}
+            />
+            <MetricStat
+              label="Est. cost"
+              value={formatUsd(detail.metrics?.cost_usd)}
+              highlighted={highlight?.metrics?.cost_usd}
             />
           </div>
         </div>

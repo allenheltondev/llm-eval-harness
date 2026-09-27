@@ -21,7 +21,8 @@ const METRIC_KEYS: Array<keyof RunMetrics> = [
   'output_tokens',
   'total_tokens',
   'latency_ms',
-  'cycle_count'
+  'cycle_count',
+  'cost_usd'
 ]
 
 function diffHighlight(a: RunDetail | undefined, b: RunDetail | undefined): RunDetailHighlight {

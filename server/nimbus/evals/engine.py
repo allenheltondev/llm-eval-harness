@@ -65,7 +65,7 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol
 
 from nimbus.config import Settings, get_settings
@@ -74,7 +74,7 @@ from nimbus.engine.model_factory import ModelFactory, build_model, classify_erro
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import AppError
-from nimbus.evals import assertions, grader, jobs, rubrics
+from nimbus.evals import assertions, budget, grader, jobs, rubrics
 from nimbus.evals.events import (
     EvalCompleteEvent,
     EvalEvent,
@@ -239,6 +239,8 @@ class _Seam:
     store: EvalStore
     cancelled: CancelledFn
     deps: EvalDeps
+    #: Spend so far and the budget gate (:mod:`nimbus.evals.budget`).
+    ledger: budget.CostLedger = field(default_factory=budget.CostLedger)
 
     def publish(self, event: EvalEvent) -> None:
         """Serialize an event to its wire shape and hand it to ``emit``."""
@@ -328,6 +330,7 @@ async def _execute_once(
     if outcome.run_id is not None:
         record = store.load_run(outcome.run_id)
         outcome.tool_transcript = list(record.tool_transcript or [])
+        outcome.cost_usd = (record.metrics or {}).get("cost_usd")
         if outcome.status != "completed":
             outcome.error = outcome.error or record.error
     return outcome
@@ -349,8 +352,11 @@ async def _execute_with_retries(
             break
         logger.info("eval run %d throttled, retrying in %.1fs", job.index, backoff)
         await asyncio.sleep(backoff)
+        spent_before = outcome.cost_usd
         outcome = await _execute_once(job, deps, store)
         outcome.attempts = attempt + 1
+        if spent_before is not None:  # a failed attempt's tokens are still spent
+            outcome.cost_usd = spent_before + (outcome.cost_usd or 0.0)
     return outcome
 
 
@@ -369,10 +375,11 @@ async def _execute_batch(seam: _Seam, jobs: list[_Job], collected: list[RunOutco
 
     async def one(job: _Job) -> None:
         async with semaphore:
-            if seam.cancelled():
+            if seam.cancelled() or not seam.ledger.admit():
                 return
             seam.publish(RunStartedEvent(index=job.index, case_id=job.case_id))
             outcome = await _execute_with_retries(job, seam.deps, seam.store)
+            seam.ledger.settle(outcome.cost_usd)
         collected.append(outcome)
         _publish_run(seam, outcome)
 
@@ -805,12 +812,18 @@ def _assertion_metrics(cases: list[dict[str, Any]]) -> dict[str, int]:
 
 
 async def _judge_suite(
-    successes: list[RunOutcome], request: EvaluationRequest, seam: _Seam
+    successes: list[RunOutcome],
+    request: EvaluationRequest,
+    seam: _Seam,
+    *,
+    judge_factory: JudgeFactory | None = None,
 ) -> grader.SuiteJudgement:
     """Judge a suite's answers, leaving out the cases that opted out of the judge.
 
     A suite in which every case opted out never builds a judge at all -- which
     is also what lets an assertion-only suite run without judge credentials.
+    ``judge_factory`` defaults to the deps' own; the engine passes the metered
+    one so judge spend is counted (:mod:`nimbus.evals.budget`).
     """
     suite = request.suite
     assert suite is not None
@@ -823,7 +836,7 @@ async def _judge_suite(
         suite=suite,
         rubric=request.rubric,
         grader=request.grader,
-        judge_factory=seam.deps.judge_factory,
+        judge_factory=judge_factory or seam.deps.judge_factory,
     )
 
 
@@ -904,6 +917,8 @@ async def execute_evaluation_with_seam(
     try:
         if not isinstance(request, EvaluationRequest):
             request = EvaluationRequest.model_validate(request)
+        seam.ledger = budget.CostLedger(request.max_cost_usd)
+        judge_meter = budget.JudgeMeter(seam.deps.judge_factory)
 
         seam.store.save_evaluation(status="running")
         seam.publish(
@@ -935,7 +950,9 @@ async def execute_evaluation_with_seam(
 
         seam.publish(GradingStartedEvent())
         if request.kind == "suite":
-            suite_judgement = await _judge_suite(successes, request, seam)
+            suite_judgement = await _judge_suite(
+                successes, request, seam, judge_factory=judge_meter.factory
+            )
             result = _build_suite_result(outcomes, suite_judgement, request)
         else:
             judged = await grader.judge(
@@ -943,9 +960,10 @@ async def execute_evaluation_with_seam(
                 kind=request.kind,
                 rubric=request.rubric,
                 grader=request.grader,
-                judge_factory=seam.deps.judge_factory,
+                judge_factory=judge_meter.factory,
             )
             result = _build_result(outcomes, judged, request)
+        result = budget.annotate(result, request, seam.ledger, judge_meter)
         seam.publish(GradingCompletedEvent(result=result))
 
         status = "completed" if successes else "error"

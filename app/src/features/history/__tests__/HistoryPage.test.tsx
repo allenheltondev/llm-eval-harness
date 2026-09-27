@@ -133,6 +133,20 @@ describe('HistoryPage: list rendering', () => {
     expect(rows[1]).toHaveTextContent('250')
   })
 
+  it('shows each run’s estimated cost, unknown for an unpriced model', () => {
+    useHistoryStore.setState({
+      items: [
+        summary('r1', { metrics: { total_tokens: 100, cost_usd: 1.5 } }),
+        summary('r2', { metrics: { total_tokens: 100, cost_usd: null } }),
+        summary('r3', { metrics: null })
+      ]
+    })
+    render(<HistoryPage />)
+
+    const costs = screen.getAllByTestId('history-run-cost').map(cell => cell.textContent)
+    expect(costs).toEqual(['$1.50', 'unknown', '—'])
+  })
+
   it('shows the empty state when loaded with no matches', () => {
     useHistoryStore.setState({ items: [] })
     render(<HistoryPage />)
@@ -550,7 +564,7 @@ describe('HistoryPage: Cloud runs filter', () => {
     runsListMock.mockResolvedValueOnce({ items: [summary('cr1')], next_cursor: null })
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
 
-    expect(await screen.findByTestId('cloud-run-row')).toBeInTheDocument()
+    expect(await screen.findByTestId('cloud-run-row')).toHaveTextContent('—')
     expect(runsListMock).toHaveBeenCalledTimes(2)
     expect(screen.queryByText('cloud unreachable')).not.toBeInTheDocument()
   })

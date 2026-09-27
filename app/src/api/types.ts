@@ -122,8 +122,13 @@ export interface MetricsEvent {
   input_tokens: number
   output_tokens: number
   total_tokens: number
+  /** Prompt-cache traffic, when the provider reports it. */
+  cache_read_input_tokens?: number
+  cache_write_input_tokens?: number
   latency_ms: number
   cycle_count: number
+  /** Estimated USD (`server/nimbus/pricing.py`); `null` when the model has no known price. */
+  cost_usd?: number | null
 }
 
 /** In-band failure. A streamed run stays HTTP 200 and reports errors here. */
@@ -255,6 +260,13 @@ export interface RunMetrics {
   total_tokens?: number
   latency_ms?: number
   cycle_count?: number
+  cache_read_input_tokens?: number
+  cache_write_input_tokens?: number
+  /**
+   * Estimated USD. `null` means the model has no known price (unknown, not
+   * free); absent on runs recorded before costs were tracked.
+   */
+  cost_usd?: number | null
   [key: string]: unknown
 }
 
@@ -486,6 +498,25 @@ export interface EvaluationResult {
   truncated?: boolean
   /** Present only when the judge itself failed (local metrics still stand). */
   judge_error?: string
+  /** Estimated spend (`evals/budget.py`); absent on results recorded before costs were tracked. */
+  cost?: EvaluationCost
+  /** True when `max_cost_usd` stopped new runs from starting. */
+  budget_exhausted?: boolean
+  /** Runs not started because the budget was reached. */
+  skipped_runs?: number
+}
+
+/** An evaluation's estimated spend. Every `*_usd` is `null` when a model involved is unpriced. */
+export interface EvaluationCost {
+  currency: 'USD'
+  estimate: boolean
+  pricing_as_of: string
+  /** The model under test, every attempt included. */
+  runs_usd: number | null
+  judge_usd: number | null
+  total_usd: number | null
+  judge_tokens?: Record<string, number>
+  max_cost_usd: number | null
 }
 
 export interface EvaluationListParams {

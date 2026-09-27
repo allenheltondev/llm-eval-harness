@@ -264,6 +264,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--grader-system", help="override the judge's system prompt")
     evaluate.add_argument(
+        "--max-cost",
+        type=float,
+        metavar="USD",
+        default=None,
+        help=(
+            "stop starting new runs once the estimated spend would pass this many USD; "
+            "the evaluation completes with the runs it made (see docs/suites.md)"
+        ),
+    )
+    evaluate.add_argument(
         "--remote",
         action="store_true",
         help=(

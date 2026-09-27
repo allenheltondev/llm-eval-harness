@@ -203,6 +203,9 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
     spec = dict(args.suite_spec)
     rubric = spec.pop("rubric", None)
     grader = dict(spec.pop("grader", None) or {})
+    max_cost = spec.pop("max_cost_usd", None)
+    if getattr(args, "max_cost", None) is not None:
+        max_cost = args.max_cost
 
     run_config = dict(spec.get("run_config") or {})
     overrides = _run_overrides(args)
@@ -225,6 +228,7 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
             "rubric": args.rubric if args.rubric is not None else rubric,
             "grader": grader,
             "source": "cli",
+            "max_cost_usd": max_cost,
         }
     )
 
@@ -255,6 +259,7 @@ def build_eval_request(args: argparse.Namespace) -> EvaluationRequest:
             source="cli",
         )
     return EvaluationRequest(
+        max_cost_usd=getattr(args, "max_cost", None),
         kind="determinism",
         run_config=build_run_request(args),
         n=args.n if args.n is not None else DEFAULT_DETERMINISM_RUNS,

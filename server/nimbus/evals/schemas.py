@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from nimbus import pricing
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import BadRequestError
 from nimbus.evals.assertions import MAX_CASE_ASSERTIONS, Assertion, expand_shorthand
@@ -273,6 +274,10 @@ class EvaluationRequest(BaseModel):
     #: calling the API directly. Descriptive only -- nothing branches on it --
     #: and stored with the evaluation so its history can say where it came from.
     source: Literal["cli", "ui", "api"] = "api"
+    #: Stop scheduling new runs once the estimated spend would pass this many
+    #: USD; the evaluation still completes, with ``budget_exhausted: true``.
+    #: See ``nimbus.evals.budget``.
+    max_cost_usd: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _check_kind_requirements(self) -> EvaluationRequest:
@@ -287,7 +292,21 @@ class EvaluationRequest(BaseModel):
                 raise BadRequestError("suite is required when kind is 'suite'")
         elif not self.run_ids:
             raise BadRequestError("run_ids is required when kind is 'grade'")
+        self._check_budget_is_enforceable()
         return self
+
+    def _check_budget_is_enforceable(self) -> None:
+        """A budget needs a price: an unpriced model's spend cannot be counted."""
+        config = self.suite.run_config if self.suite is not None else self.run_config
+        if self.max_cost_usd is None or self.kind == "grade" or config is None:
+            return
+        if not pricing.is_priced(config.provider, config.model_id):
+            raise BadRequestError(
+                f"max_cost_usd needs a price for {config.model_id!r}, and there is none; "
+                f"add one with {pricing.PRICING_FILE_ENV} (see docs/suites.md)",
+                detail={"provider": config.provider, "model_id": config.model_id},
+                code="budget_model_unpriced",
+            )
 
     def stored_config(self) -> dict:
         """The ``config`` JSON persisted on the evaluation row."""
@@ -299,6 +318,8 @@ class EvaluationRequest(BaseModel):
             "grader": self.grader.model_dump(),
             "source": self.source,
         }
+        if self.max_cost_usd is not None:
+            config["max_cost_usd"] = self.max_cost_usd
         if self.suite is not None:
             # The whole suite, so a stored evaluation says exactly what was tested.
             config["suite"] = self.suite.model_dump()

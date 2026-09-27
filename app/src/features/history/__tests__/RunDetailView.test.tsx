@@ -104,6 +104,23 @@ describe('RunDetailView', () => {
     expect(totalTokensCard).toHaveTextContent('30')
   })
 
+  it('shows the estimated cost, and an unpriced model as unknown', () => {
+    const cost = () => screen.getByText('Est. cost').closest('[data-testid="run-detail-metric"]')
+
+    useHistoryStore.setState({
+      details: { r1: detail({ metrics: { total_tokens: 30, cost_usd: 0.0042 } }) }
+    })
+    const { unmount } = render(<RunDetailView runId="r1" />)
+    expect(cost()).toHaveTextContent('$0.0042')
+    unmount()
+
+    useHistoryStore.setState({
+      details: { r1: detail({ metrics: { total_tokens: 30, cost_usd: null } }) }
+    })
+    render(<RunDetailView runId="r1" />)
+    expect(cost()).toHaveTextContent('unknown')
+  })
+
   it('omits the toolset line for a run that executed without tools', () => {
     useHistoryStore.setState({
       details: {
