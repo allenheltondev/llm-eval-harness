@@ -11,6 +11,8 @@ import json
 import socket
 from datetime import UTC, datetime
 
+import httpcore
+import httpx
 import pytest
 from pydantic import ValidationError
 from sqlmodel import Session
@@ -23,7 +25,9 @@ from nimbus.engine.schemas import RunRequest
 from nimbus.errors import BadRequestError, NotFoundError
 from nimbus.mcp import client as mcp_client
 from nimbus.mcp import store as mcp_store
+from nimbus.mcp import transport as mcp_transport
 from nimbus.mcp.schemas import McpServer, McpServerCreate, McpServerUpdate
+from nimbus.mcp.transport import PublicOnlyBackend, build_http_client
 from nimbus.mcp.urls import McpUrlError, check_reachable, validate_url
 from nimbus.store import db, history
 from tests.fake_table import FakeTable
@@ -605,3 +609,170 @@ async def test_a_non_mcp_failure_building_the_agent_is_not_blamed_on_mcp(
     error = next(e for e in events if isinstance(e, ErrorEvent))
     assert error.code == "internal_error" and error.message == "agent exploded"
     assert len(stopped) == 1  # no agent took the client, so the runner stopped it
+
+
+# --------------------------------------------------------------------------- #
+# Connection rules: enforced by the transport, not a preflight
+# --------------------------------------------------------------------------- #
+
+
+class RecordingBackend(httpcore.AsyncNetworkBackend):
+    """Stands in for the real network: records where it was asked to connect.
+
+    ``connect_to`` sends the socket to the in-process test server whatever
+    address was asked for, so a request can complete end to end while the test
+    still sees the address the guard chose.
+    """
+
+    def __init__(self, connect_to: tuple[str, int] | None = None, fail: set[str] = frozenset()):
+        self.connected: list[str] = []
+        self._connect_to = connect_to
+        self._fail = fail
+        self._real = httpcore.AnyIOBackend()
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        self.connected.append(host)
+        if host in self._fail or self._connect_to is None:
+            raise httpcore.ConnectError(f"cannot reach {host}")
+        return await self._real.connect_tcp(*self._connect_to, timeout=timeout)
+
+    async def connect_unix_socket(
+        self, path, timeout=None, socket_options=None
+    ):  # pragma: no cover
+        raise NotImplementedError
+
+    async def sleep(self, seconds):
+        await self._real.sleep(seconds)
+
+
+def _resolving(*answers):
+    """A resolver that gives each successive lookup the next answer."""
+    queue = list(answers)
+    calls = []
+
+    def resolve(host, port):
+        calls.append(host)
+        return queue.pop(0)
+
+    resolve.calls = calls
+    return resolve
+
+
+async def test_rebinding_name_cannot_reach_a_private_address():
+    # The same name answers public, then private (DNS rebinding). Each socket
+    # goes to the address that was checked for it -- never to a fresh lookup.
+    resolve = _resolving(["93.184.216.34"], ["10.0.0.7"])
+    inner = RecordingBackend(fail={"93.184.216.34"})
+    backend = PublicOnlyBackend(inner=inner, resolve=resolve)
+
+    with pytest.raises(httpcore.ConnectError, match="cannot reach 93.184.216.34"):
+        await backend.connect_tcp("rebind.example.com", 443)
+    with pytest.raises(httpcore.ConnectError, match=r"non-public address \(10\.0\.0\.7\)"):
+        await backend.connect_tcp("rebind.example.com", 443)
+
+    # The inner network only ever saw the validated literal, so it had no name
+    # of its own to re-resolve; the private answer never reached a socket.
+    assert inner.connected == ["93.184.216.34"]
+    assert resolve.calls == ["rebind.example.com", "rebind.example.com"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        ["93.184.216.34", "127.0.0.1"],  # one bad answer blocks the lot
+        ["169.254.169.254"],
+        ["::ffff:10.0.0.1"],
+        ["fe80::1%eth0"],
+        [],
+    ],
+)
+async def test_any_non_public_answer_refuses_the_connection(answer):
+    inner = RecordingBackend()
+    backend = PublicOnlyBackend(inner=inner, resolve=lambda host, port: answer)
+    with pytest.raises(httpcore.ConnectError):
+        await backend.connect_tcp("mixed.example.com", 443)
+    assert inner.connected == []
+
+
+async def test_unresolvable_names_and_unix_sockets_are_refused():
+    def fail(host, port):
+        raise socket.gaierror("no such host")
+
+    backend = PublicOnlyBackend(inner=RecordingBackend(), resolve=fail)
+    with pytest.raises(httpcore.ConnectError, match="Cannot resolve"):
+        await backend.connect_tcp("nope.example.com", 443)
+    with pytest.raises(httpcore.ConnectError, match="Unix sockets"):
+        await backend.connect_unix_socket("/var/run/docker.sock")
+    await backend.sleep(0)
+
+
+async def test_the_next_public_address_is_tried_when_one_fails(mcp_url):
+    port = int(mcp_url.split(":")[2].split("/")[0])
+    inner = RecordingBackend(connect_to=("127.0.0.1", port), fail={"93.184.216.34"})
+    backend = PublicOnlyBackend(
+        inner=inner, resolve=lambda host, p: ["93.184.216.34", "93.184.216.35"]
+    )
+    stream = await backend.connect_tcp("multi.example.com", port)
+    await stream.aclose()
+    assert inner.connected == ["93.184.216.34", "93.184.216.35"]
+
+
+async def test_deployed_client_routes_every_connection_through_the_guard(mcp_url):
+    # Proves the httpx client really uses the backend (not a pool built
+    # around it): the request succeeds only because the guard picked the
+    # validated public address, which the recording network then serves.
+    port = int(mcp_url.split(":")[2].split("/")[0])
+    inner = RecordingBackend(connect_to=("127.0.0.1", port))
+    guard = PublicOnlyBackend(inner=inner, resolve=lambda host, p: ["93.184.216.34"])
+    async with build_http_client({"X-Api-Key": API_KEY}, deployed=True, backend=guard) as http:
+        response = await http.get(f"http://mcp.example.com:{port}/nothing-here")
+    assert response.status_code == 404
+    assert inner.connected == ["93.184.216.34"]
+
+    blocked = PublicOnlyBackend(inner=inner, resolve=lambda host, p: ["127.0.0.1"])
+    async with build_http_client({}, deployed=True, backend=blocked) as http:
+        with pytest.raises(httpx.ConnectError, match="non-public"):
+            await http.get(f"http://mcp.example.com:{port}/mcp")
+
+
+def test_deployed_client_ignores_proxy_environment(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+    client = build_http_client({}, deployed=True)
+    assert client._trust_env is False
+    assert not client._mounts
+
+
+@pytest.mark.parametrize("deployed", [False, True])
+def test_redirects_are_never_followed(mcp_url, deployed, monkeypatch):
+    # A saved endpoint answering 307 elsewhere: the client must stop there,
+    # with the saved headers never sent to the redirect target.
+    from tests import mcp_http_server
+
+    if deployed:
+        # The test server is on loopback; let the guard's resolver say it is
+        # public so only the redirect rule is under test here.
+        port = int(mcp_url.split(":")[2].split("/")[0])
+        monkeypatch.setattr(
+            mcp_transport,
+            "PublicOnlyBackend",
+            lambda: PublicOnlyBackend(
+                inner=RecordingBackend(connect_to=("127.0.0.1", port)),
+                resolve=lambda host, p: ["93.184.216.34"],
+            ),
+        )
+        monkeypatch.setattr(mcp_client, "check_reachable", lambda url, deployed: None)
+    server = _server(url=mcp_url.replace("/mcp", "/redirect"), headers={"X-Api-Key": API_KEY})
+
+    with pytest.raises(mcp_client.McpConnectionError, match="redirects are not followed"):
+        mcp_client.list_server_tools(server, deployed=deployed)
+    assert mcp_http_server.REDIRECT_TARGET_HITS == []
+
+
+async def test_default_deployed_client_refuses_loopback(mcp_url):
+    # No test doubles: the real resolver and network, as a deployed Lambda
+    # would use them. The test server is on loopback, so it must be unreachable.
+    async with build_http_client({}, deployed=True) as http:
+        with pytest.raises(httpx.ConnectError, match=r"non-public address \(127\.0\.0\.1\)"):
+            await http.get(mcp_url)
+    async with build_http_client({}, deployed=False) as http:
+        assert (await http.get(mcp_url.replace("/mcp", "/nothing"))).status_code == 401

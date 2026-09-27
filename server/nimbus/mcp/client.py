@@ -20,6 +20,7 @@ from typing import Any
 from nimbus.errors import AppError, BadRequestError, NotFoundError
 from nimbus.mcp.schemas import McpServer, McpToolInfo
 from nimbus.mcp.store import McpServerStore
+from nimbus.mcp.transport import build_http_client
 from nimbus.mcp.urls import check_reachable
 
 #: How long to wait for a server to accept the MCP handshake.
@@ -71,17 +72,17 @@ def resolve(ids: Iterable[str], store: McpServerStore) -> list[McpServer]:
     return servers
 
 
-def _transport(server: McpServer) -> Any:
+def _transport(server: McpServer, *, deployed: bool) -> Any:
     """The ``transport_callable`` for one server: a fresh connection per call."""
     from mcp.client.streamable_http import streamable_http_client
-    from mcp.shared._httpx_utils import create_mcp_http_client
 
     @asynccontextmanager
     async def connect() -> AsyncIterator[Any]:
         # The transport only closes an HTTP client it created itself; this one
-        # carries the saved headers, so it is opened and closed here.
+        # carries the saved headers and the connection rules, so it is opened
+        # and closed here.
         async with (
-            create_mcp_http_client(headers=dict(server.headers)) as http_client,
+            build_http_client(dict(server.headers), deployed=deployed) as http_client,
             streamable_http_client(server.url, http_client=http_client) as streams,
         ):
             yield streams
@@ -106,7 +107,7 @@ def build_clients(servers: list[McpServer], *, deployed: bool) -> list[Any]:
         prefixes.append(prefix)
         clients.append(
             MCPClient(
-                _transport(server),
+                _transport(server, deployed=deployed),
                 startup_timeout=STARTUP_TIMEOUT_SECONDS,
                 prefix=prefix,
                 application_name="nimbus",

@@ -178,8 +178,13 @@ prefixed with a slug of its name (`github_search_issues`) so two servers can bot
   file, like a `.env`.
 - **Deployed stacks only reach public HTTPS servers.** The server and worker are Lambda functions
   holding AWS credentials, so `http://`, `localhost`, private, link-local and other reserved
-  addresses are refused — when the URL is saved and again (after DNS resolution) when a run
-  connects. Locally anything goes, `http://localhost` included.
+  addresses are refused. The URL is checked when it is saved, and the rule is enforced on every
+  connection: the host is resolved once, refused unless every address is public, and the socket
+  goes to that checked address, so a DNS-rebinding name can't swap in a private one. Locally
+  anything goes, `http://localhost` included.
+- **Redirects are never followed.** A saved URL is the endpoint; a server that answers with a
+  redirect fails the connection and names the URL to save instead, so neither the connection nor
+  the saved headers can be bounced to another host.
 - **Test** on the Tools page connects with the saved headers and lists the server's tools.
   A server that cannot be reached when a run starts fails that run with `mcp_connection_failed`.
 
