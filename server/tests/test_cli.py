@@ -1042,7 +1042,7 @@ class TestMcp:
             ok = cli("mcp", "test", good)
             as_json = cli("mcp", "test", good, "--json").json()
             refused = cli("mcp", "test", bad)
-        assert ok.code == 0 and "connected: 2 tool(s)" in ok.err
+        assert ok.code == 0 and "connected: 3 tool(s)" in ok.err
         assert ok.out.splitlines()[0].split() == ["TOOL", "DESCRIPTION"]
         assert "Echo the text back, reversed." in ok.out
         assert as_json["ok"] is True

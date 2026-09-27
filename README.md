@@ -167,7 +167,8 @@ HTTP), alongside or instead of a toolset. Save a server once on the **Tools** pa
 `headers`), then tick it in the
 Workbench or the Evals launcher — or pass `"mcp_servers": ["<id>", ...]` on a run or an
 evaluation's `run_config` (at most 5), or `--mcp-server <id>` on the CLI. Each server's tools are
-prefixed with a slug of its name (`github_search_issues`) so two servers can both offer `search`.
+prefixed with `mcp-` and a slug of its name (`mcp-github_search_issues`), so two servers can both offer
+`search` and no MCP tool can take a built-in tool's name.
 
 - **Headers are write-only secrets.** Put an API key in `Authorization` (or whatever the server
   wants); the API only ever returns header *names*. Runs and evaluations store server **ids**, never
@@ -178,8 +179,13 @@ prefixed with a slug of its name (`github_search_issues`) so two servers can bot
   file, like a `.env`.
 - **Deployed stacks only reach public HTTPS servers.** The server and worker are Lambda functions
   holding AWS credentials, so `http://`, `localhost`, private, link-local and other reserved
-  addresses are refused — when the URL is saved and again (after DNS resolution) when a run
-  connects. Locally anything goes, `http://localhost` included.
+  addresses are refused. The URL is checked when it is saved, and the rule is enforced on every
+  connection: the host is resolved once, refused unless every address is public, and the socket
+  goes to that checked address, so a DNS-rebinding name can't swap in a private one. Locally
+  anything goes, `http://localhost` included.
+- **Redirects are never followed.** A saved URL is the endpoint; a server that answers with a
+  redirect fails the connection and names the URL to save instead, so neither the connection nor
+  the saved headers can be bounced to another host.
 - **Test** on the Tools page connects with the saved headers and lists the server's tools.
   A server that cannot be reached when a run starts fails that run with `mcp_connection_failed`.
 
