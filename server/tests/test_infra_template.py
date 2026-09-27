@@ -323,3 +323,45 @@ def test_production_refuses_to_deploy_without_the_hosted_zone(tmp_path: pathlib.
     assert code == 1
     assert "::error title=No hosted zone::" in stdout
     assert args == ""  # never deployed
+
+
+def _statements(resources: dict, logical_id: str) -> list[dict]:
+    statements: list[dict] = []
+    for policy in resources[logical_id]["Properties"]["Policies"]:
+        if isinstance(policy, dict):
+            statements.extend(s for s in policy["Statement"] if "Action" in s)
+    return statements
+
+
+def _actions(statement: dict) -> set[str]:
+    action = statement["Action"]
+    return {action} if isinstance(action, str) else set(action)
+
+
+def test_saved_mcp_servers_reach_both_runners(resources: dict) -> None:
+    """Server saves and uses MCP servers; the worker only uses them.
+
+    Both need the table and the parameter path, or a run naming a saved server
+    fails in whichever lane lacks them -- and only the server may write or
+    delete a server's headers. SSM access is confined to the stack's own path.
+    """
+    prefix = {"Fn::Sub": "/nimbus/${AWS::StackName}/mcp"}
+    parameters = {
+        "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}"
+        ":parameter/nimbus/${AWS::StackName}/mcp/*"
+    }
+    expected = {
+        "ServerFunction": {"ssm:PutParameter", "ssm:GetParameter", "ssm:DeleteParameter"},
+        "EvalWorkerFunction": {"ssm:GetParameter"},
+    }
+    for function, actions in expected.items():
+        env = _env(resources, function)
+        assert env["NIMBUS_MCP_TABLE"] == {"Fn::Ref": "EvalTable"}
+        assert env["NIMBUS_MCP_SSM_PREFIX"] == prefix
+        ssm = {
+            (action, statement.get("Resource") == parameters)
+            for statement in _statements(resources, function)
+            for action in _actions(statement)
+            if action.startswith("ssm:")
+        }
+        assert ssm == {(action, True) for action in actions}, function

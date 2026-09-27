@@ -14,6 +14,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { InferenceConfig, ModelSource, RunGuardrailConfig, RunRequest } from '../api'
+import { MAX_RUN_MCP_SERVERS } from './mcpServerStore'
 
 /** localStorage key. Named before the rename to Nimbus, and kept so saved state survives it. */
 export const RUN_CONFIG_STORAGE_KEY = 'evalharness.run-config'
@@ -32,6 +33,11 @@ export interface RunConfigData {
   inference: InferenceConfig
   /** A toolset name from `GET /tools`, or `null` to run without tools. */
   toolset: string | null
+  /**
+   * Ids of saved MCP servers (`GET /mcp-servers`) whose tools the run may
+   * call, in addition to `toolset`'s. At most `MAX_RUN_MCP_SERVERS`.
+   */
+  mcp_servers: string[]
   /** 1 – 100. */
   max_tool_iterations: number
   guardrail: RunGuardrailConfig | null
@@ -57,6 +63,13 @@ export interface RunConfigActions {
   /** Shallow-merges into `inference`; `undefined` values delete the key. */
   setInference(patch: Partial<InferenceConfig>): void
   setToolset(toolset: string | null): void
+  /** Replaces the MCP server selection (deduplicated, capped at the max). */
+  setMcpServers(ids: string[]): void
+  /**
+   * Adds or removes one MCP server id. Adding past `MAX_RUN_MCP_SERVERS` is
+   * a no-op, matching the picker's disabled checkboxes.
+   */
+  toggleMcpServer(id: string): void
   setMaxToolIterations(iterations: number): void
   setGuardrail(guardrail: RunGuardrailConfig | null): void
   setStream(stream: boolean): void
@@ -73,6 +86,7 @@ export const DEFAULT_RUN_CONFIG: RunConfigData = {
   user_prompt: '',
   inference: {},
   toolset: null,
+  mcp_servers: [],
   max_tool_iterations: 10,
   guardrail: null,
   stream: true
@@ -86,7 +100,16 @@ export const DEFAULT_RUN_CONFIG: RunConfigData = {
  * fields are omitted rather than sent as `""`/`null` noise; `toolset` is the
  * exception, since `null` is its documented "no tools" value.
  */
-export function toRunRequest(config: RunConfigData): RunRequest {
+export function toRunRequest(
+  config: RunConfigData,
+  /**
+   * The MCP server ids that still exist (`knownMcpServerIds`). When given,
+   * selected ids not in it are dropped — a server deleted since it was
+   * ticked would otherwise 400 the run. `undefined` (list not loaded) sends
+   * the selection as is.
+   */
+  knownMcpServerIds?: readonly string[]
+): RunRequest {
   const request: RunRequest = {
     model_id: config.model_id,
     user_prompt: config.user_prompt,
@@ -100,7 +123,37 @@ export function toRunRequest(config: RunConfigData): RunRequest {
   if (config.system_prompt.trim() !== '') request.system_prompt = config.system_prompt
   if (Object.keys(config.inference).length > 0) request.inference = { ...config.inference }
   if (config.guardrail) request.guardrail = { ...config.guardrail }
+  const mcpServers = knownMcpServerIds
+    ? config.mcp_servers.filter(id => knownMcpServerIds.includes(id))
+    : config.mcp_servers
+  if (mcpServers.length > 0) request.mcp_servers = [...mcpServers]
   return request
+}
+
+/** Deduplicated, non-empty strings only, capped at `MAX_RUN_MCP_SERVERS`. */
+function cleanMcpServerIds(ids: unknown): string[] {
+  if (!Array.isArray(ids)) return []
+  const valid = ids.filter((id): id is string => typeof id === 'string' && id !== '')
+  return [...new Set(valid)].slice(0, MAX_RUN_MCP_SERVERS)
+}
+
+/**
+ * Hydration merge: the persisted blob may predate a field (`mcp_servers`
+ * was added later, with no version bump) or carry a malformed value. Such a
+ * field falls back to a sane value rather than crashing a render that
+ * assumes, say, an array.
+ */
+export function mergePersistedRunConfig(
+  persisted: unknown,
+  current: RunConfigStore
+): RunConfigStore {
+  if (!persisted || typeof persisted !== 'object') return current
+  const saved = persisted as Partial<RunConfigData>
+  return {
+    ...current,
+    ...saved,
+    mcp_servers: cleanMcpServerIds(saved.mcp_servers)
+  }
 }
 
 /**
@@ -141,6 +194,15 @@ export const useRunConfigStore = create<RunConfigStore>()(
       },
 
       setToolset: toolset => set({ toolset }),
+      setMcpServers: ids => set({ mcp_servers: cleanMcpServerIds(ids) }),
+      toggleMcpServer: id =>
+        set(state => {
+          if (state.mcp_servers.includes(id)) {
+            return { mcp_servers: state.mcp_servers.filter(entry => entry !== id) }
+          }
+          if (state.mcp_servers.length >= MAX_RUN_MCP_SERVERS) return {}
+          return { mcp_servers: [...state.mcp_servers, id] }
+        }),
       setMaxToolIterations: iterations => set({ max_tool_iterations: iterations }),
       setGuardrail: guardrail => set({ guardrail }),
       setStream: stream => set({ stream }),
@@ -156,10 +218,12 @@ export const useRunConfigStore = create<RunConfigStore>()(
         user_prompt: state.user_prompt,
         inference: state.inference,
         toolset: state.toolset,
+        mcp_servers: state.mcp_servers,
         max_tool_iterations: state.max_tool_iterations,
         guardrail: state.guardrail,
         stream: state.stream
-      })
+      }),
+      merge: mergePersistedRunConfig
     }
   )
 )

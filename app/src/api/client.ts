@@ -20,6 +20,11 @@ import type {
   GuardrailVersionListResponse,
   GuardrailVersionSummary,
   HealthResponse,
+  McpServer,
+  McpServerCreate,
+  McpServerListResponse,
+  McpServerUpdate,
+  McpTestResult,
   ModelListResponse,
   Page,
   RunDetail,
@@ -55,6 +60,45 @@ const models = {
 /** `GET /tools` -> `{toolsets}`: the named toolsets a run can execute with. */
 const tools = (options: CallOptions = {}): Promise<ToolsResponse> =>
   http.get<ToolsResponse>('/tools', { signal: options.signal })
+
+/* -------------------------------------------------------------------------- */
+/* MCP servers                                                                */
+/* -------------------------------------------------------------------------- */
+
+const mcpServers = {
+  /** `GET /mcp-servers` -> `{servers}` (oldest first; header names only). */
+  list: (options: CallOptions = {}): Promise<McpServerListResponse> =>
+    http.get<McpServerListResponse>('/mcp-servers', { signal: options.signal }),
+
+  /** `GET /mcp-servers/{id}`. */
+  get: (serverId: string, options: CallOptions = {}): Promise<McpServer> =>
+    http.get<McpServer>(`/mcp-servers/${encode(serverId)}`, { signal: options.signal }),
+
+  /** `POST /mcp-servers` -> 201. A bad URL is a 400 `invalid_mcp_url`. */
+  create: (body: McpServerCreate, options: CallOptions = {}): Promise<McpServer> =>
+    http.post<McpServer>('/mcp-servers', body, { signal: options.signal }),
+
+  /** `PUT /mcp-servers/{id}` — `headers` is a patch (`null` removes one). */
+  update: (
+    serverId: string,
+    body: McpServerUpdate,
+    options: CallOptions = {}
+  ): Promise<McpServer> =>
+    http.put<McpServer>(`/mcp-servers/${encode(serverId)}`, body, { signal: options.signal }),
+
+  /** `DELETE /mcp-servers/{id}` -> 204. */
+  remove: (serverId: string, options: CallOptions = {}): Promise<void> =>
+    http.delete<void>(`/mcp-servers/${encode(serverId)}`, { signal: options.signal }),
+
+  /**
+   * `POST /mcp-servers/{id}/test` — connect and list the server's tools. An
+   * unreachable server is a 200 with `ok: false`, not an HTTP error.
+   */
+  test: (serverId: string, options: CallOptions = {}): Promise<McpTestResult> =>
+    http.post<McpTestResult>(`/mcp-servers/${encode(serverId)}/test`, undefined, {
+      signal: options.signal
+    })
+}
 
 /* -------------------------------------------------------------------------- */
 /* Runs                                                                       */
@@ -257,6 +301,7 @@ export const api = {
   health,
   models,
   tools,
+  mcpServers,
   runs,
   evaluations,
   guardrails

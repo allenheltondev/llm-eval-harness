@@ -32,6 +32,7 @@ from nimbus.evals import engine as evals_engine
 from nimbus.evals import jobs as evals_jobs
 from nimbus.evals.judge import FakeJudgeModel, get_judge_factory
 from nimbus.models_catalog import CatalogResult
+from nimbus.routers import mcp as mcp_router
 from nimbus.routers import models as models_router
 from nimbus.routers import runs
 from nimbus.routers import tools as tools_router
@@ -209,7 +210,7 @@ def app(harness, models) -> FastAPI:
         return harness.health()
 
     application.include_router(runs.router, prefix="/api/v1", dependencies=[Depends(bearer)])
-    for router in (models_router.router, tools_router.router):
+    for router in (models_router.router, tools_router.router, mcp_router.router):
         application.include_router(router, prefix="/api/v1", dependencies=[Depends(bearer)])
     application.dependency_overrides[models_router._get_provider_catalog] = StackCatalog
     application.dependency_overrides[runs.get_model_factory] = lambda: models
@@ -1176,6 +1177,31 @@ class TestTarget:
         assert table.out.splitlines()[0].split() == ["TOOLSET", "TOOLS"]
         assert payload["toolsets"]
         assert f"| on {URL}" in table.err
+
+    def test_mcp_servers_are_managed_on_the_stack(self, harness, wired):
+        sign_in(harness)
+
+        added = run_cli("mcp", "add", "GitHub", "http://localhost:9/mcp", "--header", "X-Key: k1")
+        assert added.code == 0, added.err
+        server_id = added.out.strip()
+        assert f"| on {URL}" in added.err
+        assert "headers: X-Key" in added.err and "k1" not in added.err + added.out
+
+        listed = json.loads(run_cli("mcp", "list", "--json").out)["servers"]
+        assert [(s["id"], s["header_names"]) for s in listed] == [(server_id, ["X-Key"])]
+
+        updated = run_cli(
+            "mcp", "update", server_id, "--name", "GH", "--remove-header", "X-Key", "--json"
+        )
+        assert json.loads(updated.out)["header_names"] == []
+
+        tested = run_cli("mcp", "test", server_id)
+        assert tested.code == 1 and "could not connect" in tested.err
+
+        assert run_cli("mcp", "remove", server_id).code == 0
+        missing = run_cli("mcp", "remove", server_id)
+        assert missing.code == 1 and "not found" in missing.err
+        assert "harness.example.com" in wired.hosts  # through the stack's API, not locally
 
     def test_signing_in_and_out_says_where_commands_run(self, harness, cognito):
         signed_in = run_cli(

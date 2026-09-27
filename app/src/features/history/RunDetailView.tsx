@@ -9,7 +9,7 @@
  */
 
 import { useEffect } from 'react'
-import { useHistoryStore } from '../../stores'
+import { useHistoryStore, useMcpServerStore } from '../../stores'
 import type { RunDetail, RunMetrics, ToolTranscriptEntry } from '../../api'
 import {
   Alert,
@@ -142,6 +142,40 @@ export default function RunDetailView({ runId, highlight, className = '' }: RunD
   return <RunDetailBody detail={detail} highlight={highlight} className={className} />
 }
 
+/**
+ * The MCP servers a run used, by name where the saved list knows the id and by
+ * id otherwise (a server deleted since).
+ */
+function RunMcpServers({ ids }: { ids: string[] }) {
+  const servers = useMcpServerStore(state => state.servers)
+  const loadServers = useMcpServerStore(state => state.loadServers)
+
+  useEffect(() => {
+    void loadServers()
+  }, [loadServers])
+
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="run-detail-mcp-servers">
+      MCP servers:{' '}
+      {ids.map((id, index) => {
+        const server = servers.find(entry => entry.id === id)
+        return (
+          <span key={id}>
+            {index > 0 && ', '}
+            {server ? (
+              server.name
+            ) : (
+              <span className="font-mono" title="Deleted MCP server">
+                {id}
+              </span>
+            )}
+          </span>
+        )
+      })}
+    </p>
+  )
+}
+
 function RunDetailBody({
   detail,
   highlight,
@@ -172,6 +206,9 @@ function RunDetailBody({
               <p className="text-xs text-muted-foreground" data-testid="run-detail-toolset">
                 Toolset: {detail.config.toolset}
               </p>
+            )}
+            {Array.isArray(detail.config?.mcp_servers) && detail.config.mcp_servers.length > 0 && (
+              <RunMcpServers ids={detail.config.mcp_servers} />
             )}
           </div>
           <StatusBadge

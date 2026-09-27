@@ -539,6 +539,15 @@ class RemoteApi:
         query = urlencode(given)
         return await self._json("GET", f"{path}?{query}" if query else path)
 
+    async def post(self, path: str, body: Any = None) -> Any:
+        return await self._json("POST", path, body=body)
+
+    async def put(self, path: str, body: Any) -> Any:
+        return await self._json("PUT", path, body=body)
+
+    async def delete(self, path: str) -> None:
+        await self._json("DELETE", path)
+
     async def run(self, body: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         """``POST /runs`` as a stream: each NDJSON event, as it arrives.
 

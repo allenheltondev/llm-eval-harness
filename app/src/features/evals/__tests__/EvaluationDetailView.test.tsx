@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { ToastProvider } from '@readysetcloud/ui'
 import EvaluationDetailView, { batchSlots, sourceLabel } from '../EvaluationDetailView'
+import { INITIAL_MCP_SERVER_STATE, useMcpServerStore } from '../../../stores'
 import type { EvaluationDetail, EvaluationResult } from '../../../api'
 
 const JUDGE = { model_id: 'amazon.nova-pro-v1:0', system_prompt_used: false, rubric_used: true }
@@ -175,6 +176,39 @@ describe('EvaluationDetailView', () => {
     expect(within(config).getByText('Be strict.')).toBeInTheDocument()
     // A suite's prompts are its cases; there is no single user prompt to show.
     expect(within(config).queryByText('User prompt')).not.toBeInTheDocument()
+  })
+
+  it('names the MCP servers the evaluated run config used', () => {
+    useMcpServerStore.setState({
+      ...INITIAL_MCP_SERVER_STATE,
+      servers: [
+        {
+          id: 'mcp-1',
+          name: 'GitHub MCP',
+          url: 'https://mcp.github.example/mcp',
+          header_names: [],
+          created_at: '2026-09-01T00:00:00Z',
+          updated_at: '2026-09-01T00:00:00Z'
+        }
+      ],
+      loaded: true,
+      loadServers: vi.fn().mockResolvedValue(undefined)
+    })
+    const evaluation: EvaluationDetail = {
+      ...determinismEvaluation,
+      config: {
+        ...determinismEvaluation.config,
+        run_config: {
+          ...determinismEvaluation.config.run_config!,
+          mcp_servers: ['mcp-1', 'mcp-gone']
+        }
+      }
+    }
+    render(<EvaluationDetailView evaluation={evaluation} result={evaluation.result} />)
+
+    const config = screen.getByTestId('eval-config')
+    expect(within(config).getByText('MCP servers')).toBeInTheDocument()
+    expect(within(config).getByText('GitHub MCP, mcp-gone')).toBeInTheDocument()
   })
 
   it('lists and links every run of a non-suite evaluation', () => {

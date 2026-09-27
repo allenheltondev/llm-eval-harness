@@ -143,6 +143,69 @@ describe('api.tools', () => {
   })
 })
 
+describe('api.mcpServers', () => {
+  const server = {
+    id: 'mcp-1',
+    name: 'GitHub MCP',
+    url: 'https://mcp.example.com/mcp',
+    header_names: ['Authorization'],
+    created_at: '2026-09-01T00:00:00Z',
+    updated_at: '2026-09-01T00:00:00Z'
+  }
+
+  it('lists, gets, creates, updates, removes and tests', async () => {
+    const spy = mockFetch(
+      jsonResponse({ servers: [server] }),
+      jsonResponse(server),
+      jsonResponse(server, 201),
+      jsonResponse(server),
+      noContent(),
+      jsonResponse({ ok: true, tools: [{ name: 'search', description: null }], error: null })
+    )
+
+    const listed = await api.mcpServers.list()
+    await api.mcpServers.get('mcp-1')
+    await api.mcpServers.create({
+      name: 'GitHub MCP',
+      url: 'https://mcp.example.com/mcp',
+      headers: { Authorization: 'Bearer x' }
+    })
+    await api.mcpServers.update('mcp-1', { name: 'GH', headers: { Authorization: null } })
+    await api.mcpServers.remove('mcp-1')
+    const tested = await api.mcpServers.test('mcp-1')
+
+    expect(listed.servers).toEqual([server])
+    expect(tested).toEqual({
+      ok: true,
+      tools: [{ name: 'search', description: null }],
+      error: null
+    })
+    expect(urlsOf(spy)).toEqual([
+      `${BASE}/mcp-servers`,
+      `${BASE}/mcp-servers/mcp-1`,
+      `${BASE}/mcp-servers`,
+      `${BASE}/mcp-servers/mcp-1`,
+      `${BASE}/mcp-servers/mcp-1`,
+      `${BASE}/mcp-servers/mcp-1/test`
+    ])
+    expect(methodsOf(spy)).toEqual(['GET', 'GET', 'POST', 'PUT', 'DELETE', 'POST'])
+    expect(bodyOf(spy, 2)).toEqual({
+      name: 'GitHub MCP',
+      url: 'https://mcp.example.com/mcp',
+      headers: { Authorization: 'Bearer x' }
+    })
+    expect(bodyOf(spy, 3)).toEqual({ name: 'GH', headers: { Authorization: null } })
+  })
+
+  it('encodes the id into the path', async () => {
+    const spy = mockFetch(jsonResponse(server))
+
+    await api.mcpServers.get('a/b')
+
+    expect(urlOf(spy)).toBe(`${BASE}/mcp-servers/a%2Fb`)
+  })
+})
+
 describe('api.runs', () => {
   it('forces stream:false on create', async () => {
     const spy = mockFetch(jsonResponse({ id: 'r1', status: 'completed' }))

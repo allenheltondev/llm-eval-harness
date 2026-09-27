@@ -209,6 +209,12 @@ export interface RunRequest {
    * without tools. Non-null executes the run with that toolset's tools.
    */
   toolset?: string | null
+  /**
+   * Ids of saved MCP servers (`GET /api/v1/mcp-servers`) whose tools the run
+   * may call, alongside `toolset`'s. At most 5; an unknown id is a 400
+   * `unknown_mcp_server`. Omitted (or `[]`) means none.
+   */
+  mcp_servers?: string[]
   /** 1 – 100, defaults to 10. */
   max_tool_iterations?: number
   guardrail?: RunGuardrailConfig | null
@@ -266,6 +272,8 @@ export interface ToolTranscriptEntry {
 export interface RunStoredConfig {
   inference: InferenceConfig
   toolset: string | null
+  /** Saved MCP server ids; present only when the run used any. */
+  mcp_servers?: string[]
   max_tool_iterations: number
   guardrail: Required<RunGuardrailConfig> | null
   stream: boolean
@@ -647,6 +655,68 @@ export interface Toolset {
 /** `GET /api/v1/tools`. */
 export interface ToolsResponse {
   toolsets: Toolset[]
+}
+
+/* -------------------------------------------------------------------------- */
+/* MCP servers — routers/mcp.py, mcp/schemas.py                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A saved remote MCP server. Header *values* are write-only: the API returns
+ * only their names, so a secret set here is never read back.
+ */
+export interface McpServer {
+  id: string
+  name: string
+  url: string
+  /** Sorted names of the headers sent to the server (e.g. `Authorization`). */
+  header_names: string[]
+  /** ISO-8601 timestamp. */
+  created_at: string
+  /** ISO-8601 timestamp. */
+  updated_at: string
+}
+
+/** `GET /api/v1/mcp-servers` (oldest first). */
+export interface McpServerListResponse {
+  servers: McpServer[]
+}
+
+/**
+ * Body of `POST /api/v1/mcp-servers`. `name` is 1 – 64 chars; a deployed
+ * stack only accepts public `https` URLs (400 `invalid_mcp_url`).
+ */
+export interface McpServerCreate {
+  name: string
+  url: string
+  headers?: Record<string, string>
+}
+
+/**
+ * Body of `PUT /api/v1/mcp-servers/{id}`. `headers` is a patch: a string sets
+ * or replaces that header, `null` removes it, and a header not mentioned is
+ * kept unchanged.
+ */
+export interface McpServerUpdate {
+  name?: string
+  url?: string
+  headers?: Record<string, string | null>
+}
+
+/** One tool a server offers, as reported by a connection test. */
+export interface McpToolInfo {
+  name: string
+  description: string | null
+}
+
+/**
+ * `POST /api/v1/mcp-servers/{id}/test`. An unreachable server is still a
+ * 200: `ok: false` with `error` set.
+ */
+export interface McpTestResult {
+  ok: boolean
+  tools: McpToolInfo[]
+  error: string | null
 }
 
 /* -------------------------------------------------------------------------- */

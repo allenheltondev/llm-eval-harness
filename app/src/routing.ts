@@ -1,22 +1,22 @@
 /**
  * Hash routes: a link to one evaluation or one run that survives a reload.
  *
- * The app has no router and does not need one — five tabs and two kinds of
+ * The app has no router and does not need one — six tabs and two kinds of
  * "open this thing" link. The routes live in the URL fragment (`#/evals/<id>`)
  * so they work unchanged behind any static host: the server never sees the
  * fragment, so there is no rewrite rule to configure. The CLI prints exactly
  * these links (`nimbus eval` on a signed-in stack), which is the reason they exist.
  *
- *   #/workbench  #/evals  #/history  #/guardrails  #/about
+ *   #/workbench  #/evals  #/history  #/guardrails  #/tools  #/about
  *   #/evals/<evaluation id>
  *   #/runs/<run id>          (the History tab, with that run open)
  */
 
 import { useCallback, useEffect, useState } from 'react'
 
-export type TabId = 'workbench' | 'evals' | 'history' | 'guardrails' | 'about'
+export type TabId = 'workbench' | 'evals' | 'history' | 'guardrails' | 'tools' | 'about'
 
-export const TAB_IDS: TabId[] = ['workbench', 'evals', 'history', 'guardrails', 'about']
+export const TAB_IDS: TabId[] = ['workbench', 'evals', 'history', 'guardrails', 'tools', 'about']
 
 export interface Route {
   tab: TabId

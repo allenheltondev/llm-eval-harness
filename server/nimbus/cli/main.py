@@ -37,7 +37,7 @@ from typing import TextIO
 import yaml
 from pydantic import ValidationError
 
-from nimbus.cli import commands, remote
+from nimbus.cli import commands, mcp_commands, remote
 from nimbus.cli.commands import EXIT_CANCELLED, EXIT_FAILED
 from nimbus.config import Settings
 from nimbus.errors import AppError
@@ -59,6 +59,7 @@ COMMANDS: dict[str, Command] = {
     "eval": commands.evaluate,
     "models": commands.models,
     "tools": commands.tools,
+    "mcp": mcp_commands.mcp,
     "runs": commands.runs,
     "show": commands.show,
     "serve": commands.serve,
@@ -152,6 +153,13 @@ def _run_options() -> argparse.ArgumentParser:
         help="read the system prompt from a file",
     )
     parent.add_argument("--toolset", help="a toolset from `nimbus tools`")
+    parent.add_argument(
+        "--mcp-server",
+        action="append",
+        metavar="ID",
+        help="a saved MCP server's id whose tools the run may call (repeatable; "
+        "save servers on the Tools page)",
+    )
     parent.add_argument(
         "--max-tool-iterations",
         type=int,
@@ -261,6 +269,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("tools", parents=[output], help="list the registered toolsets")
 
+    mcp = subparsers.add_parser(
+        "mcp",
+        parents=[output],
+        help="save, test and remove remote MCP servers a run can use as tools",
+        description=(
+            "Remote MCP servers (streamable HTTP) whose tools a run may call: save one, "
+            "then name its id with `run`/`eval --mcp-server ID`. Works on the signed-in "
+            "stack, or here with --local. Header values are secrets: pass "
+            "--header 'Name: value', or --header Name to be asked for the value without "
+            "echo. They are never shown again."
+        ),
+    )
+    mcp_actions = mcp.add_subparsers(dest="mcp_command", metavar="ACTION", required=True)
+    mcp_actions.add_parser("list", parents=[output], help="list saved MCP servers")
+    header_help = "an auth header: 'Name: value', or Name to be prompted (repeatable)"
+    mcp_add = mcp_actions.add_parser("add", parents=[output], help="save an MCP server")
+    mcp_add.add_argument("name", help="a display name; its tools are prefixed with a slug of it")
+    mcp_add.add_argument("url", help="the server's streamable HTTP endpoint, e.g. https://host/mcp")
+    mcp_add.add_argument("--header", action="append", metavar="HEADER", help=header_help)
+    mcp_update = mcp_actions.add_parser(
+        "update", parents=[output], help="change a saved MCP server; unnamed headers are kept"
+    )
+    mcp_update.add_argument("id", help="the server's id (`nimbus mcp list`)")
+    mcp_update.add_argument("--name", help="a new display name")
+    mcp_update.add_argument("--url", help="a new endpoint URL")
+    mcp_update.add_argument("--header", action="append", metavar="HEADER", help=header_help)
+    mcp_update.add_argument(
+        "--remove-header", action="append", metavar="NAME", help="drop a header (repeatable)"
+    )
+    mcp_remove = mcp_actions.add_parser(
+        "remove", parents=[output], help="delete a saved MCP server"
+    )
+    mcp_remove.add_argument("id", help="the server's id")
+    mcp_test = mcp_actions.add_parser(
+        "test", parents=[output], help="connect with the saved headers and list the server's tools"
+    )
+    mcp_test.add_argument("id", help="the server's id")
+
     runs = subparsers.add_parser("runs", parents=[output], help="list stored runs, newest first")
     runs.add_argument("--limit", type=int, default=20, help="rows per page (default: 20)")
     runs.add_argument("--model", help="only runs on this model id")
@@ -278,7 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="sign in to a deployed Nimbus stack; commands then run there",
         description=(
             "Sign in to a Nimbus stack (the URL of its web UI). From then on run, eval, "
-            "runs, show, models and tools use that stack, and what you run shows in its "
+            "runs, show, models, tools and mcp use that stack, and what you run shows in its "
             "web UI; --local uses this machine for one command, `nimbus logout` for good. "
             "The password is read without echo, or from stdin with --password-stdin; it "
             "is never stored."
@@ -462,7 +508,7 @@ def _check_required(args: argparse.Namespace) -> None:
 
 
 #: The commands that run wherever the target is: a signed-in stack, or here.
-TARGETED = frozenset({"run", "eval", "runs", "show", "models", "tools"})
+TARGETED = frozenset({"run", "eval", "runs", "show", "models", "tools", "mcp"})
 
 
 def resolve_target(args: argparse.Namespace) -> None:

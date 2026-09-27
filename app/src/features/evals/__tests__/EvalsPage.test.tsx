@@ -23,6 +23,8 @@ vi.mock('../../../api', async importOriginal => {
     api: {
       ...actual.api,
       health: healthMock,
+      // Never settles: the launcher's tool picker is not under test here.
+      tools: vi.fn(() => new Promise(() => {})),
       evaluations: { ...actual.api.evaluations, get: getEvaluationMock }
     }
   }
@@ -34,6 +36,7 @@ const {
   DEFAULT_SETTINGS,
   INITIAL_EVAL_STATE,
   useEvalStore,
+  useMcpServerStore,
   useModelStore,
   useRunConfigStore,
   useSettingsStore
@@ -93,6 +96,11 @@ const rows: EvaluationDetail[] = [
 ]
 
 beforeEach(() => {
+  useMcpServerStore.setState({
+    servers: [],
+    loaded: true,
+    loadServers: vi.fn().mockResolvedValue(undefined)
+  })
   healthMock.mockClear()
   getEvaluationMock.mockReset()
   loadEvaluations.mockClear()

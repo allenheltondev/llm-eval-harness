@@ -326,6 +326,10 @@ Resources:
           # Read by worker.lambda_app.build_store for the evaluation and run
           # items it writes -- the same rule the server applies to its own.
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
+          # Runs name saved MCP servers by id; the worker reads each MCP#
+          # item (GetItem) and its headers' SecureString when the run starts.
+          NIMBUS_MCP_TABLE: !Ref EvalTable
+          NIMBUS_MCP_SSM_PREFIX: !Sub /nimbus/${AWS::StackName}/mcp
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -352,6 +356,12 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt EvalTable.Arn
+            # Saved MCP servers' headers: read-only, the worker never saves one.
+            # SecureString under the AWS-managed aws/ssm key, whose key policy
+            # already lets SSM decrypt for this account, so no KMS grant here.
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nimbus/${AWS::StackName}/mcp/*
   ServerFunction:
     Type: AWS::Serverless::Function
     Condition: DeployServer
@@ -405,6 +415,10 @@ Resources:
           NIMBUS_LOCAL_EVALS: 'off'
           NIMBUS_EVAL_TABLE: !Ref EvalTable
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
+          # Saved MCP servers (the Tools page): MCP# items in the same table,
+          # auth header values as SSM SecureString parameters under this path.
+          NIMBUS_MCP_TABLE: !Ref EvalTable
+          NIMBUS_MCP_SSM_PREFIX: !Sub /nimbus/${AWS::StackName}/mcp
           NIMBUS_EVAL_FUNCTION_NAME: !If
             - ServerHasEvalWorker
             - !Ref EvalWorkerFunction
@@ -471,6 +485,14 @@ Resources:
             - Effect: Allow
               Action: dynamodb:Query
               Resource: !Sub ${EvalTable.Arn}/index/GSI1
+            # Saving, using and deleting MCP server auth headers (SecureString
+            # under aws/ssm; see the worker's matching statement).
+            - Effect: Allow
+              Action:
+                - ssm:PutParameter
+                - ssm:GetParameter
+                - ssm:DeleteParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nimbus/${AWS::StackName}/mcp/*
             # Dispatching an evaluation to the cloud lane.
             - !If
               - ServerHasEvalWorker

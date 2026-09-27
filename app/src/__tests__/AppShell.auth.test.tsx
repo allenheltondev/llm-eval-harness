@@ -24,6 +24,7 @@ const {
   DEFAULT_SETTINGS,
   INITIAL_RUN_STATE,
   useGuardrailStore,
+  useMcpServerStore,
   useModelStore,
   useRunConfigStore,
   useRunStore,
@@ -54,7 +55,8 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   toolsMock.mockReset()
-  toolsMock.mockResolvedValue({ toolsets: [] })
+  // Never settles: the Workbench's tool picker is not under test here.
+  toolsMock.mockReturnValue(new Promise(() => {}))
   useRunStore.setState({ ...INITIAL_RUN_STATE })
   useRunConfigStore.setState({ ...DEFAULT_RUN_CONFIG })
   useSettingsStore.setState({ ...DEFAULT_SETTINGS })
@@ -65,6 +67,11 @@ beforeEach(() => {
   useGuardrailStore.setState({
     guardrails: [],
     loadGuardrails: vi.fn().mockResolvedValue(undefined)
+  })
+  useMcpServerStore.setState({
+    servers: [],
+    loaded: true,
+    loadServers: vi.fn().mockResolvedValue(undefined)
   })
 })
 

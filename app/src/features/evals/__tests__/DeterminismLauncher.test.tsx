@@ -25,9 +25,11 @@ function health(configured: boolean, localAvailable = true): HealthResponse {
   }
 }
 
+const toolsMock = vi.fn()
+
 vi.mock('../../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../api')>()
-  return { ...actual, api: { ...actual.api, health: healthMock } }
+  return { ...actual, api: { ...actual.api, health: healthMock, tools: toolsMock } }
 })
 
 const DeterminismLauncher = (await import('../DeterminismLauncher')).default
@@ -35,7 +37,9 @@ const {
   DEFAULT_RUN_CONFIG,
   DEFAULT_SETTINGS,
   INITIAL_EVAL_STATE,
+  INITIAL_MCP_SERVER_STATE,
   useEvalStore,
+  useMcpServerStore,
   useModelStore,
   useRunConfigStore,
   useSettingsStore
@@ -88,6 +92,23 @@ beforeEach(() => {
     modelProviders: ALL_PROVIDERS,
     loadModels: vi.fn().mockResolvedValue(undefined)
   })
+  toolsMock.mockReset()
+  toolsMock.mockResolvedValue({ toolsets: [{ name: 'fraud-detection', tools: ['lookupAccount'] }] })
+  useMcpServerStore.setState({
+    ...INITIAL_MCP_SERVER_STATE,
+    servers: [
+      {
+        id: 'mcp-1',
+        name: 'GitHub MCP',
+        url: 'https://mcp.github.example/mcp',
+        header_names: [],
+        created_at: '2026-09-01T00:00:00Z',
+        updated_at: '2026-09-01T00:00:00Z'
+      }
+    ],
+    loaded: true,
+    loadServers: vi.fn().mockResolvedValue(undefined)
+  })
 })
 
 describe('DeterminismLauncher', () => {
@@ -123,6 +144,44 @@ describe('DeterminismLauncher', () => {
     expect(screen.getByLabelText('Model to evaluate')).toHaveValue(MODELS[0].model_id)
     expect(screen.getByLabelText('User prompt')).toHaveValue('From the Workbench')
     expect(screen.getByRole('button', { name: 'Start evaluation' })).toBeEnabled()
+  })
+
+  it('offers the shared tool picker and summarizes the tools the evaluation will use', async () => {
+    useRunConfigStore.setState({ toolset: 'fraud-detection' })
+    render(<DeterminismLauncher />)
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
+
+    const summary = screen.getByTestId('evaluated-tools-summary')
+    expect(summary).toHaveTextContent('Tools: fraud-detection;')
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'GitHub MCP' }))
+
+    // The Workbench's run config, not a copy.
+    expect(useRunConfigStore.getState().mcp_servers).toEqual(['mcp-1'])
+    expect(summary).toHaveTextContent('Tools: fraud-detection, GitHub MCP;')
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'fraud-detection' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'GitHub MCP' }))
+    expect(summary).toHaveTextContent('Tools: none;')
+  })
+
+  it('sends the MCP servers in run_config, dropping ones deleted since they were ticked', async () => {
+    useRunConfigStore.setState({
+      model_id: MODELS[0].model_id,
+      user_prompt: 'go',
+      mcp_servers: ['mcp-1', 'deleted-server']
+    })
+    render(<DeterminismLauncher />)
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(1))
+
+    expect(screen.getByTestId('evaluated-tools-summary')).toHaveTextContent('Tools: GitHub MCP;')
+    fireEvent.click(screen.getByRole('button', { name: 'Start evaluation' }))
+
+    expect(startEvaluation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_config: expect.objectContaining({ mcp_servers: ['mcp-1'] })
+      })
+    )
   })
 
   it('clamps N to the 2-25 range', async () => {

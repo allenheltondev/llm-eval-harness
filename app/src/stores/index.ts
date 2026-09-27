@@ -1,7 +1,7 @@
 /**
  * Public surface of the store layer.
  *
- * Seven independent slices, each a plain zustand store:
+ * Eight independent slices, each a plain zustand store:
  *
  *   runConfigStore   workbench form state (persisted)
  *   runStore         the active run: stream, tools, metrics
@@ -9,6 +9,7 @@
  *   historyStore     paged past runs + detail cache
  *   evalStore        evaluations list + the followed evaluation
  *   guardrailStore   guardrail list, details, versions, CRUD
+ *   mcpServerStore   saved MCP servers, CRUD, connection tests
  *   settingsStore    UI preferences (persisted)
  *
  * Stores never import React and never import each other's hooks for reading —
@@ -29,6 +30,7 @@ export {
   selectCanRun,
   DEFAULT_RUN_CONFIG,
   RUN_CONFIG_STORAGE_KEY,
+  mergePersistedRunConfig,
   type RunConfigData,
   type RunConfigActions,
   type RunConfigStore
@@ -107,6 +109,16 @@ export {
   type GuardrailActions,
   type GuardrailStore
 } from './guardrailStore'
+
+export {
+  useMcpServerStore,
+  knownMcpServerIds,
+  MAX_RUN_MCP_SERVERS,
+  INITIAL_MCP_SERVER_STATE,
+  type McpServerStateData,
+  type McpServerActions,
+  type McpServerStore
+} from './mcpServerStore'
 
 export {
   useSettingsStore,

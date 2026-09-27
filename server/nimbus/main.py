@@ -9,7 +9,7 @@ from nimbus import deployment
 from nimbus.auth import require_auth
 from nimbus.config import get_settings
 from nimbus.errors import register_exception_handlers
-from nimbus.routers import guardrails, health, models, runs, tools
+from nimbus.routers import guardrails, health, mcp, models, runs, tools
 from nimbus.store.db import init_db
 from nimbus.store.repo import get_history_repo
 
@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(tools.router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(runs.router, prefix=API_PREFIX, dependencies=protected)
     app.include_router(guardrails.router, prefix=API_PREFIX, dependencies=protected)
+    app.include_router(mcp.router, prefix=API_PREFIX, dependencies=protected)
 
     return app
 

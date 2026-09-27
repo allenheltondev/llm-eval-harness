@@ -5,12 +5,13 @@
  * The model under test and the prompts are chosen right here, but they are
  * the Workbench's run config (`runConfigStore`), not a copy: editing them in
  * either place edits both, so a prompt tried in the Workbench is already the
- * one an evaluation will run, and vice versa. Tools, inference parameters and
- * the guardrail stay Workbench settings; the summary line says which apply.
+ * one an evaluation will run, and vice versa. So are the tools (the shared
+ * `ToolPicker`: a built-in toolset plus saved MCP servers). Inference
+ * parameters and the guardrail stay Workbench settings; the summary line says so.
  *
- * `run_config` is built with `toRunRequest` at submit time — same helper the
- * Workbench's Run button uses — so an evaluation always replays exactly the
- * request a manual run would send.
+ * `run_config` is built with `toRunRequest` at submit time — same helper (and
+ * same deleted-MCP-server pruning) the Workbench's Run button uses — so an
+ * evaluation always replays exactly the request a manual run would send.
  *
  * Run location follows the server: health's `cloud_evals.configured` gates the
  * Cloud option, `local_evals.available` gates "This machine". A deployment with
@@ -38,15 +39,18 @@ import {
 import {
   findModel,
   groupModelsBySource,
+  knownMcpServerIds,
   selectCanRun,
   selectIsEvaluating,
   toRunRequest,
   useEvalStore,
+  useMcpServerStore,
   useModelStore,
   useRunConfigStore,
   useSettingsStore
 } from '../../stores'
 import ModelPicker from '../../components/ModelPicker'
+import ToolPicker, { liveMcpSelection, toolsSummary } from '../../components/ToolPicker'
 import { api } from '../../api'
 import type {
   EvaluationExecution,
@@ -78,6 +82,9 @@ interface DeterminismLauncherProps {
 
 export default function DeterminismLauncher({ onStarted }: DeterminismLauncherProps) {
   const toolset = useRunConfigStore(state => state.toolset)
+  const mcpServerIds = useRunConfigStore(state => state.mcp_servers)
+  const savedMcpServers = useMcpServerStore(state => state.servers)
+  const mcpServersLoaded = useMcpServerStore(state => state.loaded)
   const systemPrompt = useRunConfigStore(state => state.system_prompt)
   const userPrompt = useRunConfigStore(state => state.user_prompt)
   const setSystemPrompt = useRunConfigStore(state => state.setSystemPrompt)
@@ -166,7 +173,7 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
 
     const request: EvaluationRequest = {
       kind: 'determinism',
-      run_config: toRunRequest(useRunConfigStore.getState()),
+      run_config: toRunRequest(useRunConfigStore.getState(), knownMcpServerIds()),
       n,
       grader,
       execution: effectiveExecution,
@@ -211,9 +218,15 @@ export default function DeterminismLauncher({ onStarted }: DeterminismLauncherPr
             value={userPrompt}
             onChange={event => setUserPrompt(event.target.value)}
           />
-          <p className="field-hint">
-            Shared with the Workbench. Tools: {toolset ?? 'none'}; inference settings and guardrail
-            come from the Workbench too.
+          <ToolPicker idPrefix="eval-tools" />
+          <p className="field-hint" data-testid="evaluated-tools-summary">
+            Shared with the Workbench. Tools:{' '}
+            {toolsSummary(
+              toolset,
+              liveMcpSelection(mcpServerIds, savedMcpServers, mcpServersLoaded),
+              savedMcpServers
+            )}
+            ; inference settings and guardrail come from the Workbench too.
           </p>
         </div>
 

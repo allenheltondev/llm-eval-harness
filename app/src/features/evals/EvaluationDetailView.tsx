@@ -10,6 +10,7 @@
  * the CLI shows exactly as one started here.
  */
 
+import { useEffect } from 'react'
 import { Alert, Badge, Button, Card, CardBody, CardHeader, StatusBadge } from '@readysetcloud/ui'
 import { useNotify } from '../../components/notify'
 import { statusTone } from '../../components/status'
@@ -22,6 +23,7 @@ import type {
   SuiteCaseResult
 } from '../../api'
 import { evaluationHref, runHref } from '../../routing'
+import { useMcpServerStore } from '../../stores'
 
 const SOURCE_LABELS: Record<string, string> = { cli: 'CLI', ui: 'Web UI', api: 'API' }
 
@@ -275,6 +277,19 @@ function ConfigRow({ label, value }: { label: string; value: string | null | und
   )
 }
 
+/** A run config's MCP servers by name, falling back to the id (a deleted server). */
+function McpServersRow({ ids }: { ids: string[] }) {
+  const servers = useMcpServerStore(state => state.servers)
+  const loadServers = useMcpServerStore(state => state.loadServers)
+
+  useEffect(() => {
+    void loadServers()
+  }, [loadServers])
+
+  const names = ids.map(id => servers.find(server => server.id === id)?.name ?? id)
+  return <ConfigRow label="MCP servers" value={names.join(', ')} />
+}
+
 function inferenceSummary(run: RunRequest): string | null {
   const inference = run.inference
   if (!inference) return null
@@ -300,6 +315,9 @@ function Configuration({ config }: { config: EvaluationStoredConfig }) {
               value={`${run.model_id}${run.provider ? ` (${run.provider})` : ''}`}
             />
             <ConfigRow label="Toolset" value={run.toolset ?? null} />
+            {run.mcp_servers && run.mcp_servers.length > 0 && (
+              <McpServersRow ids={run.mcp_servers} />
+            )}
             <ConfigRow label="Inference" value={inferenceSummary(run)} />
             <ConfigRow
               label="Guardrail"

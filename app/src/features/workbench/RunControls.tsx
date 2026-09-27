@@ -1,14 +1,16 @@
 /**
  * Everything between "the prompt is written" and "the run is in flight":
- * inference knobs, the toolset picker, guardrail selection, and Run / Cancel.
+ * inference knobs, the tool picker, guardrail selection, and Run / Cancel.
  *
  * The submit handler deliberately reads `useRunConfigStore.getState()` rather
  * than subscribing to the whole config — `toRunRequest` builds a fresh object,
  * which cannot be a zustand v5 selector, and the button only needs the boolean
  * from `selectCanRun`.
  *
- * Toolsets come from `GET /tools`, fetched once on mount and held locally: the
- * list is static for the life of the server and nothing else reads it.
+ * Tools (a built-in toolset plus saved MCP servers) are picked with the
+ * shared `ToolPicker`. The request drops MCP server ids that no longer exist
+ * (`knownMcpServerIds`), so a server deleted since it was ticked cannot 400
+ * the run.
  *
  * Guardrails only run against the `bedrock` provider (a guardrail + a
  * non-bedrock provider is a server-side 400), so the guardrail select is
@@ -19,15 +21,16 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Alert, Button, Card, CardBody, CardHeader, Input, Select } from '@readysetcloud/ui'
-import { api } from '../../api'
-import type { Toolset } from '../../api'
+import { Button, Card, CardBody, CardHeader, Input, Select } from '@readysetcloud/ui'
+import ToolPicker, { liveMcpSelection } from '../../components/ToolPicker'
 import {
+  knownMcpServerIds,
   readyGuardrails,
   selectCanRun,
   selectIsRunning,
   toRunRequest,
   useGuardrailStore,
+  useMcpServerStore,
   useRunConfigStore,
   useRunStore
 } from '../../stores'
@@ -41,8 +44,6 @@ function toOptionalNumber(raw: string): number | undefined {
 
 export default function RunControls() {
   const [showInference, setShowInference] = useState(false)
-  const [toolsets, setToolsets] = useState<Toolset[]>([])
-  const [toolsError, setToolsError] = useState<string | null>(null)
 
   const inference = useRunConfigStore(state => state.inference)
   const toolset = useRunConfigStore(state => state.toolset)
@@ -50,10 +51,13 @@ export default function RunControls() {
   const guardrail = useRunConfigStore(state => state.guardrail)
   const provider = useRunConfigStore(state => state.provider)
   const setInference = useRunConfigStore(state => state.setInference)
-  const setToolset = useRunConfigStore(state => state.setToolset)
+  const mcpServers = useRunConfigStore(state => state.mcp_servers)
   const setMaxToolIterations = useRunConfigStore(state => state.setMaxToolIterations)
   const setGuardrail = useRunConfigStore(state => state.setGuardrail)
   const canRun = useRunConfigStore(selectCanRun)
+
+  const savedMcpServers = useMcpServerStore(state => state.servers)
+  const mcpServersLoaded = useMcpServerStore(state => state.loaded)
 
   const guardrails = useGuardrailStore(state => state.guardrails)
   const loadGuardrails = useGuardrailStore(state => state.loadGuardrails)
@@ -66,31 +70,15 @@ export default function RunControls() {
     void loadGuardrails()
   }, [loadGuardrails])
 
-  useEffect(() => {
-    let cancelled = false
-    api
-      .tools()
-      .then(response => {
-        if (!cancelled) setToolsets(response.toolsets)
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        setToolsError(error instanceof Error ? error.message : 'Could not load toolsets')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   const attachable = readyGuardrails(guardrails)
   const guardrailBlocked = provider !== 'bedrock'
   const guardrailHint = 'Guardrails require the Bedrock provider'
 
-  const toolsEnabled = toolset !== null
-  const selectedToolset = toolsets.find(entry => entry.name === toolset) ?? null
+  const toolsEnabled =
+    toolset !== null || liveMcpSelection(mcpServers, savedMcpServers, mcpServersLoaded).length > 0
 
   function handleRun() {
-    void startRun(toRunRequest(useRunConfigStore.getState()))
+    void startRun(toRunRequest(useRunConfigStore.getState(), knownMcpServerIds()))
   }
 
   return (
@@ -101,28 +89,7 @@ export default function RunControls() {
         </h2>
       </CardHeader>
       <CardBody className="space-y-3">
-        <div className="space-y-1">
-          <Select
-            label="Tools"
-            value={toolset ?? ''}
-            onChange={event => setToolset(event.target.value === '' ? null : event.target.value)}
-          >
-            <option value="">None</option>
-            {toolsets.map(entry => (
-              <option key={entry.name} value={entry.name}>
-                {entry.name}
-              </option>
-            ))}
-          </Select>
-          {selectedToolset && (
-            <p className="text-xs text-muted-foreground" data-testid="toolset-tools">
-              {selectedToolset.tools.length > 0
-                ? selectedToolset.tools.join(', ')
-                : 'No tools in this toolset'}
-            </p>
-          )}
-          {toolsError && <Alert variant="error">Could not load toolsets: {toolsError}</Alert>}
-        </div>
+        <ToolPicker idPrefix="workbench-tools" />
 
         <div className={toolsEnabled ? '' : 'opacity-50'}>
           <Input

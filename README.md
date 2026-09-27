@@ -110,6 +110,8 @@ nimbus init && nimbus eval --suite suite.yaml    # a starter test suite, then ru
 nimbus eval --run <id> --run <id>                # grade runs you already have
 nimbus runs                                      # history, newest first
 nimbus show <id>                                 # one run or evaluation, as JSON
+nimbus mcp add GitHub https://host/mcp --header Authorization  # save a remote MCP server
+nimbus run -m <model-id> -p '...' --mcp-server <id>            #   and let a run use its tools
 nimbus serve                                     # the HTTP API the web UI talks to
 nimbus login --url https://<your-stack>          # from now on, commands run on that stack
 nimbus eval --suite suite.yaml                   #   so this shows in its web UI
@@ -156,6 +158,36 @@ def escalate_ticket(ticket_id: str, priority: str, reason: str) -> dict:
 # server/nimbus/tools/registry.py
 _REGISTRY["support"] = [support.escalate_ticket]
 ```
+
+### Remote MCP servers
+
+A run can also use the tools of remote [MCP](https://modelcontextprotocol.io) servers (streamable
+HTTP), alongside or instead of a toolset. Save a server once on the **Tools** page, with `nimbus mcp add` (see
+[docs/cli.md](docs/cli.md#mcp)), or with `POST /api/v1/mcp-servers` (`name`, `url`, optional
+`headers`), then tick it in the
+Workbench or the Evals launcher — or pass `"mcp_servers": ["<id>", ...]` on a run or an
+evaluation's `run_config` (at most 5), or `--mcp-server <id>` on the CLI. Each server's tools are
+prefixed with `mcp-` and a slug of its name (`mcp-github_search_issues`), so two servers can both offer
+`search` and no MCP tool can take a built-in tool's name.
+
+- **Headers are write-only secrets.** Put an API key in `Authorization` (or whatever the server
+  wants); the API only ever returns header *names*. Runs and evaluations store server **ids**, never
+  URLs or headers, so history and the cloud worker's payload hold no secret. Deployed, header values
+  never touch DynamoDB: each server's are one SSM Parameter Store `SecureString` under
+  `/nimbus/<stack>/mcp/`, encrypted with the account's AWS-managed `aws/ssm` key (no key to create,
+  free standard tier, 4 KB of headers per server). Locally they sit in your own SQLite history
+  file, like a `.env`.
+- **Deployed stacks only reach public HTTPS servers.** The server and worker are Lambda functions
+  holding AWS credentials, so `http://`, `localhost`, private, link-local and other reserved
+  addresses are refused. The URL is checked when it is saved, and the rule is enforced on every
+  connection: the host is resolved once, refused unless every address is public, and the socket
+  goes to that checked address, so a DNS-rebinding name can't swap in a private one. Locally
+  anything goes, `http://localhost` included.
+- **Redirects are never followed.** A saved URL is the endpoint; a server that answers with a
+  redirect fails the connection and names the URL to save instead, so neither the connection nor
+  the saved headers can be bounced to another host.
+- **Test** on the Tools page connects with the saved headers and lists the server's tools.
+  A server that cannot be reached when a run starts fails that run with `mcp_connection_failed`.
 
 ## Evaluations
 
@@ -512,6 +544,8 @@ to `~/.config/nimbus` the first time it is read.
 | `NIMBUS_HISTORY_BACKEND` | `auto` | `sqlite` \| `dynamodb` \| `auto` (DynamoDB inside Lambda, SQLite elsewhere) |
 | `NIMBUS_LOCAL_EVALS` | `auto` | `on` \| `off` \| `auto` (off inside Lambda) — whether evaluations may run in this process |
 | `NIMBUS_AUTH_USER_POOL_ID` | *(unset)* | Cognito user pool to verify bearer tokens against. With `NIMBUS_AUTH_CLIENT_ID`, every route but `/health` requires a token; unset locally means no gate. The deployed stack injects both |
+| `NIMBUS_MCP_TABLE` | *(unset)* | DynamoDB table for saved MCP servers; unset keeps them in the SQLite history file. The deployed stack sets it to its table |
+| `NIMBUS_MCP_SSM_PREFIX` | `/nimbus/mcp` | SSM Parameter Store path for saved MCP servers' header values (one `SecureString` per server) when `NIMBUS_MCP_TABLE` is set. The deployed stack uses `/nimbus/<stack>/mcp` |
 | `NIMBUS_AUTH_CLIENT_ID` | *(unset)* | The pool's app client id — what the SPA signs in with and what every accepted token's `aud`/`client_id` must equal |
 
 AWS credentials themselves are **not** a setting — they come from the standard boto3 credential

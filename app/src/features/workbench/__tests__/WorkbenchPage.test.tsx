@@ -22,8 +22,10 @@ vi.mock('../../../api', async importOriginal => {
 const WorkbenchPage = (await import('../WorkbenchPage')).default
 const {
   DEFAULT_RUN_CONFIG,
+  INITIAL_MCP_SERVER_STATE,
   INITIAL_RUN_STATE,
   useGuardrailStore,
+  useMcpServerStore,
   useModelStore,
   useRunConfigStore,
   useRunStore
@@ -60,7 +62,7 @@ const startRun = vi.fn().mockResolvedValue(undefined)
 async function renderSettled() {
   render(<WorkbenchPage />)
   await waitFor(() =>
-    expect(screen.getByRole('option', { name: 'fraud-detection' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'fraud-detection' })).toBeInTheDocument()
   )
 }
 
@@ -82,6 +84,21 @@ beforeEach(() => {
     guardrails: [],
     loaded: true,
     loadGuardrails: vi.fn().mockResolvedValue(undefined)
+  })
+  useMcpServerStore.setState({
+    ...INITIAL_MCP_SERVER_STATE,
+    servers: [
+      {
+        id: 'mcp-1',
+        name: 'GitHub MCP',
+        url: 'https://mcp.github.example/mcp',
+        header_names: ['Authorization'],
+        created_at: '2026-09-01T00:00:00Z',
+        updated_at: '2026-09-01T00:00:00Z'
+      }
+    ],
+    loaded: true,
+    loadServers: vi.fn().mockResolvedValue(undefined)
   })
 })
 
@@ -123,7 +140,8 @@ describe('WorkbenchPage', () => {
     fireEvent.change(screen.getByLabelText('User prompt'), {
       target: { value: 'Is this suspicious?' }
     })
-    fireEvent.change(screen.getByLabelText('Tools'), { target: { value: 'fraud-detection' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'fraud-detection' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'GitHub MCP' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }))
 
@@ -133,13 +151,14 @@ describe('WorkbenchPage', () => {
       user_prompt: 'Is this suspicious?',
       system_prompt: 'You are a fraud analyst.',
       toolset: 'fraud-detection',
+      mcp_servers: ['mcp-1'],
       max_tool_iterations: 10,
       provider: 'bedrock',
       stream: true
     })
   })
 
-  it('sends toolset: null when no toolset is picked', async () => {
+  it('sends toolset: null and no mcp_servers when no tools are picked', async () => {
     await renderSettled()
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), {
@@ -149,6 +168,7 @@ describe('WorkbenchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run' }))
 
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ toolset: null }))
+    expect(startRun.mock.calls[0][0]).not.toHaveProperty('mcp_servers')
   })
 
   it('offers Cancel only while a run is in flight', async () => {

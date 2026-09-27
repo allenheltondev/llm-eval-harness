@@ -143,6 +143,7 @@ def build_run_request(args: argparse.Namespace) -> RunRequest:
             max_tokens=args.max_tokens,
         ),
         toolset=args.toolset,
+        mcp_servers=getattr(args, "mcp_server", None) or [],
         **(
             {"max_tool_iterations": args.max_tool_iterations}
             if args.max_tool_iterations is not None
@@ -168,6 +169,7 @@ def _run_overrides(args: argparse.Namespace) -> dict[str, Any]:
         ("provider", args.provider),
         ("system_prompt", args.system),
         ("toolset", args.toolset),
+        ("mcp_servers", getattr(args, "mcp_server", None)),
         ("max_tool_iterations", args.max_tool_iterations),
     ):
         if value is not None:

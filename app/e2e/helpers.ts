@@ -19,7 +19,7 @@ export async function configureWorkbench(
 /** Switches section through the AppNav rail's links. */
 export async function gotoTab(
   page: Page,
-  name: 'Workbench' | 'Evals' | 'History' | 'Guardrails' | 'About'
+  name: 'Workbench' | 'Evals' | 'History' | 'Guardrails' | 'Tools' | 'About'
 ): Promise<void> {
   await page
     .getByRole('navigation', { name: 'Primary navigation' })
