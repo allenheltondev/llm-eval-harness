@@ -13,6 +13,8 @@ import pytest
 
 from nimbus.cli.gating import EXIT_GATE_FAILED, Gate, check, failed_cases, junit_xml
 
+MISSING_30_DAYS = {"type": "contains", "passed": False, "detail": "missing '30 days'"}
+
 
 def _case(case_id: str, status: str, score: float | None = 0.9, **extra) -> dict:
     return {
@@ -138,12 +140,28 @@ class TestJUnit:
                     "failed",
                     score=0.4,
                     reasoning="Said 60 days.",
-                    assertions=[
-                        {"type": "contains", "passed": False, "message": "missing '30 days'"},
-                        {"type": "regex", "passed": False},
-                        {"passed": False},
-                        {"type": "contains", "passed": True, "message": "fine"},
-                        "not a dict",
+                    # Exactly as PR #33's engine records it: a tally on the
+                    # case, and one verdict per check on every repeat.
+                    judged=True,
+                    assertions={"total": 9, "passed": 5, "failed": 4},
+                    repeats=[
+                        {
+                            "assertions": [
+                                MISSING_30_DAYS,
+                                {"type": "regex", "passed": True, "detail": "matched"},
+                                {"type": "tool_called", "passed": True, "detail": "called once"},
+                            ],
+                            "assertions_passed": False,
+                        },
+                        {"assertions": None, "assertions_passed": None},  # did not run
+                        {
+                            "assertions": [
+                                MISSING_30_DAYS,
+                                {"type": "regex", "passed": False, "detail": "no match"},
+                                {"type": "tool_called", "passed": False},
+                            ],
+                            "assertions_passed": False,
+                        },
                     ],
                 ),
                 _case("down", "error", score=None, error={"code": "x", "message": "throttled"}),
@@ -166,9 +184,9 @@ class TestJUnit:
         assert failure.get("message") == "case wrong failed"
         assert failure.text.splitlines() == [
             "score 0.4",
-            "assertion failed: missing '30 days'",
-            "assertion failed: regex",
-            "assertion failed: assertion",
+            "assertion failed: contains (repeats 1, 3 of 3): missing '30 days'",
+            "assertion failed: regex (repeat 3 of 3): no match",
+            "assertion failed: tool_called (repeat 3 of 3)",
             "Said 60 days.",
         ]
         assert cases["down"].find("error").get("message") == "throttled"

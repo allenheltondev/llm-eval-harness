@@ -86,15 +86,42 @@ def check(gate: Gate, result: dict[str, Any] | None) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
+def _failed_assertions(case: dict[str, Any]) -> list[str]:
+    """One line per assertion that failed on any repeat, with the repeats it failed on.
+
+    A case's ``assertions`` is only the tally (``{total, passed, failed}``);
+    the verdicts are per repeat, under ``repeats[*].assertions`` -- one
+    ``{type, passed, detail}`` per check, in the order of the case's list. A
+    check is identified by its position in that list, so the same check
+    failing on several repeats reads as one line.
+    """
+    repeats = case.get("repeats") or []
+    failed: dict[int, dict[str, Any]] = {}
+    for number, repeat in enumerate(repeats, start=1):
+        verdicts = repeat.get("assertions") if isinstance(repeat, dict) else None
+        for position, verdict in enumerate(verdicts or []):
+            if not isinstance(verdict, dict) or verdict.get("passed") is not False:
+                continue
+            kind = verdict.get("type") or "assertion"
+            entry = failed.setdefault(position, {"type": kind, "repeats": [], "detail": None})
+            entry["repeats"].append(number)
+            if entry["detail"] is None and verdict.get("detail"):
+                entry["detail"] = str(verdict["detail"])
+    lines = []
+    for entry in (failed[position] for position in sorted(failed)):
+        where = ", ".join(str(n) for n in entry["repeats"])
+        label = "repeat" if len(entry["repeats"]) == 1 else "repeats"
+        line = f"assertion failed: {entry['type']} ({label} {where} of {len(repeats)})"
+        lines.append(f"{line}: {entry['detail']}" if entry["detail"] else line)
+    return lines
+
+
 def _failure_text(case: dict[str, Any]) -> str:
-    """The body of a failed case's ``<failure>``: score, reasoning, failed assertions."""
+    """The body of a failed case's ``<failure>``: score, failed assertions, reasoning."""
     lines = []
     if case.get("score") is not None:
         lines.append(f"score {case['score']}")
-    for assertion in case.get("assertions") or []:
-        if isinstance(assertion, dict) and assertion.get("passed") is False:
-            label = assertion.get("message") or assertion.get("type") or "assertion"
-            lines.append(f"assertion failed: {label}")
+    lines.extend(_failed_assertions(case))
     if case.get("reasoning"):
         lines.append(str(case["reasoning"]))
     return "\n".join(lines)
