@@ -71,6 +71,7 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol
 
+from nimbus import spend as spend_module
 from nimbus.config import Settings, get_settings
 from nimbus.engine.events import ErrorEvent, RunCompleteEvent, RunStartEvent
 from nimbus.engine.model_factory import ModelFactory, build_model, classify_error
@@ -129,6 +130,13 @@ class EvalDeps:
     #: local server wants too. It is a field rather than a lookup so a test can
     #: drive the whole pipeline against an in-memory table.
     repo: HistoryRepo | None = None
+    #: Where per-user spend is settled. ``None`` means the store these settings
+    #: resolve to; a field so a test can drive settlement against its own.
+    spend: spend_module.SpendStore | None = None
+
+    def spend_store(self) -> spend_module.SpendStore:
+        """The counter store these deps settle spend into."""
+        return self.spend if self.spend is not None else spend_module.get_spend_store(self.settings)
 
     def history_repo(self) -> HistoryRepo:
         """The repository these deps write history through."""
@@ -284,7 +292,7 @@ def _suite_jobs(suite: Suite) -> list[_Job]:
     return jobs
 
 
-def _planned_jobs(request: EvaluationRequest) -> list[_Job]:
+def planned_jobs(request: EvaluationRequest) -> list[_Job]:
     """Every run ``request`` will make (none for ``grade``, which re-reads stored runs)."""
     if request.kind == "determinism":
         return _determinism_jobs(request)
@@ -985,13 +993,14 @@ async def execute_evaluation_with_seam(
         deps=deps or default_deps(),
     )
     outcomes: list[RunOutcome] = []
+    judge_meter: budget.JudgeMeter | None = None
     try:
         if not isinstance(request, EvaluationRequest):
             request = EvaluationRequest.model_validate(request)
-        planned_jobs = _planned_jobs(request)
+        batch = planned_jobs(request)
         seam.ledger = budget.CostLedger(
             request.max_cost_usd,
-            prior_per_run=budget.prior_per_run(job.run_config for job in planned_jobs),
+            prior_per_run=budget.prior_per_run(job.run_config for job in batch),
         )
         judge_meter = budget.JudgeMeter(seam.deps.judge_factory)
 
@@ -1003,7 +1012,7 @@ async def execute_evaluation_with_seam(
         )
 
         if request.kind in ("determinism", "suite"):
-            await _execute_batch(seam, planned_jobs, outcomes)
+            await _execute_batch(seam, batch, outcomes)
         else:
             outcomes.extend(_load_stored_runs(seam, request.run_ids))
 
@@ -1059,6 +1068,28 @@ async def execute_evaluation_with_seam(
         seam.store.save_evaluation(status="error", error=error)
         seam.publish(EvalCompleteEvent(status="error", result=None))
         return _terminal(seam, "error", outcomes, None, error)
+
+    finally:
+        _settle_spend(seam, request, judge_meter)
+
+
+def _settle_spend(
+    seam: _Seam, request: EvaluationRequest | dict[str, Any], judge_meter: budget.JudgeMeter | None
+) -> None:
+    """Swap the evaluation's spend reservation for what it actually cost.
+
+    Runs however the evaluation ended (finished, failed, cancelled): a cancelled
+    one still spent what it spent. Never raises: an accounting failure must not
+    turn a finished evaluation into a failed one, so it is logged instead.
+    """
+    principal = getattr(request, "principal", None)
+    if principal is None:
+        return
+    actual = seam.ledger.spent + ((judge_meter.cost_usd() or 0.0) if judge_meter else 0.0)
+    try:
+        spend_module.settle(seam.deps.spend_store(), principal, actual)
+    except Exception:
+        logger.exception("could not settle spend for evaluation %s", seam.evaluation_id)
 
 
 # --------------------------------------------------------------------------- #

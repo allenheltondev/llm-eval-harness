@@ -53,6 +53,7 @@ from nimbus.engine.model_factory import ModelFactory, build_model
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import ConflictError, InternalError, NotFoundError, UpstreamError
+from nimbus.evals import admission
 from nimbus.evals import cloud as evals_cloud
 from nimbus.evals import engine as evals_engine
 from nimbus.evals import jobs as evals_jobs
@@ -99,6 +100,11 @@ def _export_ndjson(
         yield RunDetail.model_validate(record).model_dump_json() + "\n"
 
 
+def get_claims(request: Request) -> dict | None:
+    """The verified token claims :func:`nimbus.auth.require_auth` left on the request, if any."""
+    return getattr(request.state, "user", None)
+
+
 def get_model_factory(settings: Settings = Depends(get_settings)) -> ModelFactory:
     """The model provider builder used by ``POST /runs``.
 
@@ -127,6 +133,7 @@ async def create_run(
     payload: RunRequest,
     settings: Settings = Depends(get_settings),
     model_factory: ModelFactory = Depends(get_model_factory),
+    claims: dict | None = Depends(get_claims),
 ):
     """Execute a run; stream it as NDJSON, or return the finished ``RunDetail``.
 
@@ -141,11 +148,16 @@ async def create_run(
     the engine, which owns it for the life of the stream.
     """
     repo = get_history_repo(settings)
-    events = execute_run(
-        payload,
-        settings=settings,
-        model_factory=model_factory,
-        repo=repo,
+    principal = admission.admit_run(payload, claims, settings)
+    events = admission.settle_stream(
+        execute_run(
+            payload,
+            settings=settings,
+            model_factory=model_factory,
+            repo=repo,
+        ),
+        principal,
+        settings,
     )
     first = await anext(events)
 
@@ -288,6 +300,7 @@ async def create_evaluation(
     repo: HistoryRepo = Depends(get_repo),
     invoker: Invoker | None = Depends(get_invoker),
     eval_writer_factory: EvalWriterFactory | None = Depends(get_eval_writer_factory),
+    claims: dict | None = Depends(get_claims),
 ):
     """Accept an evaluation and run it in the background.
 
@@ -308,7 +321,28 @@ async def create_evaluation(
     decision to make.
     """
     _check_mcp_servers(payload, settings)
+    # Identity is the token's, never the body's; spend is reserved before any work.
+    payload = admission.admit(payload, claims, settings)
 
+    try:
+        return await _start_evaluation(
+            payload, settings, model_factory, judge_factory, repo, invoker, eval_writer_factory
+        )
+    except BaseException:
+        admission.release(payload, settings)  # it never started: give the reservation back
+        raise
+
+
+async def _start_evaluation(
+    payload: EvaluationRequest,
+    settings: Settings,
+    model_factory: ModelFactory,
+    judge_factory: JudgeFactory,
+    repo: HistoryRepo,
+    invoker: Invoker | None,
+    eval_writer_factory: EvalWriterFactory | None,
+):
+    """Hand an admitted evaluation to its lane; the lane settles its spend when it ends."""
     if payload.execution == "cloud":
         return await evals_cloud.submit(
             payload, settings=settings, invoker=invoker, store_factory=eval_writer_factory

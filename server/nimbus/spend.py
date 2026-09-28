@@ -39,7 +39,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlmodel import Session
 
-from nimbus import deployment
 from nimbus.config import Settings
 from nimbus.errors import AppError
 from nimbus.store import db, ddb_items
@@ -89,9 +88,9 @@ class Principal(BaseModel):
     reserved_micros: int = Field(default=0, ge=0)
 
 
-def principal_from_claims(claims: dict[str, Any] | None) -> Principal | None:
+def principal_from_claims(claims: object) -> Principal | None:
     """The :class:`Principal` for verified token claims; ``None`` when there is no subject."""
-    if not claims:
+    if not isinstance(claims, dict):
         return None
     subject = claims.get("sub")
     if not isinstance(subject, str) or not subject:
@@ -188,18 +187,23 @@ _stores: dict[tuple[str, str], SpendStore] = {}
 
 
 def get_spend_store(settings: Settings) -> SpendStore:
-    """The counter store for these settings: SQLite locally, DynamoDB when deployed."""
-    backend = deployment.history_backend(settings)
-    if backend == "sqlite":
+    """The counter store for these settings: DynamoDB when a stack table is configured.
+
+    Keyed on ``NIMBUS_EVAL_TABLE``, not on the history backend. The cloud worker
+    keeps its repeats in its own SQLite (``history_backend: sqlite``) but must
+    settle into the same shared counter the server reserved from, or every
+    cloud evaluation would leave its reservation standing.
+    """
+    table_name = settings.eval_table
+    if not table_name:
         key = ("sqlite", "")
         if key not in _stores:
             _stores[key] = SqliteSpendStore()
         return _stores[key]
 
-    # Imported here: boto3 is only needed by a deployed server.
+    # Imported here: boto3 is only needed by a deployed stack.
     from nimbus.evals import ddb_reader
 
-    table_name = deployment.history_table(settings)
     key = (table_name, settings.aws_region)
     if key not in _stores:
         _stores[key] = DynamoSpendStore(ddb_reader.build_table(table_name, settings.aws_region))

@@ -136,6 +136,31 @@ brings its own client:
   undoes it. `make create-user EMAIL=...` invites someone with no account
   (Cognito emails a temporary password) and grants them in one step.
 
+## Per-user spend
+
+Every request that carries a verified identity is counted against its user: one
+counter per `(user, UTC day or month)`, on the stack's table (`SPEND#<sub>` items, no GSI1
+keys, expired by the table's TTL after 90 days). Evaluations and direct runs both count, and a
+cloud evaluation settles from the worker into the same counter the server reserved from.
+Spend is estimated from the built-in price table; a stack that never sets a limit still gets
+the counters, which is how a bill is attributed.
+
+`SPEND_LIMIT_USD=25 SPEND_WINDOW=day make deploy-backend` (the `SpendLimitUsd` and `SpendWindow`
+parameters) caps each user. Over it, `POST /evaluations` and `POST /runs` answer `402
+spend_limit_reached`, with `limit_usd`, `spent_usd`, `estimate_usd` and `window` in `detail`.
+A limited stack also refuses a model with no price (`400 spend_model_unpriced`): its spend
+could not be counted.
+
+- **Reserve, then settle.** Starting work adds its estimate to the counter first and looks second,
+  so two requests racing for the last dollars cannot both pass; ending it swaps the estimate for the
+  real cost, in the window it started in. A cancelled or failed run gives back what it did not spend.
+  A worker that dies mid-evaluation leaves its reservation until the counter expires, which
+  errs toward refusing, never toward overspending.
+- **Identity is the token's.** The server overwrites any `principal` a request body carries. Runs
+  and evaluations on a stack with no auth (local use) are not counted.
+- **Where it shows.** An evaluation's stored `config` carries `user` (and `user_email`, when the
+  token has one). A direct run is counted but its row does not name the user.
+
 ## Deploy flow
 
 - `make deploy` = `make deploy-backend` (package the server zip and the eval

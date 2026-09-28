@@ -197,6 +197,8 @@ deploy-backend:
 		"EvalWorkerArtifactKey=$$WORKER_KEY" \
 		$${SERVER_MEMORY:+"ServerMemorySize=$$SERVER_MEMORY"} \
 		$${HISTORY_RETENTION_DAYS:+"HistoryRetentionDays=$$HISTORY_RETENTION_DAYS"} \
+		$${SPEND_LIMIT_USD:+"SpendLimitUsd=$$SPEND_LIMIT_USD"} \
+		$${SPEND_WINDOW:+"SpendWindow=$$SPEND_WINDOW"} \
 		$(if $(ACCESS_GROUP_NAME),"AccessGroupName=$(ACCESS_GROUP_NAME)",) \
 		$(call domain_override,AppDomainName,APP_DOMAIN_NAME) \
 		$(call domain_override,AppHostedZoneId,APP_HOSTED_ZONE_ID) ); \

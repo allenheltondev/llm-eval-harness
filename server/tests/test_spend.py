@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from sqlmodel import SQLModel, create_engine
 
+from nimbus import spend
 from nimbus.config import Settings
 from nimbus.spend import (
     DynamoSpendStore,
@@ -108,7 +109,9 @@ def test_a_principal_comes_from_the_verified_subject():
     assert principal.window is None and principal.reserved_micros == 0
 
 
-@pytest.mark.parametrize("claims", [None, {}, {"sub": ""}, {"sub": 7}, {"email": "a@b.c"}])
+@pytest.mark.parametrize(
+    "claims", [None, {}, {"sub": ""}, {"sub": 7}, {"email": "a@b.c"}, "not-a-dict", object()]
+)
 def test_claims_without_a_subject_are_nobody(claims):
     assert principal_from_claims(claims) is None
 
@@ -339,3 +342,29 @@ def test_a_negative_estimate_or_cost_is_treated_as_zero(store):
     settle(store, principal, -1.0)
 
     assert store.total(USER, "2026-09-28") == 0
+
+
+# --------------------------------------------------------------------------- #
+# Which store
+# --------------------------------------------------------------------------- #
+
+
+def test_a_stack_table_selects_dynamodb_even_when_history_is_local(monkeypatch):
+    """The cloud worker keeps history in SQLite but must settle into the shared counter."""
+    from nimbus.evals import ddb_reader
+
+    table = FakeResourceTable()
+    monkeypatch.setattr(ddb_reader, "build_table", lambda name, region: table)
+    spend.reset_cache()
+
+    store = spend.get_spend_store(settings(eval_table="stack-table", history_backend="sqlite"))
+
+    assert isinstance(store, DynamoSpendStore)
+    store.add(USER, "w", 3)
+    assert table.items[("SPEND#user-1", "WINDOW#w")]["micros"] == 3
+
+
+def test_without_a_stack_table_the_local_file_is_used():
+    spend.reset_cache()
+
+    assert isinstance(spend.get_spend_store(settings(eval_table=None)), SqliteSpendStore)

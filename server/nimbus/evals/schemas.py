@@ -21,6 +21,7 @@ from nimbus.errors import BadRequestError
 from nimbus.evals.assertions import MAX_CASE_ASSERTIONS, Assertion, expand_shorthand
 from nimbus.evals.judge import DEFAULT_JUDGE_MODEL_ID
 from nimbus.providers import DEFAULT_PROVIDER, Provider
+from nimbus.spend import Principal
 
 MIN_RUNS = 2
 MAX_RUNS = 25
@@ -283,6 +284,11 @@ class EvaluationRequest(BaseModel):
     #: calling the API directly. Descriptive only -- nothing branches on it --
     #: and stored with the evaluation so its history can say where it came from.
     source: Literal["cli", "ui", "api"] = "api"
+    #: Who the server says this evaluation belongs to, and what it reserved
+    #: against their spend window. Set from the verified token by
+    #: :func:`nimbus.evals.admission.admit`, which overwrites anything a client
+    #: sends; it only travels in a request so the cloud worker can settle it.
+    principal: Principal | None = None
     #: Stop scheduling new runs once the estimated spend would pass this many
     #: USD; the evaluation still completes, with ``budget_exhausted: true``.
     #: See ``nimbus.evals.budget``.
@@ -348,6 +354,10 @@ class EvaluationRequest(BaseModel):
         }
         if self.max_cost_usd is not None:
             config["max_cost_usd"] = self.max_cost_usd
+        if self.principal is not None:
+            config["user"] = self.principal.user
+            if self.principal.email:
+                config["user_email"] = self.principal.email
         if self.panel:
             config["panel"] = [judge.model_dump() for judge in self.panel]
         if self.suite is not None:
