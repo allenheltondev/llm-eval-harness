@@ -208,6 +208,9 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
     max_cost = spec.pop("max_cost_usd", None)
     if getattr(args, "max_cost", None) is not None:
         max_cost = args.max_cost
+    panel = list(spec.pop("panel", None) or [])
+    if getattr(args, "panel_judge", None):
+        panel = [_panel_entry(text) for text in args.panel_judge]
 
     run_config = dict(spec.get("run_config") or {})
     overrides = _run_overrides(args)
@@ -229,10 +232,17 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
             "suite": spec,
             "rubric": args.rubric if args.rubric is not None else rubric,
             "grader": grader,
+            "panel": panel,
             "source": "cli",
             "max_cost_usd": max_cost,
         }
     )
+
+
+def _panel_entry(text: str) -> dict[str, str]:
+    """``--panel-judge openai=gpt-4o`` as a ``panel`` entry; a bare id is a Bedrock judge."""
+    provider, model_id = _split_arm(text)
+    return {"model_id": model_id, **({"provider": provider} if provider else {})}
 
 
 def build_eval_request(args: argparse.Namespace) -> EvaluationRequest:

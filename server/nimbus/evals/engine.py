@@ -93,7 +93,7 @@ from nimbus.evals.jobs import EvalJob
 from nimbus.evals.judge import JudgeFactory, build_judge_model
 from nimbus.evals.metrics import local_metrics
 from nimbus.evals.outcomes import RunOutcome
-from nimbus.evals.schemas import EvaluationRequest, Suite
+from nimbus.evals.schemas import EvaluationRequest, GraderConfig, Suite
 from nimbus.providers import DEFAULT_PROVIDER
 from nimbus.store import history
 from nimbus.store.repo import HistoryRepo, get_history_repo
@@ -727,6 +727,8 @@ def _suite_case_result(
             "failed": failures,
         }
     assertions_failed = any(passed is False for passed in repeat_passed)
+    if verdict.spread is not None:
+        entry["judge_spread"] = round(verdict.spread, 4)
     if verdict.reasons:
         entry["reasoning"] = _clip(" | ".join(verdict.reasons))
     if not succeeded:
@@ -811,6 +813,7 @@ def _build_suite_result(
             "model_id": request.grader.model_id,
             "system_prompt_used": request.grader.system_prompt is not None,
             "rubric_used": request.rubric is not None,
+            **({"panel": _judge_labels(request.panel)} if request.panel else {}),
         },
         "metrics": {
             "pass_rate": passed / len(cases),
@@ -875,13 +878,37 @@ async def _judge_suite(
     to_judge = [outcome for outcome in successes if outcome.case_id not in skipped]
     if successes and not to_judge:
         return grader.SuiteJudgement()
-    return await grader.judge_suite(
-        to_judge,
-        suite=suite,
-        rubric=request.rubric,
-        grader=request.grader,
-        judge_factory=judge_factory or seam.deps.judge_factory,
+    factory = judge_factory or seam.deps.judge_factory
+    judges = [request.grader, *_panel_members(request)]
+    judgements = await asyncio.gather(
+        *(
+            grader.judge_suite(
+                to_judge,
+                suite=suite,
+                rubric=request.rubric,
+                grader=judge,
+                judge_factory=factory,
+            )
+            for judge in judges
+        )
     )
+    return grader.combine_judgements(
+        list(zip(_judge_labels(judges), judgements, strict=True))
+    )
+
+
+def _panel_members(request: EvaluationRequest) -> list[GraderConfig]:
+    """The panel's judges, each defaulting to the primary judge's system prompt."""
+    return [
+        member
+        if member.system_prompt is not None
+        else member.model_copy(update={"system_prompt": request.grader.system_prompt})
+        for member in request.panel
+    ]
+
+
+def _judge_labels(judges: list[GraderConfig]) -> list[str]:
+    return [f"{judge.provider}:{judge.model_id}" for judge in judges]
 
 
 def _terminal(

@@ -14,10 +14,12 @@ identically (they share :func:`nimbus.evals.engine.execute_evaluation_with_seam`
     budget too rather than always starting in full.
 :class:`JudgeMeter`
     Wraps the judge factory so every judge model it builds reports its token
-    usage back here, whichever provider the judge runs on. Judge spend is
-    reported separately from the runs. It does not count against the budget,
-    because the judge runs after the last run is scheduled and grading the
-    runs that did happen is the point of partial results.
+    usage back here, whichever provider the judge runs on. A judge panel builds
+    several, so usage is kept per ``(provider, model_id)`` and priced with each
+    model's own rates. Judge spend is reported separately from the runs. It does
+    not count against the budget, because the judge runs after the last run is
+    scheduled and grading the runs that did happen is the point of partial
+    results.
 
 Every figure is an estimate from :mod:`nimbus.pricing`.
 """
@@ -83,6 +85,7 @@ class JudgeMeter:
     def __init__(self, inner: JudgeFactory) -> None:
         self._inner = inner
         self._lock = threading.Lock()
+        #: The judge built last. Kept for callers that only ever build one.
         self.model_id: str | None = None
         self.provider: str = DEFAULT_PROVIDER
         #: False when a built judge could not be instrumented: its usage, and
@@ -91,21 +94,22 @@ class JudgeMeter:
         #: Models already instrumented, so a factory that hands back the same
         #: instance twice does not count its tokens twice.
         self._instrumented: set[int] = set()
-        self.usage: dict[str, int] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_input_tokens": 0,
-            "cache_write_input_tokens": 0,
-        }
+        #: Every judge that was built, and what it used.
+        self._by_model: dict[tuple[str, str], dict[str, int]] = {}
+        #: The total across every judge.
+        self.usage: dict[str, int] = _empty_usage()
 
     def factory(self, model_id: str, provider: Provider = DEFAULT_PROVIDER) -> Model:
         """The :data:`JudgeFactory` handed to the grader in place of the real one."""
         model = call_judge_factory(self._inner, model_id, provider)
         self.model_id, self.provider = model_id, provider
-        self._instrument(model)
+        key = (provider, model_id)
+        with self._lock:
+            self._by_model.setdefault(key, _empty_usage())
+        self._instrument(model, key)
         return model
 
-    def _instrument(self, model: Model) -> None:
+    def _instrument(self, model: Model, key: tuple[str, str]) -> None:
         if id(model) in self._instrumented:
             return
         self._instrumented.add(id(model))
@@ -117,7 +121,7 @@ class JudgeMeter:
                 if isinstance(event, dict):
                     usage = (event.get("metadata") or {}).get("usage")
                     if usage:
-                        meter._add(usage)
+                        meter._add(key, usage)
                 yield event
 
         try:
@@ -125,20 +129,38 @@ class JudgeMeter:
         except (AttributeError, TypeError):  # pragma: no cover - a frozen model class
             self.metered = False
 
-    def _add(self, usage: dict[str, Any]) -> None:
+    def _add(self, key: tuple[str, str], usage: dict[str, Any]) -> None:
+        counts = {
+            "input_tokens": int(usage.get("inputTokens") or 0),
+            "output_tokens": int(usage.get("outputTokens") or 0),
+            "cache_read_input_tokens": int(usage.get("cacheReadInputTokens") or 0),
+            "cache_write_input_tokens": int(usage.get("cacheWriteInputTokens") or 0),
+        }
         with self._lock:
-            self.usage["input_tokens"] += int(usage.get("inputTokens") or 0)
-            self.usage["output_tokens"] += int(usage.get("outputTokens") or 0)
-            self.usage["cache_read_input_tokens"] += int(usage.get("cacheReadInputTokens") or 0)
-            self.usage["cache_write_input_tokens"] += int(usage.get("cacheWriteInputTokens") or 0)
+            for name, amount in counts.items():
+                self.usage[name] += amount
+                self._by_model[key][name] += amount
 
     def cost_usd(self) -> float | None:
-        """The judge's estimated spend: ``0`` if it never ran, ``None`` if unpriced."""
-        if self.model_id is None:
+        """The judges' estimated spend: ``0`` if none ran, ``None`` if any is unpriced."""
+        if not self._by_model:
             return 0.0
         if not self.metered:
             return None
-        return pricing.cost_usd(self.provider, self.model_id, self.usage)
+        costs = [
+            pricing.cost_usd(provider, model_id, usage)
+            for (provider, model_id), usage in self._by_model.items()
+        ]
+        return None if any(cost is None for cost in costs) else sum(costs)
+
+
+def _empty_usage() -> dict[str, int]:
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+    }
 
 
 def prior_per_run(run_configs: Iterable[Any]) -> float:

@@ -52,6 +52,7 @@ cases:
 | `min_pass_rate` | no | The fraction of cases (0–1) that must pass for `nimbus eval --gate` to exit `0`. Unset means every case. Ignored without `--gate`. |
 | `rubric` | no | How every case is judged. Defaults to the built-in suite rubric. |
 | `grader` | no | The judge: `model_id`, `provider`, `system_prompt` — same as any evaluation. |
+| `panel` | no | Up to 3 more judges (each `model_id`, `provider`, `system_prompt`), beside `grader` — see [A judge panel](#a-judge-panel). |
 
 A case may have `expected`, `criteria`, both, or neither. With neither it is
 judged on the rubric alone: is this a correct, helpful answer?
@@ -115,6 +116,33 @@ do on its own: it takes a single rubric for a whole experiment. They travel on
 each `Case` as `expected_assertion` (the library's field for human-authored
 success assertions) and a small subclass appends them to the judge prompt
 through `_build_prompt`, the library's documented override point.
+
+The judge is **blind**: nothing in that prompt says which model or provider gave
+the answer, so a comparison across models (`nimbus eval --arm`, see
+[cli.md](cli.md#comparing-models)) is not tilted by the judge recognising a
+favourite. A test pins this for every judge.
+
+### A judge panel
+
+One judge has one set of biases; a model judging answers from its own family
+tends to favour them. Add judges with `panel:` in the file, or `--panel-judge`
+(repeatable, `PROVIDER=MODEL`, replacing the file's list):
+
+```yaml
+grader: {model_id: anthropic.claude-sonnet-4-5-v1:0}
+panel:
+  - {provider: openai, model_id: gpt-4o}
+```
+
+Every judge grades every answer. A repeat's score is the **mean** of the judges
+that scored it, and each case reports `judge_spread`: the widest gap between its
+highest and lowest judge on any repeat, so a case the judges disagree on stands
+out. A judge that fails on a repeat the others scored is left out of that mean
+and named in the case's reasoning; a repeat no judge scored is a `judge_error`,
+never a silent pass. Reasons are prefixed with the judge that gave them.
+
+Each judge is a separate pass of judge spend, priced with its own rates in
+`cost.judge_usd`, and every judge must be a different model.
 
 ## Assertions
 

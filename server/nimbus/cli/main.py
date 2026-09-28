@@ -275,6 +275,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--grader-system", help="override the judge's system prompt")
     evaluate.add_argument(
+        "--panel-judge",
+        action="append",
+        metavar="MODEL",
+        help=(
+            "with --suite: add a judge to the panel (repeatable; PROVIDER=MODEL picks "
+            "the provider, a bare id is a Bedrock model). Each judge grades every "
+            "answer; a case's score is their mean. Replaces the file's `panel`"
+        ),
+    )
+    evaluate.add_argument(
         "--max-cost",
         type=float,
         metavar="USD",
@@ -545,6 +555,12 @@ def _prepare_suite(args: argparse.Namespace) -> None:
         raise _suite_problem(args.suite, exc) from None
 
 
+def _check_panel(args: argparse.Namespace) -> None:
+    """A panel grades a suite's answers; nothing else has one to add to."""
+    if args.panel_judge and args.suite is None:
+        raise UsageError("--panel-judge adds judges to a suite's grading: pass --suite FILE")
+
+
 def _check_arms(args: argparse.Namespace) -> None:
     """``--arm`` compares models on one suite; what would make that ambiguous is refused."""
     if not args.arm:
@@ -607,6 +623,7 @@ def _check_required(args: argparse.Namespace) -> None:
             "or --suite (to run a test suite)"
         )
     if args.command == "eval":
+        _check_panel(args)
         _check_arms(args)
         _check_gating(args)
     if (

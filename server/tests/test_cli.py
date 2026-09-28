@@ -1406,3 +1406,86 @@ class TestArms:
 
         assert result.code == 2
         assert answering_arms == []
+
+
+# --------------------------------------------------------------------------- #
+# eval --suite --panel-judge: several judges grade every answer
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def built_judges(monkeypatch):
+    """The ``(model_id, provider)`` of every judge the CLI builds, in order."""
+    from nimbus.evals.judge import FakeJudgeModel
+
+    seen: list[tuple[str, str]] = []
+
+    def build(model_id, settings, provider="bedrock"):
+        seen.append((model_id, provider))
+        return FakeJudgeModel(model_id=model_id)
+
+    monkeypatch.setattr(commands, "build_judge_model", build)
+    return seen
+
+
+class TestPanel:
+    def test_panel_judges_each_grade_and_the_result_says_so(
+        self, cli, suite_file, built_judges
+    ):
+        result = cli(
+            "eval", "--suite", suite_file(), "--grader-model", "judge-a",
+            "--panel-judge", "judge-b", "--panel-judge", "openai=gpt-x",
+        )  # fmt: skip
+
+        assert result.code == 0, result.err
+        assert sorted(built_judges) == [
+            ("gpt-x", "openai"),
+            ("judge-a", "bedrock"),
+            ("judge-b", "bedrock"),
+        ]
+        judge = result.json()["result"]["judge"]
+        assert judge["model_id"] == "judge-a"
+        assert judge["panel"] == ["bedrock:judge-b", "openai:gpt-x"]
+        assert "judge_spread" in result.json()["result"]["cases"][0]
+
+    def test_a_suite_file_can_name_the_panel(self, cli, suite_file, built_judges):
+        text = SUITE_YAML + "grader: {model_id: judge-a}\npanel:\n  - {model_id: judge-b}\n"
+
+        result = cli("eval", "--suite", suite_file(text))
+
+        assert result.code == 0, result.err
+        assert result.json()["result"]["judge"]["panel"] == ["bedrock:judge-b"]
+
+    def test_the_flag_replaces_the_files_panel(self, cli, suite_file, built_judges):
+        text = SUITE_YAML + "grader: {model_id: judge-a}\npanel:\n  - {model_id: from-file}\n"
+
+        result = cli("eval", "--suite", suite_file(text), "--panel-judge", "from-flag")
+
+        assert result.code == 0, result.err
+        assert result.json()["result"]["judge"]["panel"] == ["bedrock:from-flag"]
+        assert ("from-file", "bedrock") not in built_judges
+
+    def test_a_panel_judge_needs_a_suite(self, cli):
+        result = cli("eval", "-m", "m", "-p", "hi", "--panel-judge", "judge-b")
+
+        assert result.code == 2
+        assert "--panel-judge adds judges to a suite's grading: pass --suite FILE" in result.err
+
+    def test_the_primary_judge_cannot_also_sit_on_the_panel(self, cli, suite_file, built_judges):
+        result = cli(
+            "eval", "--suite", suite_file(), "--grader-model", "judge-a",
+            "--panel-judge", "judge-a",
+        )  # fmt: skip
+
+        assert result.code == 2
+        assert "Every judge must be a different model; repeated: bedrock:judge-a" in result.err
+        assert built_judges == []
+
+    def test_a_comparison_can_use_a_panel(self, cli, suite_file, answering_arms, built_judges):
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML), "--arm", "good", "--arm", "bad",
+            "--panel-judge", "judge-b",
+        )  # fmt: skip
+
+        assert result.code == 0, result.err
+        assert result.json()["winner"] == "bedrock:good"

@@ -432,14 +432,52 @@ def test_a_ledger_without_a_budget_admits_everything():
     assert not ledger.exhausted
 
 
-def test_the_judge_meter_counts_an_instance_it_is_handed_twice_only_once():
-    model = FakeJudgeModel(model_id=FAKE_JUDGE)
+async def consume(model: FakeJudgeModel) -> None:
+    async for _event in model.stream([{"role": "user", "content": [{"text": "grade this"}]}]):
+        pass
+
+
+async def test_the_judge_meter_counts_an_instance_it_is_handed_twice_only_once():
+    model = FakeJudgeModel(model_id=FAKE_JUDGE, usage_per_turn=(1000, 100))
     meter = budget.JudgeMeter(lambda _model_id: model)
     assert meter.factory(FAKE_JUDGE) is model
-    assert meter.factory(FAKE_JUDGE) is model
-    meter._add({"inputTokens": 1})
-    assert meter.usage["input_tokens"] == 1
+    assert meter.factory(FAKE_JUDGE) is model  # instrumented once, not wrapped twice
+
+    await consume(model)
+
+    # One call, once: a doubly wrapped stream would report 2000 / 200.
+    assert meter.usage["input_tokens"] == 1000
+    assert meter.usage["output_tokens"] == 100
     assert budget.JudgeMeter(judge).cost_usd() == 0.0  # never called: nothing spent
+
+
+async def test_a_panel_of_judges_is_priced_model_by_model():
+    """Two judges at different rates: each model's tokens use its own price."""
+    cheap = FakeJudgeModel(model_id=FAKE_MODEL, usage_per_turn=(MILLION, 0))  # $1/M in
+    dear = FakeJudgeModel(model_id=FAKE_JUDGE, usage_per_turn=(MILLION, 0))  # $2/M in
+    models = {FAKE_MODEL: cheap, FAKE_JUDGE: dear}
+    meter = budget.JudgeMeter(lambda model_id, provider="bedrock": models[model_id])
+    meter.factory(FAKE_MODEL)
+    meter.factory(FAKE_JUDGE)
+
+    await consume(cheap)
+    await consume(dear)
+
+    assert meter.usage["input_tokens"] == 2 * MILLION
+    assert meter.cost_usd() == pytest.approx(3.0)  # $1 + $2, not 2M tokens at either rate
+
+
+async def test_one_unpriced_judge_makes_the_panels_cost_unknown():
+    priced = FakeJudgeModel(model_id=FAKE_JUDGE, usage_per_turn=(1000, 0))
+    unpriced = FakeJudgeModel(model_id="no.such-model", usage_per_turn=(1000, 0))
+    models = {FAKE_JUDGE: priced, "no.such-model": unpriced}
+    meter = budget.JudgeMeter(lambda model_id, provider="bedrock": models[model_id])
+    meter.factory(FAKE_JUDGE)
+    meter.factory("no.such-model")
+    await consume(priced)
+    await consume(unpriced)
+
+    assert meter.cost_usd() is None
 
 
 def test_a_judge_that_could_not_be_metered_has_an_unknown_cost():
