@@ -153,3 +153,36 @@ def _agreement(results: dict[str, dict[str, Any] | None]) -> str:
     if all(status == "failed" for status in statuses):
         return "all_failed"
     return "split"
+
+
+def arm_from_evaluation(evaluation: dict[str, Any]) -> Arm:
+    """The :class:`Arm` for a stored suite evaluation (an ``EvaluationDetail`` as a dict).
+
+    The model is read from the suite as it was stored, so the arm names what
+    actually ran, not what a later edit of a file says.
+    """
+    suite = (evaluation.get("config") or {}).get("suite") or {}
+    run_config = suite.get("run_config") or {}
+    return Arm(
+        provider=str(run_config.get("provider") or "bedrock"),
+        model_id=str(run_config.get("model_id") or "unknown"),
+        evaluation_id=evaluation.get("id"),
+        status=str(evaluation.get("status")),
+        result=evaluation.get("result"),
+    )
+
+
+def suite_differences(evaluations: list[dict[str, Any]]) -> list[str]:
+    """Case ids on which the evaluations' stored suites disagree; empty when they match.
+
+    Two evaluations are the same suite when they have the same cases (by id) with
+    the same ``input``. Models are meant to differ; the questions are not.
+    """
+    inputs: list[dict[str, str]] = []
+    for evaluation in evaluations:
+        cases = ((evaluation.get("config") or {}).get("suite") or {}).get("cases") or []
+        inputs.append({str(case.get("id")): str(case.get("input")) for case in cases})
+    every = {case_id for mapping in inputs for case_id in mapping}
+    return sorted(
+        case_id for case_id in every if len({mapping.get(case_id) for mapping in inputs}) > 1
+    )

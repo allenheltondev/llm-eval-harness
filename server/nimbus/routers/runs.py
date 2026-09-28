@@ -52,9 +52,16 @@ from nimbus.engine.events import ErrorEvent, RunEvent, RunStartEvent
 from nimbus.engine.model_factory import ModelFactory, build_model
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import RunRequest
-from nimbus.errors import ConflictError, InternalError, NotFoundError, UpstreamError
+from nimbus.errors import (
+    BadRequestError,
+    ConflictError,
+    InternalError,
+    NotFoundError,
+    UpstreamError,
+)
 from nimbus.evals import admission
 from nimbus.evals import cloud as evals_cloud
+from nimbus.evals import compare as evals_compare
 from nimbus.evals import engine as evals_engine
 from nimbus.evals import jobs as evals_jobs
 from nimbus.evals.cloud import (
@@ -373,12 +380,9 @@ async def _start_evaluation(
     return EvaluationDetail.model_validate(record)
 
 
-@router.get("/evaluations/{evaluation_id}", response_model=EvaluationDetail)
-def get_evaluation(
-    evaluation_id: str,
-    repo: HistoryRepo = Depends(get_repo),
-    table: EvalTable | None = Depends(get_eval_table),
-):
+def _load_evaluation(
+    evaluation_id: str, repo: HistoryRepo, table: EvalTable | None
+) -> EvaluationDetail:
     """An evaluation from the history store, falling back to the cloud ``META`` item."""
     try:
         record = repo.get_evaluation(evaluation_id)
@@ -387,6 +391,60 @@ def get_evaluation(
             raise
         return evals_cloud.get_evaluation(table, evaluation_id)
     return EvaluationDetail.model_validate(record)
+
+
+#: How many models one comparison may hold.
+MAX_COMPARED_EVALUATIONS = 6
+
+
+# Declared before ``/evaluations/{evaluation_id}``, which would otherwise take "compare" as an id.
+@router.get("/evaluations/compare")
+def compare_evaluations(
+    ids: list[str] = Query(min_length=2, max_length=MAX_COMPARED_EVALUATIONS),
+    repo: HistoryRepo = Depends(get_repo),
+    table: EvalTable | None = Depends(get_eval_table),
+):
+    """Compare suite evaluations that ran the same suite on different models.
+
+    Reads only stored results (:func:`nimbus.evals.compare.compare`), so it costs
+    nothing and works for evaluations from either lane. A ``400`` names why a set
+    cannot be compared: not all suites, not the same suite, or the same model twice.
+    """
+    loaded = [_load_evaluation(evaluation_id, repo, table).model_dump() for evaluation_id in ids]
+    not_suites = [entry["id"] for entry in loaded if entry["kind"] != "suite"]
+    if not_suites:
+        raise BadRequestError(
+            "Only suite evaluations can be compared; not a suite: " + ", ".join(not_suites),
+            detail={"evaluation_ids": not_suites},
+            code="compare_not_suite",
+        )
+    differing = evals_compare.suite_differences(loaded)
+    if differing:
+        raise BadRequestError(
+            "These evaluations did not run the same suite; the cases differ on: "
+            + ", ".join(differing),
+            detail={"cases": differing},
+            code="compare_different_suites",
+        )
+    try:
+        comparison = evals_compare.compare([evals_compare.arm_from_evaluation(e) for e in loaded])
+    except ValueError:
+        raise BadRequestError(
+            "Every evaluation must have run a different model", code="compare_duplicate_model"
+        ) from None
+    suite = loaded[0]["config"].get("suite") or {}
+    cases = len(suite.get("cases") or [])
+    return {**comparison, "suite": {"name": suite.get("name"), "cases": cases}}
+
+
+@router.get("/evaluations/{evaluation_id}", response_model=EvaluationDetail)
+def get_evaluation(
+    evaluation_id: str,
+    repo: HistoryRepo = Depends(get_repo),
+    table: EvalTable | None = Depends(get_eval_table),
+):
+    """An evaluation from the history store, falling back to the cloud ``META`` item."""
+    return _load_evaluation(evaluation_id, repo, table)
 
 
 def _replay_finished(record: history.EvaluationRecord) -> Iterator[str]:
