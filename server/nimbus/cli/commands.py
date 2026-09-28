@@ -28,6 +28,7 @@ from typing import Annotated, Any, TextIO
 
 from pydantic import Field, TypeAdapter, ValidationError
 
+from nimbus import suite_edit
 from nimbus.awscat.catalog import ModelCatalog
 from nimbus.cli import diagnose, gating, remote, render
 from nimbus.config import Settings
@@ -999,6 +1000,56 @@ async def show(args: argparse.Namespace, settings: Settings, out: TextIO, err: T
         return EXIT_OK
 
     _write(out, render.dumps(RunDetail.model_validate(record).model_dump()) + "\n")
+    return EXIT_OK
+
+
+async def _fetch_run(
+    run_id: str, args: argparse.Namespace, settings: Settings, err: TextIO
+) -> dict[str, Any]:
+    """One stored run as a plain dict, from the signed-in stack or this machine."""
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        _on_stack(err, target)
+        async with remote.http_client() as http:
+            try:
+                return await remote.RemoteApi(http, target).get(f"/runs/{run_id}")
+            except remote.RemoteNotFoundError:
+                raise NotFoundError(f"No run with id {run_id!r} on {target.url}") from None
+    return RunDetail.model_validate(get_history_repo(settings).get_run(run_id)).model_dump()
+
+
+async def promote(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """Turn a stored run into a suite case.
+
+    Without ``--suite`` the case is printed, ready to paste. With it, the case
+    is appended to that file (created if missing), which is only done when the
+    result reads back exactly as intended: see :mod:`nimbus.suite_edit`.
+    """
+    run = await _fetch_run(args.run_id, args, settings, err)
+    case = suite_edit.case_from_run(
+        run, case_id=args.case_id, expected=args.expected, criteria=args.criteria
+    )
+    path = args.suite
+    if path is None:
+        _write(out, suite_edit.render_case(case))
+        return EXIT_OK
+
+    as_json = path.suffix.lower() == ".json"
+    try:
+        existing = path.read_text(encoding="utf-8") if path.exists() else None
+        if existing is None:
+            updated = suite_edit.new_suite_text(run, case, as_json=as_json)
+        else:
+            updated = suite_edit.append_case(existing, case, as_json=as_json)
+        path.write_text(updated, encoding="utf-8")
+    except suite_edit.SuiteEditError as exc:
+        raise AppError(
+            f"--suite {path}: {exc.message}; `nimbus promote {args.run_id}` prints the case to add"
+        ) from None
+    except OSError as exc:
+        raise AppError(f"--suite {path}: {exc.strerror or exc}") from None
+    verb = "created" if existing is None else "added case to"
+    _note(err, f"| {verb} {path}: {case['id']}")
     return EXIT_OK
 
 

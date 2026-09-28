@@ -18,11 +18,13 @@ import os
 import re
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 from nimbus.cli import commands
 from nimbus.cli.main import COMMANDS, main
+from nimbus.engine import runner
 from nimbus.engine.fake_model import FakeModel, Text
 from nimbus.errors import AppError, NotFoundError
 from nimbus.models_catalog import CatalogResult
@@ -1489,3 +1491,111 @@ class TestPanel:
 
         assert result.code == 0, result.err
         assert result.json()["winner"] == "bedrock:good"
+
+
+# --------------------------------------------------------------------------- #
+# promote: a stored run becomes a suite case
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def stored_run_id(cli):
+    """The id of a run this test's history holds."""
+    result = cli("--json", "run", "-m", "m1", "-p", "How long do I have to return shoes?")
+    assert result.code == 0, result.err
+    return next(e["run_id"] for e in result.ndjson() if e["type"] == "run_start")
+
+
+class TestPromote:
+    def test_it_prints_the_case_to_paste_and_writes_nothing(self, cli, stored_run_id, tmp_path):
+        result = cli("promote", stored_run_id, "--id", "returns")
+
+        assert result.code == 0, result.err
+        assert result.out.splitlines()[0] == "  - id: returns"
+        assert "How long do I have to return shoes?" in result.out
+        assert "expected" not in result.out
+        assert list(tmp_path.glob("*.yaml")) == []
+
+    def test_the_recorded_answer_is_only_used_as_the_reference_on_request(
+        self, cli, stored_run_id
+    ):
+        assert "expected:" not in cli("promote", stored_run_id).out
+        assert "expected:" in cli("promote", stored_run_id, "--expected").out
+
+    def test_it_adds_the_case_to_a_suite_leaving_the_rest_of_the_file_alone(
+        self, cli, stored_run_id, suite_file
+    ):
+        path = suite_file(SUITE_YAML)
+
+        result = cli("promote", stored_run_id, "--suite", path, "--id", "returns")
+
+        assert result.code == 0, result.err
+        assert "added case to" in result.err
+        updated = Path(path).read_text(encoding="utf-8")
+        assert updated.startswith(SUITE_YAML)
+        assert "id: returns" in updated
+
+    def test_a_promoted_case_runs_in_the_suite_it_was_added_to(
+        self, cli, stored_run_id, suite_file, captured_runs
+    ):
+        path = suite_file(SUITE_YAML)
+        assert cli("promote", stored_run_id, "--suite", path, "--id", "returns").code == 0
+
+        result = cli("eval", "--suite", path)
+
+        assert result.code == 0, result.err
+        assert "How long do I have to return shoes?" in {run.user_prompt for run in captured_runs}
+        assert len(result.json()["result"]["cases"]) == 3
+
+    def test_a_missing_file_is_created_configured_as_the_run_was(
+        self, cli, stored_run_id, tmp_path, captured_runs
+    ):
+        path = tmp_path / "fresh.yaml"
+
+        result = cli("promote", stored_run_id, "--suite", str(path), "--id", "returns")
+
+        assert result.code == 0, result.err
+        assert "created" in result.err
+        assert "model_id: m1" in path.read_text(encoding="utf-8")
+        assert cli("eval", "--suite", str(path)).code == 0
+
+    def test_a_case_id_already_in_the_suite_is_refused_and_the_file_is_untouched(
+        self, cli, stored_run_id, suite_file
+    ):
+        path = suite_file(SUITE_YAML)
+
+        result = cli("promote", stored_run_id, "--suite", path, "--id", "refund-window")
+
+        assert result.code != 0
+        assert "already has a case with id 'refund-window'" in result.err
+        assert Path(path).read_text(encoding="utf-8") == SUITE_YAML
+
+    def test_a_suite_it_cannot_safely_extend_is_refused_with_the_case_to_add_by_hand(
+        self, cli, stored_run_id, suite_file
+    ):
+        path = suite_file(SUITE_YAML + "pass_threshold: 0.5\n")
+
+        result = cli("promote", stored_run_id, "--suite", path)
+
+        assert result.code != 0
+        assert "not the last key" in result.err
+        assert f"`nimbus promote {stored_run_id}` prints the case to add" in result.err
+
+    def test_an_unknown_run_is_an_error(self, cli):
+        result = cli("promote", "no-such-run")
+
+        assert result.code != 0
+        assert "no-such-run" in result.err
+
+    def test_expected_needs_a_run_that_produced_an_answer(self, cli, monkeypatch):
+        def failing(request, settings):
+            raise AppError("no model", code="unknown_model")
+
+        monkeypatch.setattr(runner, "build_model", failing)  # `run` builds through the runner
+        run = cli("--json", "run", "-m", "m1", "-p", "hi")
+        run_id = next(e["run_id"] for e in run.ndjson() if e["type"] == "run_start")
+
+        result = cli("promote", run_id, "--expected")
+
+        assert result.code != 0
+        assert "has no output" in result.err

@@ -64,6 +64,7 @@ COMMANDS: dict[str, Command] = {
     "mcp": mcp_commands.mcp,
     "runs": commands.runs,
     "show": commands.show,
+    "promote": commands.promote,
     "serve": commands.serve,
     "login": commands.login,
     "logout": commands.logout,
@@ -390,6 +391,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     show.add_argument("id", help="a run id or an evaluation id")
 
+    promote = subparsers.add_parser(
+        "promote",
+        parents=[output],
+        help="turn a stored run into a suite case",
+        description=(
+            "Take a run's prompt as a new test case. Prints the case to paste; with "
+            "--suite FILE, adds it to that suite (created if it does not exist) without "
+            "touching the rest of the file. The run's answer is not treated as correct "
+            "unless you say so with --expected."
+        ),
+    )
+    promote.add_argument("run_id", help="the run's id (`nimbus runs`)")
+    promote.add_argument(
+        "--suite", type=Path, metavar="FILE", help="add the case to this suite file"
+    )
+    promote.add_argument(
+        "--id", dest="case_id", metavar="CASE_ID", help="the case's id (default: run-<run id>)"
+    )
+    promote.add_argument(
+        "--expected",
+        action="store_true",
+        help="use the run's output as the case's reference answer (check it is right first)",
+    )
+    promote.add_argument("--criteria", help="what a good answer to this case must satisfy")
+
     login = subparsers.add_parser(
         "login",
         parents=[output],
@@ -644,7 +670,7 @@ def _check_required(args: argparse.Namespace) -> None:
 
 
 #: The commands that run wherever the target is: a signed-in stack, or here.
-TARGETED = frozenset({"run", "eval", "runs", "show", "models", "tools", "mcp"})
+TARGETED = frozenset({"run", "eval", "runs", "show", "promote", "models", "tools", "mcp"})
 
 
 def resolve_target(args: argparse.Namespace) -> None:

@@ -393,6 +393,26 @@ nimbus show <run-id-or-evaluation-id>
 printed on stderr. `show` takes either kind of id and looks in both, because
 from the outside you have an id and you want to see it.
 
+## `promote`
+
+A run that showed a real problem is a good test. `promote` turns it into a suite case:
+
+```bash
+nimbus promote <run-id>                                  # print the case, to paste
+nimbus promote <run-id> --suite suite.yaml --id late-refund
+nimbus promote <run-id> --suite new.yaml --criteria "Must say 30 days"   # creates new.yaml
+```
+
+The case takes the run's prompt as its `input`. The run's *answer* is not assumed correct: it
+becomes the case's `expected` reference only with `--expected`, so check it first. `--criteria`
+adds what a good answer must satisfy. Works on the signed-in stack too, like `show`.
+
+With `--suite` the case is appended to the file as text, so the file's comments and layout stay
+exactly as they were, and the file is created (configured as the run was) when it does not exist.
+The result is read back before anything is written; a case id already in the suite, `cases`
+not being the last key, or `cases` written inline as `[ ... ]` are refused with the case printed
+for you to place by hand, and the file is left untouched.
+
 ## `serve`
 
 ```bash
