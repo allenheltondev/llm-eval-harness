@@ -50,6 +50,7 @@ cases:
 | `repeats` | no | Runs per case, 1–10 (default 1). A case's score is the mean across its repeats, so more than one catches a case that passes only some of the time. |
 | `pass_threshold` | no | A case passes when its score (0–1) reaches this (default 0.7). |
 | `min_pass_rate` | no | The fraction of cases (0–1) that must pass for `nimbus eval --gate` to exit `0`. Unset means every case. Ignored without `--gate`. |
+| `calibrate` | no | `true` also checks the judge itself: see [Calibrating the judge](#calibrating-the-judge). `--calibrate` on the command line does the same. |
 | `rubric` | no | How every case is judged. Defaults to the built-in suite rubric. |
 | `grader` | no | The judge: `model_id`, `provider`, `system_prompt` — same as any evaluation. |
 
@@ -271,6 +272,42 @@ cases:
 
 A suite whose cases have no `assert:` runs, scores and reports exactly as it
 did before assertions existed — its result carries none of the fields below.
+
+## Calibrating the judge
+
+A suite is only as trustworthy as its judge. If the rubric is vague, or the
+judge model is lenient, every answer can score well, and a pass rate means
+nothing. `calibrate: true` (or `--calibrate`) tests that directly: for every
+judged case, the judge also scores two answers whose verdicts are already known.
+
+| Probe | Answer shown to the judge | Should |
+|---|---|---|
+| `reference` | the case's own `expected` answer (only when it has one) | pass |
+| `empty` | an empty answer | fail |
+
+Each probe is judged exactly as the real answers are, with the same input,
+reference, criteria, rubric and judge. A probe on the wrong side of
+`pass_threshold` is **flagged**:
+
+```
+▎ calibration  reference=0.94  empty=0.61  1 flagged
+▎   FLAG  0.72  off-topic  judge passes an empty answer
+```
+
+A flagged `reference` means the judge would fail the answer you wrote as
+correct, so the case's `expected` or `criteria` probably disagree with each
+other or with the rubric. A flagged `empty` means the judge passes an answer
+with nothing in it, so that case's verdicts can't be trusted.
+
+Calibration never changes a verdict or a score. It costs two extra judge calls
+per judged case (one for a case without `expected`), not per repeat, and those
+count toward judge spend. Cases with `judge: false` are not calibrated.
+
+In the result, each calibrated case carries `calibration: {reference, empty}`
+(`null` for a probe the judge returned no verdict on, which is never flagged),
+and the suite carries `calibration: {cases, reference_mean, empty_mean,
+flagged}`, with `flagged` listing `{id, probe, score}`. A suite that does not
+calibrate has neither.
 
 ## Reading the result
 

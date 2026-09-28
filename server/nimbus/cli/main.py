@@ -252,6 +252,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--rubric", help="extra rubric text for the judge")
     evaluate.add_argument(
+        "--calibrate",
+        action="store_true",
+        help=(
+            "suites: also have the judge score each case's expected answer and an empty one, "
+            "and flag cases where it cannot tell them apart (see docs/suites.md)"
+        ),
+    )
+    evaluate.add_argument(
         "--grader-model",
         default=None,
         help="the judge's model id (default: the built-in judge model)",
@@ -564,6 +572,10 @@ def _check_required(args: argparse.Namespace) -> None:
         )
     if args.command == "eval":
         _check_gating(args)
+        if args.calibrate and args.suite is None:
+            raise UsageError(
+                "--calibrate checks the judge against a suite's cases: pass --suite FILE"
+            )
     if (
         args.command == "eval"
         and args.suite is None  # a suite file may name the model; checked once merged
