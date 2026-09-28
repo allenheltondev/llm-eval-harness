@@ -94,6 +94,11 @@ def require_credential(provider: Provider, credential: str | None) -> str:
     )
 
 
+def _client_args(api_key: str, base_url: str | None) -> dict[str, str]:
+    """SDK client arguments: the key, plus the endpoint when one is configured."""
+    return {"api_key": api_key, **({"base_url": base_url} if base_url else {})}
+
+
 def build_model(request: RunRequest, settings: Settings) -> Model:
     """Build the model provider for ``request``, branching on ``request.provider``."""
     if settings.fake_model:
@@ -150,7 +155,7 @@ def _build_anthropic(request: RunRequest, settings: Settings) -> Model:
         if value is not None
     }
     return AnthropicModel(
-        client_args={"api_key": api_key},
+        client_args=_client_args(api_key, settings.anthropic_base_url),
         model_id=request.model_id,
         max_tokens=inference.max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS,
         params=params,
@@ -169,7 +174,7 @@ def _build_openai(request: RunRequest, settings: Settings) -> Model:
 
     api_key = require_credential("openai", settings.openai_api_key)
     return OpenAIModel(
-        client_args={"api_key": api_key},
+        client_args=_client_args(api_key, settings.openai_base_url),
         model_id=request.model_id,
         stream=True,
         params=request.inference.as_model_config(),

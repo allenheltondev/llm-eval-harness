@@ -98,6 +98,24 @@ class Settings(BaseSettings):
             "NIMBUS_OPENAI_API_KEY", "EVALHARNESS_OPENAI_API_KEY", "OPENAI_API_KEY"
         ),
     )
+    #: Alternative endpoint for the Anthropic API, e.g. an LLM gateway that
+    #: speaks the Messages API. Unset uses Anthropic's own. Server-side only:
+    #: a run request can never name a URL.
+    anthropic_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "NIMBUS_ANTHROPIC_BASE_URL", "EVALHARNESS_ANTHROPIC_BASE_URL", "ANTHROPIC_BASE_URL"
+        ),
+    )
+    #: Alternative endpoint for the OpenAI API, e.g. an LLM gateway or any
+    #: OpenAI-compatible server, including its version path (``https://gw/v1``).
+    #: Unset uses OpenAI's own. Server-side only.
+    openai_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "NIMBUS_OPENAI_BASE_URL", "EVALHARNESS_OPENAI_BASE_URL", "OPENAI_BASE_URL"
+        ),
+    )
     #: Base URL of an Ollama server, e.g. ``http://localhost:11434``. Deliberately
     #: has no default: an unset value means "the provider is not offered", which
     #: is different from "there might be an Ollama on the usual port".
@@ -183,6 +201,19 @@ class Settings(BaseSettings):
         if not self.db_path:
             self.db_path = default_db_path()
         return self
+
+    @field_validator("anthropic_base_url", "openai_base_url")
+    @classmethod
+    def _base_url_is_http(cls, value: str | None) -> str | None:
+        """Blank means unset; anything else must be an ``http(s)`` URL."""
+        if value is None:
+            return None
+        value = value.strip().rstrip("/")
+        if not value:
+            return None
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("a base URL must start with http:// or https://")
+        return value
 
     @field_validator(
         "anthropic_api_key",
