@@ -160,6 +160,15 @@ class Settings(BaseSettings):
     #: is set. The deployed template sets it to ``/nimbus/{stack}/mcp``.
     mcp_ssm_prefix: str = "/nimbus/mcp"
 
+    # -- per-user spend (nimbus.spend) -------------------------------------- #
+    #: Ceiling, in USD, on what one signed-in user may spend per window; over it,
+    #: new evaluations and runs are refused with ``402 spend_limit_reached``.
+    #: Unset means uncapped (spend is still counted per user). Only applies to
+    #: callers with a verified identity, so never locally.
+    spend_limit_usd: float | None = Field(default=None, gt=0)
+    #: The calendar period (UTC) the ceiling applies to.
+    spend_window: Literal["day", "month"] = "day"
+
     # -- authentication (nimbus.auth) ---------------------------------------- #
     #: Cognito user pool the deployed server verifies bearer tokens against.
     #: The deployed template injects both of these from its own resources;
