@@ -245,6 +245,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     evaluate.add_argument(
+        "--arm",
+        action="append",
+        metavar="MODEL",
+        help=(
+            "with --suite: run the suite on this model, and compare the models side by "
+            "side (repeatable; PROVIDER=MODEL, e.g. openai=gpt-4o, picks the provider). "
+            "Each arm is a separate stored evaluation; --max-cost applies to each; runs "
+            "on this machine"
+        ),
+    )
+    evaluate.add_argument(
         "--run",
         action="append",
         metavar="RUN_ID",
@@ -528,8 +539,41 @@ def _prepare_suite(args: argparse.Namespace) -> None:
     args.suite_spec = load_suite_file(args.suite)
     try:
         commands.build_suite_request(args)
+        if args.arm:
+            commands.build_arm_requests(args)
     except (ValidationError, AppError) as exc:
         raise _suite_problem(args.suite, exc) from None
+
+
+def _check_arms(args: argparse.Namespace) -> None:
+    """``--arm`` compares models on one suite; what would make that ambiguous is refused."""
+    if not args.arm:
+        return
+    if args.suite is None:
+        raise UsageError("--arm compares models on a suite: pass --suite FILE")
+    if args.model:
+        raise UsageError("--arm names each model to compare; drop --model")
+    conflicts = [
+        flag
+        for flag, given in (
+            ("--detach", args.detach),
+            ("--remote", args.remote),
+            ("--junit", args.junit is not None),
+            ("--gate", args.gate),
+            ("--fail-on-case-failure", args.fail_on_case_failure),
+            ("--fail-under", args.fail_under is not None),
+        )
+        if given
+    ]
+    if conflicts:
+        raise UsageError(
+            f"{', '.join(conflicts)} cannot apply to a comparison: it ranks models, "
+            "it does not gate one"
+        )
+    if args.target is not None:
+        raise UsageError(
+            "--arm runs on this machine, not on the stack you are signed in to: add --local"
+        )
 
 
 def _check_gating(args: argparse.Namespace) -> None:
@@ -563,6 +607,7 @@ def _check_required(args: argparse.Namespace) -> None:
             "or --suite (to run a test suite)"
         )
     if args.command == "eval":
+        _check_arms(args)
         _check_gating(args)
     if (
         args.command == "eval"

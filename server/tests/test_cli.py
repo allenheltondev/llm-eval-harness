@@ -1209,3 +1209,200 @@ class TestMcp:
         both = cli("mcp", "update", saved["id"], "--header", "A: 1", "--remove-header", "A")
         assert both.code == 1 and "both set and removed" in both.err
         assert cli("mcp", "test", "missing").code == 1
+
+
+# --------------------------------------------------------------------------- #
+# eval --suite --arm: one suite, several models
+# --------------------------------------------------------------------------- #
+
+ASSERTING_SUITE_YAML = """\
+run_config:
+  model_id: fake.model
+cases:
+  - id: refund-window
+    input: Can I return shoes after 45 days?
+    judge: false
+    assert:
+      - contains: 30 days
+  - id: store-hours
+    input: When do you open on Sunday?
+    judge: false
+    assert:
+      - contains: Sunday
+"""
+
+#: What each model in the arm tests answers: only `good` satisfies both cases.
+ARM_ANSWERS = {
+    "good": "Returns within 30 days. We open Sunday at 10.",
+    "half": "Returns within 30 days.",
+    "bad": "No idea.",
+}
+
+
+@pytest.fixture
+def answering_arms(monkeypatch):
+    """Every arm's model, and the RunRequests the CLI executed, in order."""
+    seen: list = []
+
+    def build(request, settings):
+        seen.append(request)
+        return FakeModel([Text(ARM_ANSWERS[request.model_id])])
+
+    monkeypatch.setattr(commands, "build_model", build)
+    return seen
+
+
+class TestArms:
+    def test_the_suite_runs_once_per_model_and_the_models_are_compared(
+        self, cli, suite_file, answering_arms
+    ):
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML),
+            "--arm", "bad", "--arm", "good", "--arm", "half",
+        )  # fmt: skip
+
+        assert result.code == 0, result.err
+        comparison = result.json()
+        assert comparison["ranking"] == [
+            "bedrock:good",
+            "bedrock:half",
+            "bedrock:bad",
+        ]
+        assert comparison["winner"] == "bedrock:good"
+        assert comparison["split_cases"] == ["refund-window", "store-hours"]
+        # Six runs: two cases on each of three models, model by model, in order.
+        assert [run.model_id for run in answering_arms] == ["bad"] * 2 + ["good"] * 2 + ["half"] * 2
+
+    def test_each_arm_is_its_own_stored_evaluation(self, cli, suite_file, answering_arms):
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML), "--arm", "good", "--arm", "bad"
+        )
+
+        assert result.code == 0, result.err
+        ids = [arm["evaluation_id"] for arm in result.json()["arms"]]
+        assert len(set(ids)) == 2
+        for evaluation_id in ids:
+            shown = cli("show", evaluation_id)
+            assert shown.code == 0, shown.err
+            assert shown.json()["status"] == "completed"
+
+    def test_the_human_summary_names_the_winner_and_the_disputed_cases(
+        self, cli, suite_file, answering_arms
+    ):
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML), "--arm", "good", "--arm", "bad"
+        )
+
+        assert "winner: bedrock:good" in result.err
+        assert "models disagree on: refund-window, store-hours" in result.err
+        assert "MODEL" in result.err and "PASSED" in result.err
+        assert "2/2 (100%)" in result.err
+
+    def test_a_provider_prefix_picks_the_arms_provider(self, cli, suite_file, answering_arms):
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML),
+            "--arm", "openai=good", "--arm", "bedrock=good",
+        )  # fmt: skip
+
+        assert result.code == 0, result.err
+        assert [run.provider for run in answering_arms] == ["openai"] * 2 + ["bedrock"] * 2
+        assert [arm["label"] for arm in result.json()["arms"]] == ["openai:good", "bedrock:good"]
+
+    def test_a_model_id_containing_colons_is_not_mistaken_for_a_provider(
+        self, cli, suite_file, monkeypatch
+    ):
+        seen: list = []
+        monkeypatch.setattr(
+            commands,
+            "build_model",
+            lambda request, settings: seen.append(request) or FakeModel([Text("30 days Sunday")]),
+        )
+
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML),
+            "--arm", "anthropic.claude-3:0", "--arm", "llama3.1:8b",
+        )  # fmt: skip
+
+        assert result.code == 0, result.err
+        assert {run.model_id for run in seen} == {"anthropic.claude-3:0", "llama3.1:8b"}
+        assert {run.provider for run in seen} == {"bedrock"}
+
+    def test_json_mode_streams_every_arms_events_then_one_comparison_line(
+        self, cli, suite_file, answering_arms
+    ):
+        result = cli(
+            "--json", "eval", "--suite", suite_file(ASSERTING_SUITE_YAML),
+            "--arm", "good", "--arm", "bad",
+        )  # fmt: skip
+
+        assert result.code == 0, result.err
+        events = result.ndjson()
+        assert [e["type"] for e in events].count("eval_complete") == 2
+        assert events[-1]["type"] == "comparison"
+        assert events[-1]["winner"] == "bedrock:good"
+
+    def test_an_arm_that_fails_is_reported_and_the_others_still_run(
+        self, cli, suite_file, monkeypatch
+    ):
+        def build(request, settings):
+            if request.model_id == "broken":
+                raise AppError("no such model", code="unknown_model")
+            return FakeModel([Text("30 days Sunday")])
+
+        monkeypatch.setattr(commands, "build_model", build)
+
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML),
+            "--arm", "broken", "--arm", "good",
+        )  # fmt: skip
+
+        assert result.code == 1
+        comparison = result.json()
+        assert comparison["winner"] == "bedrock:good"
+        broken = next(arm for arm in comparison["arms"] if arm["model_id"] == "broken")
+        assert broken["status"] == "error"
+        assert comparison["ranking"] == ["bedrock:good"]
+        assert "not ranked (error)" in result.err
+
+    @pytest.mark.parametrize(
+        ("extra", "message"),
+        [
+            (["--model", "m"], "drop --model"),
+            (["--junit", "out.xml"], "cannot apply to a comparison"),
+            (["--gate"], "it ranks models, it does not gate one"),
+            (["--fail-under", "50"], "--fail-under cannot apply to a comparison"),
+            (["--fail-on-case-failure"], "cannot apply to a comparison"),
+        ],
+    )
+    def test_flags_that_make_a_comparison_ambiguous_are_refused(
+        self, cli, suite_file, answering_arms, extra, message
+    ):
+        result = cli("eval", "--suite", suite_file(ASSERTING_SUITE_YAML), "--arm", "good", *extra)
+
+        assert result.code == 2
+        assert message in result.err
+        assert result.out == ""
+        assert answering_arms == []
+
+    def test_arms_need_a_suite(self, cli):
+        result = cli("eval", "-m", "m", "-p", "hi", "--arm", "good")
+
+        assert result.code == 2
+        assert "--arm compares models on a suite: pass --suite FILE" in result.err
+
+    def test_the_same_model_twice_is_refused_before_anything_runs(
+        self, cli, suite_file, answering_arms
+    ):
+        result = cli(
+            "eval", "--suite", suite_file(ASSERTING_SUITE_YAML), "--arm", "good", "--arm", "good"
+        )
+
+        assert result.code == 2
+        assert "bedrock:good is already an arm" in result.err
+        assert answering_arms == []
+
+    def test_a_bad_suite_file_is_refused_before_any_arm_runs(self, cli, suite_file, answering_arms):
+        result = cli("eval", "--suite", suite_file("cases: [unclosed"), "--arm", "good")
+
+        assert result.code == 2
+        assert answering_arms == []

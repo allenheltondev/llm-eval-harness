@@ -236,6 +236,7 @@ nimbus eval --suite cases.yaml -m <other>      # same cases, another model
 | `--run RUN_ID` | Grade this stored run instead of executing new ones; repeatable. |
 | `--rubric` | Extra rubric text for the judge. |
 | `--max-cost USD` | Stop starting new runs once the estimated spend would pass this many dollars; the evaluation still completes, graded on the runs it made, with `budget_exhausted: true`. Overrides a suite file's `max_cost_usd`. Costs are estimates — see [Cost and budgets](suites.md#cost-and-budgets). |
+| `--arm MODEL` | With `--suite`: run the suite on this model and compare the models — see [Comparing models](#comparing-models). Repeatable; `PROVIDER=MODEL` picks the provider. |
 | `--remote` | Insist on the stack you signed in to with `login` (already the default once signed in); fails rather than running here when you are not — see [Running on a deployed stack](#running-on-a-deployed-stack). |
 | `--detach` | On a stack: submit, print the evaluation's id and link, and return without following it. |
 | `--fail-under SCORE` | Exit `3` when the overall score (0–100) is below `SCORE` — see [Exit codes](#exit-codes). |
@@ -251,6 +252,31 @@ cannot wait fifteen minutes. A CLI invocation *is* the job: it runs in the
 foreground, and Ctrl-C cancels the evaluation rather than just stopping your
 view of it. The terminal state lands on stdout as JSON; the grade and the
 judge's reasoning are summarised on stderr.
+
+### Comparing models
+
+`--arm` runs one suite on several models and ranks them:
+
+```bash
+nimbus eval --suite suite.yaml --arm anthropic.claude-sonnet-4-5 --arm openai=gpt-4o
+```
+
+Each arm is an ordinary suite evaluation — its own history row (`nimbus show
+<id>`), cost and `--max-cost` — run one after another on this machine. stdout is
+the comparison as JSON (`arms`, `ranking`, `winner`, `cases`, `split_cases`);
+stderr has the table, the winner, and the cases the models disagree on, which
+are the ones worth reading. With `--json`, every arm's events stream first and
+the comparison is the last line (`"type": "comparison"`).
+
+Arms rank by pass rate, then mean judge score, then cost. Cost only orders
+models that are equally good; equal quality is reported as a tie, not a win. Only
+arms that completed are ranked, and an arm that failed is listed without
+stopping the others (the exit code is then non-zero). A gap of one case on a
+small suite with one repeat is noise: raise `repeats` before trusting it.
+
+`--arm` cannot be combined with `--model`, `--detach`, `--remote`, `--junit` or
+the gate flags (it ranks models, it does not gate one), and it does not run on
+a signed-in stack: add `--local`.
 
 ## Running on a deployed stack
 

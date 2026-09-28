@@ -280,6 +280,37 @@ def _failed_assertion_lines(case: dict[str, Any]) -> list[str]:
     return lines
 
 
+def comparison_lines(comparison: dict[str, Any]) -> list[str]:
+    """A model comparison for a human: one row per arm, best first, then the verdict.
+
+    The arms are listed in ranking order, arms with no result last. Below the
+    table go the winner (or the tie, which is what level quality is), and the
+    cases the models disagree on, since those are the ones worth reading.
+    """
+    by_label = {arm["label"]: arm for arm in comparison["arms"]}
+    ranked = [by_label[label] for label in comparison["ranking"]]
+    unranked = [arm for arm in comparison["arms"] if arm["label"] not in comparison["ranking"]]
+    rows: list[list[str]] = []
+    for arm in ranked + unranked:
+        if arm["pass_rate"] is None:
+            rows.append([arm["label"], f"no result ({arm['status']})", "-", "-"])
+            continue
+        if arm["label"] not in comparison["ranking"]:
+            rows.append([arm["label"], f"not ranked ({arm['status']})", "-", usd(arm["cost_usd"])])
+            continue
+        passed = f"{arm['cases_passed']}/{arm['cases_total']} ({arm['pass_rate']:.0%})"
+        score = "-" if arm["score"] is None else f"{arm['score']} {arm['grade'] or ''}".strip()
+        rows.append([arm["label"], passed, score, usd(arm["cost_usd"])])
+    lines = table(rows, ["MODEL", "PASSED", "SCORE", "COST"]).splitlines()
+    if comparison["winner"]:
+        lines.append(f"winner: {comparison['winner']}")
+    elif comparison["tied"]:
+        lines.append(f"tie at the top: {', '.join(comparison['tied'])}")
+    if comparison["split_cases"]:
+        lines.append(f"models disagree on: {', '.join(comparison['split_cases'])}")
+    return [_line(line) for line in lines]
+
+
 def table(rows: list[list[str]], headers: list[str]) -> str:
     """A plain column-aligned table, no borders -- greppable and cut-friendly.
 
