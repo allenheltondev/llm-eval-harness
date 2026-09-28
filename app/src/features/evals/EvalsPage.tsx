@@ -28,6 +28,7 @@ import DeterminismLauncher from './DeterminismLauncher'
 import EvalProgress from './EvalProgress'
 import EvalResultView from './EvalResultView'
 import EvaluationDetailView, { sourceLabel } from './EvaluationDetailView'
+import ModelComparisonView from './ModelComparisonView'
 import { useEvalStore } from '../../stores'
 import { api } from '../../api'
 import type { EvaluationDetail, EvaluationStatus } from '../../api'
@@ -58,11 +59,25 @@ interface EvalsPageProps {
   evaluationId?: string | null
   /** Told when the open evaluation changes, so the address bar can follow. */
   onSelectEvaluation?: (evaluationId: string | null) => void
+  /** Suite evaluations to show side by side — the `#/evals/compare/<id>,<id>` link. */
+  compareIds?: string[] | null
+  /** Told when a comparison is opened (the ids) or closed (`null`), so the address bar follows. */
+  onCompare?: (evaluationIds: string[] | null) => void
+}
+
+/** Most models one comparison may hold; the API refuses more. */
+const MAX_COMPARED = 6
+
+/** A suite evaluation that has stopped running, so it has a result to compare. */
+function isComparable(row: EvaluationDetail): boolean {
+  return row.kind === 'suite' && !isCancellable(row.status)
 }
 
 export default function EvalsPage({
   evaluationId = null,
-  onSelectEvaluation
+  onSelectEvaluation,
+  compareIds = null,
+  onCompare
 }: EvalsPageProps = {}) {
   const evaluations = useEvalStore(state => state.evaluations)
   const listLoading = useEvalStore(state => state.listLoading)
@@ -80,11 +95,14 @@ export default function EvalsPage({
 
   const [selectedId, setSelectedIdState] = useState<string | null>(evaluationId)
   const [cloudFilter, setCloudFilter] = useState(false)
+  // Suite evaluations ticked for a model comparison.
+  const [checkedIds, setCheckedIds] = useState<string[]>([])
   // An evaluation opened by link need not be on the loaded page of the list
   // (an older one, or one from the other lane), so it is fetched on its own.
   const [linked, setLinked] = useState<EvaluationDetail | null>(null)
   const [linkedError, setLinkedError] = useState<string | null>(null)
-  const filterInitialized = useRef(false)
+  // The filter the list was last loaded under: a change is a switch, a repeat is not.
+  const loadedFilter = useRef(cloudFilter)
 
   function setSelectedId(id: string | null) {
     setSelectedIdState(id)
@@ -97,10 +115,14 @@ export default function EvalsPage({
     void loadEvaluations(listFilters)
     // Switching the filter drops the previous selection: a cursor (and the
     // rows it paged in) is only valid for the filter set it was issued under.
-    // The first run is the page mounting, not a switch, and must keep a
-    // selection that arrived by link.
-    if (filterInitialized.current) setSelectedId(null)
-    filterInitialized.current = true
+    // Compared with the filter last loaded rather than flagged "first run",
+    // so neither the page mounting nor React StrictMode's second effect pass
+    // in development counts as a switch, and a selection that arrived by
+    // link is kept.
+    if (loadedFilter.current !== cloudFilter) {
+      loadedFilter.current = cloudFilter
+      setSelectedId(null)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudFilter, loadEvaluations])
 
@@ -136,6 +158,12 @@ export default function EvalsPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, listed === null])
 
+  function toggleChecked(id: string, checked: boolean) {
+    setCheckedIds(current =>
+      checked ? (current.includes(id) ? current : [...current, id]) : current.filter(x => x !== id)
+    )
+  }
+
   function handleSelectRow(row: EvaluationDetail) {
     setSelectedId(row.id)
   }
@@ -170,6 +198,16 @@ export default function EvalsPage({
 
   return (
     <div className="space-y-6" data-testid="evals-page">
+      {compareIds && compareIds.length >= 2 && (
+        <ModelComparisonView
+          evaluationIds={compareIds}
+          onClose={() => {
+            setCheckedIds([])
+            onCompare?.(null)
+          }}
+        />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
         <DeterminismLauncher onStarted={id => setSelectedId(id)} />
 
@@ -220,18 +258,31 @@ export default function EvalsPage({
           <h2 id="eval-list-heading" className="card-title">
             Past evaluations
           </h2>
-          {/* A lone filter checkbox sits inline in the header, so it keeps its
-              wrapping label rather than a stacked Field. */}
-          <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground cursor-pointer">
-            <input
-              type="checkbox"
-              data-testid="eval-cloud-filter"
-              className="h-4 w-4 rounded border-border accent-primary-600"
-              checked={cloudFilter}
-              onChange={event => setCloudFilter(event.target.checked)}
-            />
-            Cloud
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            {checkedIds.length > 0 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={checkedIds.length < 2}
+                onClick={() => onCompare?.(checkedIds)}
+                data-testid="eval-compare-btn"
+              >
+                Compare models ({checkedIds.length})
+              </Button>
+            )}
+            {/* A lone filter checkbox sits inline in the header, so it keeps its
+                wrapping label rather than a stacked Field. */}
+            <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                data-testid="eval-cloud-filter"
+                className="h-4 w-4 rounded border-border accent-primary-600"
+                checked={cloudFilter}
+                onChange={event => setCloudFilter(event.target.checked)}
+              />
+              Cloud
+            </label>
+          </div>
         </CardHeader>
 
         <CardBody>
@@ -301,6 +352,21 @@ export default function EvalsPage({
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {isComparable(row) && (
+                        <input
+                          type="checkbox"
+                          aria-label={`Compare evaluation ${row.id}`}
+                          data-testid={`eval-compare-checkbox-${row.id}`}
+                          className="h-4 w-4 rounded border-border accent-primary-600"
+                          checked={checkedIds.includes(row.id)}
+                          disabled={
+                            checkedIds.length >= MAX_COMPARED && !checkedIds.includes(row.id)
+                          }
+                          onClick={event => event.stopPropagation()}
+                          onKeyDown={event => event.stopPropagation()}
+                          onChange={event => toggleChecked(row.id, event.target.checked)}
+                        />
+                      )}
                       {row.result?.grade && (
                         <span className="text-sm font-semibold text-foreground">
                           {row.result.grade}

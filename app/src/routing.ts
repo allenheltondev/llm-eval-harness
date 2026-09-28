@@ -9,6 +9,7 @@
  *
  *   #/workbench  #/evals  #/history  #/guardrails  #/tools  #/about
  *   #/evals/<evaluation id>
+ *   #/evals/compare/<id>,<id>[,<id>...]   (suite evaluations of different models, side by side)
  *   #/runs/<run id>          (the History tab, with that run open)
  */
 
@@ -22,6 +23,8 @@ export interface Route {
   tab: TabId
   /** With `tab: 'evals'` — the evaluation to open. */
   evaluationId?: string
+  /** With `tab: 'evals'` — two or more suite evaluations to compare. */
+  compareIds?: string[]
   /** With `tab: 'history'` — the run to open. */
   runId?: string
 }
@@ -43,10 +46,17 @@ function decode(segment: string | undefined): string | undefined {
 
 /** `#/evals/abc` -> `{ tab: 'evals', evaluationId: 'abc' }`; anything unknown -> the default. */
 export function parseRoute(hash: string): Route {
-  const [first, second] = hash.replace(/^#\/?/, '').split('/')
+  const [first, second, third] = hash.replace(/^#\/?/, '').split('/')
   if (first === 'runs') {
     const runId = decode(second)
     return runId ? { tab: 'history', runId } : { tab: 'history' }
+  }
+  if (first === 'evals' && second === 'compare') {
+    const compareIds = (third ?? '')
+      .split(',')
+      .map(part => decode(part))
+      .filter((id): id is string => id !== undefined)
+    return compareIds.length >= 2 ? { tab: 'evals', compareIds } : { tab: 'evals' }
   }
   if (first && isTab(first)) {
     const evaluationId = first === 'evals' ? decode(second) : undefined
@@ -57,6 +67,9 @@ export function parseRoute(hash: string): Route {
 
 /** The inverse of `parseRoute`. */
 export function routeHash(route: Route): string {
+  if (route.tab === 'evals' && route.compareIds && route.compareIds.length >= 2) {
+    return compareHref(route.compareIds)
+  }
   if (route.tab === 'evals' && route.evaluationId) return evaluationHref(route.evaluationId)
   if (route.tab === 'history' && route.runId) return runHref(route.runId)
   return `#/${route.tab}`
@@ -64,6 +77,11 @@ export function routeHash(route: Route): string {
 
 export function evaluationHref(evaluationId: string): string {
   return `#/evals/${encodeURIComponent(evaluationId)}`
+}
+
+/** Ids are joined with a comma, which `encodeURIComponent` leaves alone, so it stays a separator. */
+export function compareHref(evaluationIds: string[]): string {
+  return `#/evals/compare/${evaluationIds.map(encodeURIComponent).join(',')}`
 }
 
 export function runHref(runId: string): string {

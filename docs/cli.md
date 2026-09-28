@@ -274,6 +274,13 @@ arms that completed are ranked, and an arm that failed is listed without
 stopping the others (the exit code is then non-zero). A gap of one case on a
 small suite with one repeat is noise: raise `repeats` before trusting it.
 
+Each arm is a stored evaluation, so the web app shows the same comparison: tick two or more
+finished suite evaluations in the Evals tab's list and choose **Compare models**, or open
+`#/evals/compare/<id>,<id>`. It ranks the same way, calls level quality a tie, marks the cases
+the models disagree on, and lists a model that did not complete without ranking it. The API is
+`GET /api/v1/evaluations/compare?ids=<id>&ids=<id>` (2–6 evaluations; `400` when they are not
+all suites, did not run the same suite, or ran the same model twice).
+
 `--arm` cannot be combined with `--model`, `--detach`, `--remote`, `--junit` or
 the gate flags (it ranks models, it does not gate one), and it does not run on
 a signed-in stack: add `--local`.

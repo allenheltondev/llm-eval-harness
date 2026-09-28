@@ -434,6 +434,16 @@ describe('api.evaluations', () => {
     expect(urlOf(spy)).toBe(`${BASE}/evaluations?execution=cloud`)
   })
 
+  it('compares evaluations with one repeated ids parameter', async () => {
+    const comparison = { arms: [], ranking: [], winner: null, tied: [], cases: [], split_cases: [] }
+    const spy = mockFetch(jsonResponse(comparison))
+
+    const result = await api.evaluations.compare(['e1', 'e 2'])
+
+    expect(urlOf(spy)).toBe(`${BASE}/evaluations/compare?ids=e1&ids=e+2`)
+    expect(result).toEqual(comparison)
+  })
+
   it('forwards execution:"cloud" on create', async () => {
     const spy = mockFetch(jsonResponse({ id: 'e1', status: 'pending' }, 202))
 

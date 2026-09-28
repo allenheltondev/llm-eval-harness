@@ -8,8 +8,23 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../features/evals/EvalsPage', () => ({
-  default: ({ onSelectEvaluation }: { onSelectEvaluation: (id: string | null) => void }) => (
+  default: ({
+    onSelectEvaluation,
+    compareIds,
+    onCompare
+  }: {
+    onSelectEvaluation: (id: string | null) => void
+    compareIds: string[] | null
+    onCompare: (ids: string[] | null) => void
+  }) => (
     <div>
+      <span data-testid="compare-ids">{compareIds ? compareIds.join('+') : 'none'}</span>
+      <button type="button" onClick={() => onCompare(['eval-1', 'eval-2'])}>
+        compare evaluations
+      </button>
+      <button type="button" onClick={() => onCompare(null)}>
+        close comparison
+      </button>
       <button type="button" onClick={() => onSelectEvaluation('eval-7')}>
         pick evaluation
       </button>
@@ -56,6 +71,28 @@ describe('AppShell selection routes', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'clear evaluation' }))
     expect(window.location.hash).toBe('#/evals')
+  })
+
+  it('puts a comparison in the address bar, and takes it out again', () => {
+    render(<AppShell />)
+    go('#/evals')
+    expect(screen.getByTestId('compare-ids')).toHaveTextContent('none')
+
+    fireEvent.click(screen.getByRole('button', { name: 'compare evaluations' }))
+    expect(window.location.hash).toBe('#/evals/compare/eval-1,eval-2')
+    expect(screen.getByTestId('compare-ids')).toHaveTextContent('eval-1+eval-2')
+
+    fireEvent.click(screen.getByRole('button', { name: 'close comparison' }))
+    expect(window.location.hash).toBe('#/evals')
+    expect(screen.getByTestId('compare-ids')).toHaveTextContent('none')
+  })
+
+  it('opens a comparison from its link', () => {
+    render(<AppShell />)
+
+    go('#/evals/compare/a,b,c')
+
+    expect(screen.getByTestId('compare-ids')).toHaveTextContent('a+b+c')
   })
 
   it('puts the picked run in the address bar, and takes it out again', () => {

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { evaluationHref, parseRoute, routeHash, runHref, TAB_IDS } from '../routing'
+import { compareHref, evaluationHref, parseRoute, routeHash, runHref, TAB_IDS } from '../routing'
 
 describe('routing', () => {
   it('opens an evaluation from its link', () => {
@@ -46,5 +46,44 @@ describe('routing', () => {
       expect(parseRoute(routeHash(route))).toEqual(route)
     }
     expect(runHref('r1')).toBe('#/runs/r1')
+  })
+})
+
+describe('compare routes', () => {
+  it('opens a comparison from its link', () => {
+    expect(parseRoute('#/evals/compare/a,b,c')).toEqual({
+      tab: 'evals',
+      compareIds: ['a', 'b', 'c']
+    })
+  })
+
+  it('needs at least two evaluations, else it is just the Evals tab', () => {
+    expect(parseRoute('#/evals/compare/only-one')).toEqual({ tab: 'evals' })
+    expect(parseRoute('#/evals/compare/')).toEqual({ tab: 'evals' })
+    expect(parseRoute('#/evals/compare')).toEqual({ tab: 'evals' })
+    expect(parseRoute('#/evals/compare/,,')).toEqual({ tab: 'evals' })
+  })
+
+  it('does not mistake the word "compare" for an evaluation id elsewhere', () => {
+    expect(parseRoute('#/history/compare/a,b')).toEqual({ tab: 'history' })
+    expect(parseRoute('#/evals/compared')).toEqual({ tab: 'evals', evaluationId: 'compared' })
+  })
+
+  it('round-trips, escaping each id but not the separator', () => {
+    const ids = ['a b', 'c/d']
+    expect(compareHref(ids)).toBe('#/evals/compare/a%20b,c%2Fd')
+    expect(parseRoute(compareHref(ids))).toEqual({ tab: 'evals', compareIds: ids })
+    expect(routeHash({ tab: 'evals', compareIds: ['x', 'y'] })).toBe('#/evals/compare/x,y')
+  })
+
+  it('drops an id that cannot be decoded and keeps the rest', () => {
+    expect(parseRoute('#/evals/compare/a,%E0%A4%A,b')).toEqual({
+      tab: 'evals',
+      compareIds: ['a', 'b']
+    })
+  })
+
+  it('falls back to the plain tab hash for fewer than two ids', () => {
+    expect(routeHash({ tab: 'evals', compareIds: ['only'] })).toBe('#/evals')
   })
 })

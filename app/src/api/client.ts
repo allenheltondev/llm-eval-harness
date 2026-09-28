@@ -25,6 +25,7 @@ import type {
   McpServerListResponse,
   McpServerUpdate,
   McpTestResult,
+  ModelComparison,
   ModelListResponse,
   Page,
   RunDetail,
@@ -195,6 +196,17 @@ const evaluations = {
         limit: params.limit,
         execution: params.execution
       },
+      signal: options.signal
+    }),
+
+  /**
+   * `GET /evaluations/compare?ids=..` — one suite's evaluations on different
+   * models, ranked. Two to six ids; a 400 names why a set cannot be compared
+   * (`compare_not_suite`, `compare_different_suites`, `compare_duplicate_model`).
+   */
+  compare: (ids: string[], options: CallOptions = {}): Promise<ModelComparison> =>
+    http.get<ModelComparison>('/evaluations/compare', {
+      query: { ids },
       signal: options.signal
     }),
 
