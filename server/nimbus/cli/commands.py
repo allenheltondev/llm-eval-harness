@@ -206,6 +206,8 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
     max_cost = spec.pop("max_cost_usd", None)
     if getattr(args, "max_cost", None) is not None:
         max_cost = args.max_cost
+    if getattr(args, "calibrate", False):
+        spec["calibrate"] = True
 
     run_config = dict(spec.get("run_config") or {})
     overrides = _run_overrides(args)

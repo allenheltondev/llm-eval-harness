@@ -290,15 +290,53 @@ class CaseVerdict:
 
 @dataclass
 class SuiteJudgement:
-    """Per-case verdicts, keyed by case id, plus a failure of the judge as a whole."""
+    """Per-case verdicts, keyed by case id, plus a failure of the judge as a whole.
+
+    ``calibration`` is filled only for a ``calibrate`` suite: per case id, the
+    judge's score for each :data:`CALIBRATION_PROBES` answer it was shown, or
+    ``None`` where that probe went unjudged.
+    """
 
     verdicts: dict[str, CaseVerdict] = field(default_factory=dict)
     error: str | None = None
+    calibration: dict[str, dict[str, float | None]] = field(default_factory=dict)
+
+
+#: The answers a calibrating judge is shown per case, by name: the case's own
+#: ``expected`` answer (only when it has one), and an empty answer.
+CALIBRATION_PROBES = ("reference", "empty")
 
 
 def _suite_case_name(outcome: RunOutcome) -> str:
     # `#` cannot appear in a case id (see SuiteCase.id), so this splits cleanly.
     return f"{outcome.case_id}#{outcome.index}"
+
+
+def _calibration_cases(suite: Suite, judged_ids: set[str]) -> list[Case]:
+    """One judge ``Case`` per calibration probe of each judged case.
+
+    Named ``<case id>#<probe>``: a probe name is never a run index, so the rows
+    come back apart from the real answers' rows.
+    """
+    cases: list[Case] = []
+    for case in suite.cases:
+        if case.id not in judged_ids:
+            continue
+        answers = {"reference": case.expected, "empty": ""}
+        for probe in CALIBRATION_PROBES:
+            answer = answers[probe]
+            if answer is None:
+                continue
+            cases.append(
+                Case(
+                    name=f"{case.id}#{probe}",
+                    input=case.input,
+                    expected_output=case.expected,
+                    expected_assertion=case.criteria,
+                    metadata={"output": answer, "trajectory": []},
+                )
+            )
+    return cases
 
 
 async def judge_suite(
@@ -345,6 +383,8 @@ async def judge_suite(
                     },
                 )
             )
+        if suite.calibrate:
+            cases += _calibration_cases(suite, {str(outcome.case_id) for outcome in outcomes})
         experiment = Experiment(cases=cases, evaluators=[evaluator])
         report = await experiment.run_evaluations_async(
             _task, max_workers=min(len(cases), MAX_SUITE_JUDGE_CONCURRENCY)
@@ -357,6 +397,10 @@ async def judge_suite(
     judgement = SuiteJudgement(error=_judge_failure(rows))
     for score, reason, name in rows:
         case_id, _, index = name.rpartition("#")
+        if index in CALIBRATION_PROBES:
+            unjudged = reason.startswith(_EVALUATOR_ERROR_PREFIX)
+            judgement.calibration.setdefault(case_id, {})[index] = None if unjudged else score
+            continue
         verdict = judgement.verdicts.setdefault(case_id, CaseVerdict())
         if reason.startswith(_EVALUATOR_ERROR_PREFIX):
             verdict.judge_errors[int(index)] = reason[len(_EVALUATOR_ERROR_PREFIX) :].strip()
