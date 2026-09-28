@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:3000"]
     fake_model: bool = False
 
+    #: Wall-clock limit, in seconds, on one run inside an evaluation. A run that
+    #: exceeds it is cancelled and reported as retryable ``run_timeout``. ``0``
+    #: means no limit. Not applied to ``POST /runs`` streams.
+    run_timeout_seconds: float = Field(default=0, ge=0)
+
     # -- non-Bedrock model providers ---------------------------------------- #
     #: Anthropic API key. Presence is what makes the provider "configured".
     anthropic_api_key: str | None = Field(

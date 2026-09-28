@@ -36,10 +36,12 @@ own run row, so every repeat is inspectable in ``/runs`` afterwards. At most
 :data:`MAX_CONCURRENT_RUNS` repeats are in flight at once.
 
 A repeat whose in-band error is throttle-classified (``model_throttled``, from
-``engine.model_factory.classify_error``) is retried, sleeping
-:data:`RETRY_BACKOFF_SECONDS` between attempts -- a module-level tuple so tests
-can shorten it. Retries keep the repeat's index; only the successful attempt's
-run id is kept. Anything still failing after the last attempt is reported as
+``engine.model_factory.classify_error``) or otherwise marked ``retryable`` (a
+provider 5xx, a dropped connection, a run timeout) is retried, sleeping
+:data:`RETRY_BACKOFF_SECONDS` between attempts, each sleep jittered so
+concurrent runs that were throttled together do not retry together. The tuple is
+module-level so tests can shorten it. Retries keep the repeat's index; only the
+successful attempt's run id is kept. Anything still failing after the last attempt is reported as
 ``run_failed``, excluded from grading, listed in ``result.failed_runs`` (with its
 ``run_id`` when the run got far enough to be recorded, else ``None``), and the
 other repeats carry on.
@@ -62,6 +64,7 @@ import asyncio
 import copy
 import json
 import logging
+import random
 import time
 from collections.abc import Callable
 from contextlib import aclosing
@@ -101,6 +104,11 @@ MAX_CONCURRENT_RUNS = 3
 #: Sleep between throttle retries; index 0 is used after the first failure.
 RETRY_BACKOFF_SECONDS: tuple[float, ...] = (5.0, 10.0)
 THROTTLE_ERROR_CODE = "model_throttled"
+#: The error code of a run cut off by ``Settings.run_timeout_seconds``.
+RUN_TIMEOUT_ERROR_CODE = "run_timeout"
+#: Each backoff sleeps between ``1 - RETRY_JITTER`` and ``1`` times its nominal
+#: length.
+RETRY_JITTER = 0.5
 
 
 @dataclass
@@ -299,8 +307,10 @@ async def _execute_once(
         model_factory=deps.model_factory,
         repo=deps.repo,
     )
+    timeout_seconds = deps.settings.run_timeout_seconds
+    deadline = asyncio.timeout(timeout_seconds or None)
     try:
-        async with aclosing(events):
+        async with deadline, aclosing(events):
             async for event in events:
                 match event:
                     case RunStartEvent():
@@ -322,9 +332,18 @@ async def _execute_once(
         # Setup failures (an unknown toolset, a missing provider key) never
         # reach the stream -- they are raised before ``run_start``.
         outcome.error = {"code": exc.code, "message": exc.message, "retryable": False}
-    except Exception as exc:  # pragma: no cover - defensive
-        code, message, retryable = classify_error(exc)
-        outcome.error = {"code": code, "message": message, "retryable": retryable}
+    except Exception as exc:
+        if deadline.expired():
+            # The runner persisted the cut-off run as ``cancelled``; the outcome
+            # says why, and lets the retry loop have another go.
+            outcome.error = {
+                "code": RUN_TIMEOUT_ERROR_CODE,
+                "message": f"Run exceeded the {timeout_seconds:g}s run timeout",
+                "retryable": True,
+            }
+        else:  # pragma: no cover - defensive
+            code, message, retryable = classify_error(exc)
+            outcome.error = {"code": code, "message": message, "retryable": retryable}
 
     outcome.duration_ms = int((time.perf_counter() - started) * 1000)
     if outcome.run_id is not None:
@@ -336,8 +355,17 @@ async def _execute_once(
     return outcome
 
 
-def _is_throttle(outcome: RunOutcome) -> bool:
-    return bool(outcome.error) and outcome.error.get("code") == THROTTLE_ERROR_CODE
+def _is_retryable(outcome: RunOutcome) -> bool:
+    """Whether a failed attempt is worth another go: throttled, or marked retryable."""
+    error = outcome.error
+    if not error:
+        return False
+    return error.get("code") == THROTTLE_ERROR_CODE or bool(error.get("retryable"))
+
+
+def _jittered(seconds: float) -> float:
+    """``seconds`` scaled into ``[1 - RETRY_JITTER, 1]`` of itself."""
+    return seconds * random.uniform(1 - RETRY_JITTER, 1.0)
 
 
 async def _execute_with_retries(
@@ -345,13 +373,19 @@ async def _execute_with_retries(
     deps: EvalDeps,
     store: EvalStore | None = None,
 ) -> RunOutcome:
-    """Execute one run, retrying throttled attempts with backoff."""
+    """Execute one run, retrying retryable failures with jittered backoff."""
     outcome = await _execute_once(job, deps, store)
     for attempt, backoff in enumerate(RETRY_BACKOFF_SECONDS, start=1):
-        if outcome.succeeded or not _is_throttle(outcome):
+        if outcome.succeeded or not _is_retryable(outcome):
             break
-        logger.info("eval run %d throttled, retrying in %.1fs", job.index, backoff)
-        await asyncio.sleep(backoff)
+        delay = _jittered(backoff)
+        logger.info(
+            "eval run %d failed (%s), retrying in %.1fs",
+            job.index,
+            (outcome.error or {}).get("code"),
+            delay,
+        )
+        await asyncio.sleep(delay)
         spent_before = outcome.cost_usd
         outcome = await _execute_once(job, deps, store)
         outcome.attempts = attempt + 1
