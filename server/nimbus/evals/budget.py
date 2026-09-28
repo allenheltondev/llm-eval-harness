@@ -9,8 +9,9 @@ identically (they share :func:`nimbus.evals.engine.execute_evaluation_with_seam`
     ``spent + (in_flight + 1) * mean_cost_per_run`` stays within the budget.
     Once one is refused, no later run starts. Runs already in flight always
     finish, so the overshoot is bounded by the concurrency limit. Until the
-    first run finishes there is no per-run estimate, so the first batch of
-    concurrent runs always starts.
+    first run finishes the per-run figure is a pre-flight estimate
+    (:func:`prior_per_run`), so the first concurrent batch is sized against the
+    budget too rather than always starting in full.
 :class:`JudgeMeter`
     Wraps the judge factory so every judge model it builds reports its token
     usage back here, whichever provider the judge runs on. Judge spend is
@@ -24,7 +25,7 @@ Every figure is an estimate from :mod:`nimbus.pricing`.
 from __future__ import annotations
 
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
 from strands.models.model import Model
@@ -43,8 +44,10 @@ BUDGET_EXHAUSTED_ERROR = {
 class CostLedger:
     """Model-under-test spend, and budget admission for new runs."""
 
-    def __init__(self, max_cost_usd: float | None = None) -> None:
+    def __init__(self, max_cost_usd: float | None = None, prior_per_run: float = 0.0) -> None:
         self.max_cost_usd = max_cost_usd
+        #: Estimated cost of one run, used until a finished run gives a real mean.
+        self.prior_per_run = prior_per_run
         self.spent = 0.0
         self.finished = 0
         self.in_flight = 0
@@ -52,8 +55,8 @@ class CostLedger:
         self.exhausted = False
 
     def estimate_per_run(self) -> float:
-        """Mean cost of the runs finished so far (``0`` before the first one)."""
-        return self.spent / self.finished if self.finished else 0.0
+        """Mean cost of the runs finished so far; the prior before the first one."""
+        return self.spent / self.finished if self.finished else self.prior_per_run
 
     def admit(self) -> bool:
         """Whether one more run may start. Refusing is permanent."""
@@ -136,6 +139,28 @@ class JudgeMeter:
         if not self.metered:
             return None
         return pricing.cost_usd(self.provider, self.model_id, self.usage)
+
+
+def prior_per_run(run_configs: Iterable[Any]) -> float:
+    """Mean pre-flight cost estimate over the runs an evaluation will make.
+
+    Unpriced runs contribute nothing (``0`` when none is priced): a budget
+    already requires a priced model, so that only happens with no budget.
+    """
+    estimates = [
+        estimate
+        for config in run_configs
+        if (
+            estimate := pricing.estimate_run_cost(
+                config.provider,
+                config.model_id,
+                len(config.system_prompt) + len(config.user_prompt),
+                config.inference.max_tokens,
+            )
+        )
+        is not None
+    ]
+    return sum(estimates) / len(estimates) if estimates else 0.0
 
 
 def _run_model(request: Any) -> tuple[str, str] | None:

@@ -9,6 +9,7 @@ worker alike.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -336,6 +337,82 @@ def test_the_ledger_counts_in_flight_runs_at_the_running_average():
     ledger.settle(0.1)
     assert ledger.admit() is False  # refusing is permanent
     assert ledger.skipped == 2
+
+
+def test_the_prior_sizes_the_first_concurrent_batch_before_any_run_finishes():
+    ledger = budget.CostLedger(max_cost_usd=2.5, prior_per_run=1.0)
+    # 0 spent + (0 in flight + 1 new) x $1, then (1 + 1) x $1, both within $2.50
+    assert [ledger.admit() for _ in range(2)] == [True, True]
+    # 0 spent + (2 in flight + 1 new) x $1 = $3 > $2.50
+    assert ledger.admit() is False
+    assert ledger.exhausted
+
+
+def test_a_finished_run_replaces_the_prior_with_the_measured_mean():
+    ledger = budget.CostLedger(max_cost_usd=10.0, prior_per_run=5.0)
+    assert ledger.estimate_per_run() == 5.0
+    assert ledger.admit()
+    ledger.settle(0.25)
+    assert ledger.estimate_per_run() == 0.25
+
+
+def test_a_run_estimate_prices_the_prompt_and_the_assumed_output():
+    # 4M characters ~ 1M input tokens at $1/M; the fake model's output is free.
+    assert pricing.estimate_run_cost("bedrock", FAKE_MODEL, 4 * MILLION) == pytest.approx(1.0)
+    # 1000 output tokens at the judge's $10/M, on an empty prompt.
+    assert pricing.estimate_run_cost("bedrock", FAKE_JUDGE, 0, max_tokens=1000) == pytest.approx(
+        0.01
+    )
+
+
+def test_an_unpriced_model_has_no_run_estimate():
+    assert pricing.estimate_run_cost("bedrock", "no.such-model", 100) is None
+
+
+def test_the_prior_is_the_mean_estimate_over_the_planned_runs():
+    def config(prompt_chars: int) -> RunRequest:
+        return RunRequest(model_id=FAKE_MODEL, user_prompt="x" * prompt_chars)
+
+    cheap, dear = config(4 * MILLION), config(12 * MILLION)  # $1 and $3
+    assert budget.prior_per_run([cheap, dear]) == pytest.approx(2.0)
+    assert budget.prior_per_run([]) == 0.0
+    unpriced = RunRequest(model_id="no.such-model", user_prompt="hi")
+    assert budget.prior_per_run([unpriced]) == 0.0
+
+
+def overlapping_dollar_run(request: RunRequest) -> FakeModel:
+    """Like :func:`dollar_run`, but it yields to the loop first, so concurrent runs overlap."""
+    model = dollar_run(request)
+    inner_stream = model.stream
+
+    async def stream(*args: Any, **kwargs: Any):
+        await asyncio.sleep(0.05)
+        async for event in inner_stream(*args, **kwargs):
+            yield event
+
+    model.stream = stream  # type: ignore[method-assign]
+    return model
+
+
+async def test_a_tight_budget_no_longer_starts_a_full_first_batch(initialized_db):
+    # 400k characters ~ 100k tokens ~ $0.10 estimated per run (the runs really cost $1).
+    request = determinism(3, max_cost_usd=0.25)
+    request.run_config = request.run_config.model_copy(update={"user_prompt": "x" * 400_000})
+    recorder = Recorder()
+
+    terminal = await evals_engine.execute_evaluation_with_seam(
+        request,
+        recorder.emit,
+        RecordingStore("eval-cost"),
+        recorder.cancelled,
+        deps=evals_engine.EvalDeps(
+            settings=Settings(), model_factory=overlapping_dollar_run, judge_factory=judge
+        ),
+    )
+
+    result = terminal["result"]
+    assert result["budget_exhausted"] is True
+    assert result["skipped_runs"] == 1  # two fit at $0.10 each; the third would pass $0.25
 
 
 def test_the_ledger_stops_once_the_budget_is_spent_even_by_free_runs():

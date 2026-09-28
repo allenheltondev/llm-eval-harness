@@ -284,6 +284,16 @@ def _suite_jobs(suite: Suite) -> list[_Job]:
     return jobs
 
 
+def _planned_jobs(request: EvaluationRequest) -> list[_Job]:
+    """Every run ``request`` will make (none for ``grade``, which re-reads stored runs)."""
+    if request.kind == "determinism":
+        return _determinism_jobs(request)
+    if request.kind == "suite":
+        assert request.suite is not None
+        return _suite_jobs(request.suite)
+    return []
+
+
 async def _execute_once(
     job: _Job,
     deps: EvalDeps,
@@ -951,7 +961,11 @@ async def execute_evaluation_with_seam(
     try:
         if not isinstance(request, EvaluationRequest):
             request = EvaluationRequest.model_validate(request)
-        seam.ledger = budget.CostLedger(request.max_cost_usd)
+        planned_jobs = _planned_jobs(request)
+        seam.ledger = budget.CostLedger(
+            request.max_cost_usd,
+            prior_per_run=budget.prior_per_run(job.run_config for job in planned_jobs),
+        )
         judge_meter = budget.JudgeMeter(seam.deps.judge_factory)
 
         seam.store.save_evaluation(status="running")
@@ -961,11 +975,8 @@ async def execute_evaluation_with_seam(
             )
         )
 
-        if request.kind == "determinism":
-            await _execute_batch(seam, _determinism_jobs(request), outcomes)
-        elif request.kind == "suite":
-            assert request.suite is not None
-            await _execute_batch(seam, _suite_jobs(request.suite), outcomes)
+        if request.kind in ("determinism", "suite"):
+            await _execute_batch(seam, planned_jobs, outcomes)
         else:
             outcomes.extend(_load_stored_runs(seam, request.run_ids))
 
