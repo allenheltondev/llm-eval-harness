@@ -688,3 +688,139 @@ async def test_one_unjudged_repeat_makes_the_case_inconclusive(initialized_db, m
     assert case["score"] is None
     assert case["scores"] == [None, 0.9]
     assert case["error"] == {"code": "judge_error", "message": "throttled"}
+
+
+# --------------------------------------------------------------------------- #
+# Calibration: can the judge tell a right answer from no answer?
+# --------------------------------------------------------------------------- #
+
+
+def _judged_probe(judge: RoutingJudge, answer: str) -> bool:
+    return any(f"<Output>{answer}</Output>" in prompt for prompt in judge.seen)
+
+
+async def test_calibration_scores_the_reference_and_an_empty_answer(initialized_db):
+    answers = AnswerBook({REFUND["input"]: "Within 30 days only.", HOURS["input"]: "10am."})
+    judge = RoutingJudge(
+        [
+            (f"<Output>{REFUND['expected']}</Output>", 0.95, "matches the reference"),
+            (f"<Output>{HOURS['expected']}</Output>", 0.9, "matches the reference"),
+            ("<Output></Output>", 0.0, "no answer"),
+        ],
+        default=0.8,
+    )
+
+    terminal, _ = await run_suite(
+        suite_request([REFUND, HOURS], calibrate=True), answers, judge
+    )
+
+    result = terminal["result"]
+    by_id = {case["id"]: case for case in result["cases"]}
+    assert by_id["refund-window"]["calibration"] == {"reference": 0.95, "empty": 0.0}
+    assert by_id["store-hours"]["calibration"] == {"reference": 0.9, "empty": 0.0}
+    assert result["calibration"] == {
+        "cases": 2,
+        "reference_mean": 0.925,
+        "empty_mean": 0.0,
+        "flagged": [],
+    }
+    # The probes are the judge's alone: verdicts and scores are the real answers'.
+    assert by_id["refund-window"]["scores"] == [0.8]
+    assert by_id["refund-window"]["status"] == "passed"
+    # The judge saw each probe with the case's own reference and criteria.
+    empty_prompt = next(
+        p for p in judge.seen if "<Output></Output>" in p and REFUND["input"] in p
+    )
+    assert f"<CaseCriteria>{REFUND['criteria']}</CaseCriteria>" in empty_prompt
+
+
+async def test_a_judge_that_cannot_tell_right_from_empty_is_flagged(initialized_db):
+    answers = AnswerBook({REFUND["input"]: "Within 30 days only."})
+    judge = RoutingJudge(
+        [(f"<Output>{REFUND['expected']}</Output>", 0.5, "unsure")], default=0.9
+    )
+
+    terminal, _ = await run_suite(suite_request([REFUND], calibrate=True), answers, judge)
+
+    assert terminal["result"]["calibration"]["flagged"] == [
+        {"id": "refund-window", "probe": "reference", "score": 0.5},
+        {"id": "refund-window", "probe": "empty", "score": 0.9},
+    ]
+
+
+async def test_a_case_without_a_reference_is_calibrated_on_the_empty_answer_alone(
+    initialized_db,
+):
+    case = {"id": "no-ref", "input": "Say hello.", "criteria": "Must greet."}
+    judge = RoutingJudge([("<Output></Output>", 0.1, "empty")], default=0.9)
+
+    terminal, _ = await run_suite(
+        suite_request([case], calibrate=True), AnswerBook({"Say hello.": "Hello!"}), judge
+    )
+
+    assert terminal["result"]["cases"][0]["calibration"] == {"empty": 0.1}
+    assert terminal["result"]["calibration"]["reference_mean"] is None
+
+
+async def test_an_unjudged_probe_is_reported_but_not_flagged(initialized_db, monkeypatch):
+    original = grader._rows_for
+
+    def empty_probe_errors(report, name):
+        return [
+            (0.0, "Evaluator error: throttled", row[2]) if row[2].endswith("#empty") else row
+            for row in original(report, name)
+        ]
+
+    monkeypatch.setattr(grader, "_rows_for", empty_probe_errors)
+
+    terminal, _ = await run_suite(
+        suite_request([REFUND], calibrate=True),
+        AnswerBook({REFUND["input"]: "30 days."}),
+        RoutingJudge([], default=0.9),
+    )
+
+    result = terminal["result"]
+    assert result["cases"][0]["calibration"] == {"reference": 0.9, "empty": None}
+    assert result["calibration"]["empty_mean"] is None
+    assert result["calibration"]["flagged"] == []
+    assert result["cases"][0]["status"] == "passed"
+
+
+async def test_cases_that_skip_the_judge_are_not_calibrated(initialized_db):
+    asserted = {
+        "id": "asserted",
+        "input": "Say hi.",
+        "expected": "hi",
+        "judge": False,
+        "assert": [{"type": "contains", "value": "hi"}],
+    }
+    judge = RoutingJudge([], default=0.9)
+
+    terminal, _ = await run_suite(
+        suite_request([REFUND, asserted], calibrate=True),
+        AnswerBook({REFUND["input"]: "30 days.", "Say hi.": "hi"}),
+        judge,
+    )
+
+    result = terminal["result"]
+    assert "calibration" not in {case["id"]: case for case in result["cases"]}["asserted"]
+    assert result["calibration"]["cases"] == 1
+    assert not _judged_probe(judge, "hi")
+
+
+async def test_a_suite_that_does_not_calibrate_makes_no_extra_judge_calls(initialized_db):
+    judge = RoutingJudge([], default=0.9)
+
+    terminal, _ = await run_suite(
+        suite_request([REFUND]), AnswerBook({REFUND["input"]: "30 days."}), judge
+    )
+
+    assert "calibration" not in terminal["result"]
+    assert "calibration" not in terminal["result"]["cases"][0]
+    assert len(judge.seen) == 1
+
+
+def test_calibrate_is_left_out_of_a_suite_that_does_not_set_it():
+    """Older stacks forbid unknown suite fields; an unset setting must not be sent."""
+    assert "calibrate" not in suite_request([REFUND]).stored_config()["suite"]
+    assert suite_request([REFUND], calibrate=True).stored_config()["suite"]["calibrate"] is True

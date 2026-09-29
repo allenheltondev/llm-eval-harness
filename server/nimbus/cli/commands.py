@@ -212,6 +212,8 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
     panel = list(spec.pop("panel", None) or [])
     if getattr(args, "panel_judge", None):
         panel = [_panel_entry(text) for text in args.panel_judge]
+    if getattr(args, "calibrate", False):
+        spec["calibrate"] = True
 
     run_config = dict(spec.get("run_config") or {})
     overrides = _run_overrides(args)

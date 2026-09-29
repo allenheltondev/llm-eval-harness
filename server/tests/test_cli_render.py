@@ -418,3 +418,30 @@ def test_passing_assertions_and_unrun_repeats_add_no_lines():
     assert render.suite_result_lines(_suite_result(case))[1:] == [
         f"{render.MARKER}   PASS  1.00  a"
     ]
+
+
+def test_a_calibrated_suite_prints_the_probe_means_then_each_flag():
+    result = _suite_result({"id": "a", "status": "passed", "score": 0.9})
+    result["calibration"] = {
+        "cases": 2,
+        "reference_mean": 0.8,
+        "empty_mean": None,
+        "flagged": [
+            {"id": "a", "probe": "reference", "score": 0.4},
+            {"id": "b", "probe": "empty", "score": 0.9},
+        ],
+    }
+
+    lines = render.suite_result_lines(result)
+
+    assert lines[2] == f"{render.MARKER} calibration  reference=0.80  empty=-  2 flagged"
+    assert lines[3] == (
+        f"{render.MARKER}   FLAG  0.40  a  judge fails the case's own expected answer"
+    )
+    assert lines[4] == f"{render.MARKER}   FLAG  0.90  b  judge passes an empty answer"
+
+
+def test_a_suite_without_calibration_prints_no_calibration_line():
+    lines = render.suite_result_lines(_suite_result({"id": "a", "status": "passed", "score": 0.9}))
+
+    assert not any("calibration" in line for line in lines)

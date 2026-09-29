@@ -850,9 +850,52 @@ def _build_suite_result(
         },
         "cases": cases,
     }
+    if suite.calibrate:
+        result["calibration"] = _calibration(cases, judged.calibration, suite.pass_threshold)
     if judged.error is not None:
         result["judge_error"] = judged.error
     return _fit_suite_result(result)
+
+
+def _calibration(
+    cases: list[dict[str, Any]],
+    probes: dict[str, dict[str, float | None]],
+    pass_threshold: float,
+) -> dict[str, Any]:
+    """How the judge scored each case's calibration probes, and which look wrong.
+
+    Each calibrated case gets ``calibration: {"reference", "empty"}`` (a score,
+    or ``None`` when that probe went unjudged; ``reference`` only when the case
+    has an ``expected`` answer). The suite-level summary flags a probe on the
+    wrong side of ``pass_threshold``: a reference answer the judge would fail,
+    or an empty answer it would pass. Either means this rubric and judge cannot
+    be trusted to separate right from wrong on that case. Nothing here changes
+    a case's verdict or score.
+    """
+    flagged: list[dict[str, Any]] = []
+    for case in cases:
+        scores = probes.get(case["id"])
+        if scores is None:
+            continue
+        case["calibration"] = {
+            probe: None if score is None else round(score, 4) for probe, score in scores.items()
+        }
+        reference, empty = scores.get("reference"), scores.get("empty")
+        if reference is not None and reference < pass_threshold:
+            flagged.append({"id": case["id"], "probe": "reference", "score": round(reference, 4)})
+        if empty is not None and empty >= pass_threshold:
+            flagged.append({"id": case["id"], "probe": "empty", "score": round(empty, 4)})
+
+    def mean(probe: str) -> float | None:
+        scores = [score for scores in probes.values() if (score := scores.get(probe)) is not None]
+        return round(sum(scores) / len(scores), 4) if scores else None
+
+    return {
+        "cases": len(probes),
+        "reference_mean": mean("reference"),
+        "empty_mean": mean("empty"),
+        "flagged": flagged,
+    }
 
 
 def _assertion_metrics(cases: list[dict[str, Any]]) -> dict[str, int]:

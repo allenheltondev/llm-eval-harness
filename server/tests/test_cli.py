@@ -934,6 +934,17 @@ class TestSuiteOverrides:
 
         assert (request.grader.provider, request.grader.model_id) == ("openai", "gpt-judge")
 
+    def test_calibrate_turns_on_the_suites_calibration(self, suite_file):
+        assert self._request(suite_file).suite.calibrate is False
+        assert self._request(suite_file, "--calibrate").suite.calibrate is True
+
+    def test_calibrate_without_a_suite_is_a_usage_error(self, cli):
+        result = cli("eval", "-m", "m1", "-p", "hi", "--calibrate")
+
+        assert result.code == 2
+        assert "--calibrate" in result.err
+        assert "--suite" in result.err
+
     def test_grader_provider_alone_without_any_judge_model_is_a_usage_error(self, cli, suite_file):
         result = cli("eval", "--suite", suite_file(), "--grader-provider", "openai")
 

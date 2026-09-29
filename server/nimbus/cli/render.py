@@ -249,7 +249,37 @@ def suite_result_lines(result: dict[str, Any]) -> list[str]:
         lines.extend(failed_checks)
     if result.get("judge_error"):
         lines.append(_line(f"judge error: {_one_line(result['judge_error'], 160)}"))
-    return lines + cost_lines(result)
+    return lines + calibration_lines(result) + cost_lines(result)
+
+
+def calibration_lines(result: dict[str, Any]) -> list[str]:
+    """A calibrated suite's judge check: the probe means, then each flagged probe.
+
+    Nothing at all for a suite that did not ask for calibration.
+    """
+    calibration = result.get("calibration")
+    if not isinstance(calibration, dict):
+        return []
+
+    def shown(score: Any) -> str:
+        return f"{score:.2f}" if isinstance(score, int | float) else "-"
+
+    flagged = calibration.get("flagged") or []
+    lines = [
+        _line(
+            f"calibration  reference={shown(calibration.get('reference_mean'))}  "
+            f"empty={shown(calibration.get('empty_mean'))}  "
+            f"{len(flagged)} flagged"
+        )
+    ]
+    reading = {
+        "reference": "judge fails the case's own expected answer",
+        "empty": "judge passes an empty answer",
+    }
+    for flag in flagged:
+        why = reading.get(flag.get("probe"), str(flag.get("probe")))
+        lines.append(_line(f"  FLAG  {shown(flag.get('score'))}  {flag.get('id', '')}  {why}"))
+    return lines
 
 
 def _failed_assertion_lines(case: dict[str, Any]) -> list[str]:

@@ -188,18 +188,25 @@ class Suite(BaseModel):
     #: The fraction of cases (0-1) that must pass for ``nimbus eval --gate`` to
     #: succeed. Unset means every case. Read by the CLI's gate, not the engine.
     min_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: Also have the judge score each judged case's own ``expected`` answer
+    #: (which should pass) and an empty answer (which should not), to show
+    #: whether the rubric and judge can tell them apart. Two extra judge calls
+    #: per case; never changes a case's verdict. See ``docs/suites.md``.
+    calibrate: bool = False
 
     @model_serializer(mode="wrap")
     def _omit_unset_min_pass_rate(self, handler: SerializerFunctionWrapHandler) -> dict:
-        """Leave ``min_pass_rate`` out when it is unset.
+        """Leave ``min_pass_rate`` and ``calibrate`` out when they are unset.
 
         ``Suite`` forbids unknown fields, and the CLI sends suites to stacks
-        that may run older server code. An unset gate setting is the old
-        behaviour, so not sending it keeps those stacks accepting the suite.
+        that may run older server code. An unset setting is the old behaviour,
+        so not sending it keeps those stacks accepting the suite.
         """
         data = handler(self)
         if isinstance(data, dict) and data.get("min_pass_rate") is None:
             data.pop("min_pass_rate", None)
+        if isinstance(data, dict) and not data.get("calibrate"):
+            data.pop("calibrate", None)
         return data
 
     @model_validator(mode="after")

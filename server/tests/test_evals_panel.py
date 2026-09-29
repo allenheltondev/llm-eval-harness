@@ -105,6 +105,51 @@ def test_the_suite_only_errors_when_every_judge_did():
     )
 
 
+def with_calibration(judged: SuiteJudgement, **probes: float | None) -> SuiteJudgement:
+    judged.calibration = {"c": dict(probes)}
+    return judged
+
+
+def test_calibration_is_the_mean_of_the_judges_that_scored_each_probe():
+    merged = combine_judgements(
+        [
+            ("a", with_calibration(judgement({0: 0.9}), reference=0.9, empty=0.1)),
+            ("b", with_calibration(judgement({0: 0.5}), reference=0.5, empty=0.3)),
+        ]
+    )
+
+    assert merged.calibration["c"]["reference"] == pytest.approx(0.7)
+    assert merged.calibration["c"]["empty"] == pytest.approx(0.2)
+
+
+def test_a_probe_only_some_judges_scored_is_the_mean_of_those_and_none_when_unjudged():
+    merged = combine_judgements(
+        [
+            ("a", with_calibration(judgement({0: 0.9}), reference=0.8, empty=None)),
+            ("b", with_calibration(judgement({0: 0.5}), reference=None, empty=None)),
+        ]
+    )
+
+    assert merged.calibration["c"] == {"reference": 0.8, "empty": None}
+
+
+def test_a_probe_no_judge_was_shown_is_absent():
+    merged = combine_judgements(
+        [
+            ("a", with_calibration(judgement({0: 0.9}), empty=0.1)),
+            ("b", with_calibration(judgement({0: 0.5}), empty=0.3)),
+        ]
+    )
+
+    assert set(merged.calibration["c"]) == {"empty"}  # a case with no `expected` has no reference
+
+
+def test_a_single_judges_calibration_passes_through_untouched():
+    only = with_calibration(judgement({0: 0.9}), reference=0.9, empty=0.1)
+
+    assert combine_judgements([("a", only)]).calibration == {"c": {"reference": 0.9, "empty": 0.1}}
+
+
 def test_a_case_only_some_judges_saw_is_still_merged():
     merged = combine_judgements(
         [("a", judgement({0: 0.6}, case_id="x")), ("b", judgement({0: 0.8}, case_id="y"))]
@@ -248,6 +293,21 @@ async def test_a_panel_scores_each_case_with_the_mean_of_its_judges(initialized_
     assert "[bedrock:judge-a]" in case["reasoning"] and "[bedrock:judge-b]" in case["reasoning"]
     assert terminal["result"]["judge"]["panel"] == ["bedrock:judge-b"]
     assert all(judge.calls for judge in judges.values())  # every judge graded the answer
+
+
+async def test_a_calibrated_suite_keeps_its_calibration_under_a_panel(initialized_db):
+    judges = {"judge-a": FakeJudgeModel(score=0.9), "judge-b": FakeJudgeModel(score=0.5)}
+    built = suite_request(grader={"model_id": "judge-a"}, panel=[{"model_id": "judge-b"}])
+    built.suite.calibrate = True
+    built.suite.cases[0].expected = "The window is 30 days."
+
+    terminal = await evaluate(built, judges)
+
+    calibration = terminal["result"]["calibration"]
+    assert calibration["cases"] == 1  # not lost when the verdicts were merged
+    assert calibration["reference_mean"] == pytest.approx(0.7)
+    assert calibration["empty_mean"] == pytest.approx(0.7)
+    assert terminal["result"]["cases"][0]["calibration"]["reference"] == pytest.approx(0.7)
 
 
 async def test_a_suite_without_a_panel_reports_no_panel_fields(initialized_db):
