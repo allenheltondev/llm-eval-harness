@@ -53,7 +53,6 @@ from nimbus.engine.model_factory import ModelFactory, build_model
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import RunRequest
 from nimbus.errors import (
-    BadRequestError,
     ConflictError,
     InternalError,
     NotFoundError,
@@ -393,48 +392,29 @@ def _load_evaluation(
     return EvaluationDetail.model_validate(record)
 
 
-#: How many models one comparison may hold.
-MAX_COMPARED_EVALUATIONS = 6
+#: How many arms one comparison may hold: enough for a 3-by-4 models-by-prompts grid.
+MAX_COMPARED_EVALUATIONS = 12
 
 
 # Declared before ``/evaluations/{evaluation_id}``, which would otherwise take "compare" as an id.
 @router.get("/evaluations/compare")
 def compare_evaluations(
     ids: list[str] = Query(min_length=2, max_length=MAX_COMPARED_EVALUATIONS),
+    baseline: str | None = None,
     repo: HistoryRepo = Depends(get_repo),
     table: EvalTable | None = Depends(get_eval_table),
 ):
-    """Compare suite evaluations that ran the same suite on different models.
+    """Compare suite evaluations that ran the same suite as different arms.
 
-    Reads only stored results (:func:`nimbus.evals.compare.compare`), so it costs
-    nothing and works for evaluations from either lane. A ``400`` names why a set
-    cannot be compared: not all suites, not the same suite, or the same model twice.
+    Reads only stored results (:func:`nimbus.evals.compare.build_comparison`), so
+    it costs nothing and works for evaluations from either lane. ``baseline``
+    (an evaluation id or an arm's label; default: the arm tagged as baseline)
+    turns on the fallback analysis: what each other arm breaks, and whether it is
+    ready. A ``400`` names why a set cannot be compared: not all suites, not the
+    same suite, an arm twice, or an unknown baseline.
     """
     loaded = [_load_evaluation(evaluation_id, repo, table).model_dump() for evaluation_id in ids]
-    not_suites = [entry["id"] for entry in loaded if entry["kind"] != "suite"]
-    if not_suites:
-        raise BadRequestError(
-            "Only suite evaluations can be compared; not a suite: " + ", ".join(not_suites),
-            detail={"evaluation_ids": not_suites},
-            code="compare_not_suite",
-        )
-    differing = evals_compare.suite_differences(loaded)
-    if differing:
-        raise BadRequestError(
-            "These evaluations did not run the same suite; the cases differ on: "
-            + ", ".join(differing),
-            detail={"cases": differing},
-            code="compare_different_suites",
-        )
-    try:
-        comparison = evals_compare.compare([evals_compare.arm_from_evaluation(e) for e in loaded])
-    except ValueError:
-        raise BadRequestError(
-            "Every evaluation must have run a different model", code="compare_duplicate_model"
-        ) from None
-    suite = loaded[0]["config"].get("suite") or {}
-    cases = len(suite.get("cases") or [])
-    return {**comparison, "suite": {"name": suite.get("name"), "cases": cases}}
+    return evals_compare.build_comparison(loaded, baseline=baseline)
 
 
 @router.get("/evaluations/{evaluation_id}", response_model=EvaluationDetail)
