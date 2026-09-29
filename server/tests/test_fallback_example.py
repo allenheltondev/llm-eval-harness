@@ -8,7 +8,23 @@ import yaml
 
 from nimbus import arms, suite_edit
 
-EXAMPLES = Path(__file__).resolve().parents[2] / "docs" / "examples"
+
+
+def _find_examples() -> Path:
+    """Locate ``docs/examples`` by walking up, not by counting parents.
+
+    mutmut copies ``tests/`` into ``server/mutants/``, one level deeper, so a
+    fixed ``parents[2]`` misses the directory and the whole mutation job dies on
+    its baseline run.
+    """
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "docs" / "examples"
+        if candidate.is_dir():
+            return candidate
+    raise AssertionError("could not find docs/examples above this test")
+
+
+EXAMPLES = _find_examples()
 
 
 def test_the_example_declares_two_arms_a_bar_and_a_critical_case():
