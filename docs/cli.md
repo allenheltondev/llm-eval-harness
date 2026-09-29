@@ -237,6 +237,7 @@ nimbus eval --suite cases.yaml -m <other>      # same cases, another model
 | `--rubric` | Extra rubric text for the judge. |
 | `--calibrate` | Suites only: also have the judge score each case's `expected` answer and an empty one, and flag cases where it can't tell them apart. See [Calibrating the judge](suites.md#calibrating-the-judge). |
 | `--max-cost USD` | Stop starting new runs once the estimated spend would pass this many dollars; the evaluation still completes, graded on the runs it made, with `budget_exhausted: true`. Overrides a suite file's `max_cost_usd`. Costs are estimates — see [Cost and budgets](suites.md#cost-and-budgets). |
+| `--arm MODEL` | With `--suite`: run the suite on this model and compare the models — see [Comparing models](#comparing-models). Repeatable; `PROVIDER=MODEL` picks the provider. |
 | `--remote` | Insist on the stack you signed in to with `login` (already the default once signed in); fails rather than running here when you are not — see [Running on a deployed stack](#running-on-a-deployed-stack). |
 | `--detach` | On a stack: submit, print the evaluation's id and link, and return without following it. |
 | `--fail-under SCORE` | Exit `3` when the overall score (0–100) is below `SCORE` — see [Exit codes](#exit-codes). |
@@ -252,6 +253,38 @@ cannot wait fifteen minutes. A CLI invocation *is* the job: it runs in the
 foreground, and Ctrl-C cancels the evaluation rather than just stopping your
 view of it. The terminal state lands on stdout as JSON; the grade and the
 judge's reasoning are summarised on stderr.
+
+### Comparing models
+
+`--arm` runs one suite on several models and ranks them:
+
+```bash
+nimbus eval --suite suite.yaml --arm anthropic.claude-sonnet-4-5 --arm openai=gpt-4o
+```
+
+Each arm is an ordinary suite evaluation — its own history row (`nimbus show
+<id>`), cost and `--max-cost` — run one after another on this machine. stdout is
+the comparison as JSON (`arms`, `ranking`, `winner`, `cases`, `split_cases`);
+stderr has the table, the winner, and the cases the models disagree on, which
+are the ones worth reading. With `--json`, every arm's events stream first and
+the comparison is the last line (`"type": "comparison"`).
+
+Arms rank by pass rate, then mean judge score, then cost. Cost only orders
+models that are equally good; equal quality is reported as a tie, not a win. Only
+arms that completed are ranked, and an arm that failed is listed without
+stopping the others (the exit code is then non-zero). A gap of one case on a
+small suite with one repeat is noise: raise `repeats` before trusting it.
+
+Each arm is a stored evaluation, so the web app shows the same comparison: tick two or more
+finished suite evaluations in the Evals tab's list and choose **Compare models**, or open
+`#/evals/compare/<id>,<id>`. It ranks the same way, calls level quality a tie, marks the cases
+the models disagree on, and lists a model that did not complete without ranking it. The API is
+`GET /api/v1/evaluations/compare?ids=<id>&ids=<id>` (2–6 evaluations; `400` when they are not
+all suites, did not run the same suite, or ran the same model twice).
+
+`--arm` cannot be combined with `--model`, `--detach`, `--remote`, `--junit` or
+the gate flags (it ranks models, it does not gate one), and it does not run on
+a signed-in stack: add `--local`.
 
 ## Running on a deployed stack
 
@@ -367,6 +400,26 @@ nimbus show <run-id-or-evaluation-id>
 `runs` pages newest-first; when more rows exist, the cursor to continue from is
 printed on stderr. `show` takes either kind of id and looks in both, because
 from the outside you have an id and you want to see it.
+
+## `promote`
+
+A run that showed a real problem is a good test. `promote` turns it into a suite case:
+
+```bash
+nimbus promote <run-id>                                  # print the case, to paste
+nimbus promote <run-id> --suite suite.yaml --id late-refund
+nimbus promote <run-id> --suite new.yaml --criteria "Must say 30 days"   # creates new.yaml
+```
+
+The case takes the run's prompt as its `input`. The run's *answer* is not assumed correct: it
+becomes the case's `expected` reference only with `--expected`, so check it first. `--criteria`
+adds what a good answer must satisfy. Works on the signed-in stack too, like `show`.
+
+With `--suite` the case is appended to the file as text, so the file's comments and layout stay
+exactly as they were, and the file is created (configured as the run was) when it does not exist.
+The result is read back before anything is written; a case id already in the suite, `cases`
+not being the last key, or `cases` written inline as `[ ... ]` are refused with the case printed
+for you to place by hand, and the file is left untouched.
 
 ## `serve`
 

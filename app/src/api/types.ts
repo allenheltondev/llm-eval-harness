@@ -450,6 +450,59 @@ export interface SuiteCaseResult {
   assertions?: { total: number; passed: number; failed: number }
 }
 
+/**
+ * One model's run of a suite in a comparison (`evals/compare.py::_summarize`).
+ * Only an arm whose evaluation `completed` is ranked; the figures of any other
+ * are shown but never compared.
+ */
+export interface ComparisonArm {
+  /** `provider:model_id` — what names the arm everywhere in the comparison. */
+  label: string
+  provider: string
+  model_id: string
+  evaluation_id: string | null
+  status: EvaluationStatus | string
+  /** 0 – 100; `null` when nothing was scored. */
+  score: number | null
+  grade: string | null
+  /** 0 – 1; `null` when the evaluation produced no result. */
+  pass_rate: number | null
+  cases_passed: number | null
+  cases_total: number | null
+  cases_errored: number | null
+  repeats: number | null
+  /** `null` when the model is unpriced. */
+  cost_usd: number | null
+  budget_exhausted: boolean
+}
+
+/** How the arms fared on one case: the same, differently, or not all decided. */
+export type CaseAgreement = 'all_passed' | 'all_failed' | 'split' | 'incomplete'
+
+/** One suite case across every arm (`evals/compare.py::_case_rows`). */
+export interface ComparisonCaseRow {
+  id: string
+  /** Keyed by arm label; `null` when that arm's result has no such case. */
+  results: Record<string, { status: SuiteCaseResult['status']; score: number | null } | null>
+  agreement: CaseAgreement
+}
+
+/** `GET /evaluations/compare` — one suite, several models (`docs/cli.md#comparing-models`). */
+export interface ModelComparison {
+  /** In the order the evaluations were requested. */
+  arms: ComparisonArm[]
+  /** Arm labels, best first; only completed arms. */
+  ranking: string[]
+  /** The single best arm, or `null` on a tie or when nothing is comparable. */
+  winner: string | null
+  /** The arms level at the top when there is no single winner. */
+  tied: string[]
+  cases: ComparisonCaseRow[]
+  /** The case ids the arms disagree on. */
+  split_cases: string[]
+  suite: { name: string | null; cases: number }
+}
+
 /** Local determinism metrics merged with the judge's metrics (`evals/metrics.py`). */
 export interface EvaluationMetrics {
   runs_analyzed?: number

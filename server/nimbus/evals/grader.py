@@ -286,6 +286,10 @@ class CaseVerdict:
     scores: dict[int, float] = field(default_factory=dict)
     reasons: list[str] = field(default_factory=list)
     judge_errors: dict[int, str] = field(default_factory=dict)
+    #: A panel only: the widest gap, over the case's repeats, between the highest
+    #: and lowest judge score for one answer. ``None`` when no repeat was scored
+    #: by more than one judge.
+    spread: float | None = None
 
 
 @dataclass
@@ -409,3 +413,89 @@ async def judge_suite(
             if reason:
                 verdict.reasons.append(reason)
     return judgement
+
+
+def combine_judgements(judged: list[tuple[str, SuiteJudgement]]) -> SuiteJudgement:
+    """Merge a panel's verdicts, one ``(judge label, judgement)`` per judge.
+
+    A repeat's score is the mean of the judges that scored it. A judge that
+    failed on a repeat other judges scored is left out of the mean, and its
+    error is recorded in the case's reasoning rather than dropped. A repeat no
+    judge scored keeps the first judge error, so the case is still
+    ``judge_error`` and never a silent pass or fail. The suite as a whole errors
+    only when every judge did. One judge is returned unchanged.
+    """
+    if len(judged) == 1:
+        return judged[0][1]
+
+    merged = SuiteJudgement()
+    errors = [judgement.error for _, judgement in judged if judgement.error]
+    if len(errors) == len(judged):
+        merged.error = errors[0]
+
+    case_ids = list(
+        dict.fromkeys(case_id for _, judgement in judged for case_id in judgement.verdicts)
+    )
+    for case_id in case_ids:
+        verdicts = [
+            (label, judgement.verdicts[case_id])
+            for label, judgement in judged
+            if case_id in judgement.verdicts
+        ]
+        merged.verdicts[case_id] = _combine_case(verdicts)
+    merged.calibration = _combine_calibration([judgement for _, judgement in judged])
+    return merged
+
+
+def _combine_calibration(
+    judgements: list[SuiteJudgement],
+) -> dict[str, dict[str, float | None]]:
+    """The panel's calibration: per case and probe, the mean of the judges that scored it.
+
+    A probe every judge left unjudged stays ``None`` (present, unscored), as it
+    does for a single judge; a probe no judge was shown is absent.
+    """
+    merged: dict[str, dict[str, float | None]] = {}
+    for case_id in dict.fromkeys(id_ for j in judgements for id_ in j.calibration):
+        probes: dict[str, float | None] = {}
+        for probe in CALIBRATION_PROBES:
+            shown = [
+                j.calibration[case_id]
+                for j in judgements
+                if probe in j.calibration.get(case_id, {})
+            ]
+            if not shown:
+                continue
+            scores = [entry[probe] for entry in shown if entry[probe] is not None]
+            probes[probe] = sum(scores) / len(scores) if scores else None
+        merged[case_id] = probes
+    return merged
+
+
+def _combine_case(verdicts: list[tuple[str, CaseVerdict]]) -> CaseVerdict:
+    combined = CaseVerdict()
+    repeats = sorted(
+        {index for _, verdict in verdicts for index in (*verdict.scores, *verdict.judge_errors)}
+    )
+    for index in repeats:
+        scored = [verdict.scores[index] for _, verdict in verdicts if index in verdict.scores]
+        if scored:
+            combined.scores[index] = sum(scored) / len(scored)
+            if len(scored) > 1:
+                gap = max(scored) - min(scored)
+                combined.spread = gap if combined.spread is None else max(combined.spread, gap)
+        else:
+            combined.judge_errors[index] = next(
+                verdict.judge_errors[index]
+                for _, verdict in verdicts
+                if index in verdict.judge_errors
+            )
+    for label, verdict in verdicts:
+        combined.reasons.extend(f"[{label}] {reason}" for reason in verdict.reasons)
+        # An error on a repeat that other judges did score is not lost.
+        combined.reasons.extend(
+            f"[{label}] judge error on repeat {index}: {message}"
+            for index, message in verdict.judge_errors.items()
+            if index in combined.scores
+        )
+    return combined

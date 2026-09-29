@@ -30,6 +30,8 @@ instance/task role, etc.).
 | `NIMBUS_FAKE_MODEL`        | `false`                            | Use a fake model instead of live LLM |
 | `NIMBUS_ANTHROPIC_API_KEY` | `None`                             | Anthropic API key (falls back to `ANTHROPIC_API_KEY`) |
 | `NIMBUS_OPENAI_API_KEY`    | `None`                             | OpenAI API key (falls back to `OPENAI_API_KEY`) |
+| `NIMBUS_ANTHROPIC_BASE_URL` | `None`                            | Alternative Anthropic API endpoint, e.g. an LLM gateway (falls back to `ANTHROPIC_BASE_URL`) |
+| `NIMBUS_OPENAI_BASE_URL`   | `None`                             | Alternative OpenAI API endpoint including its version path, e.g. `https://gateway.example/v1` (falls back to `OPENAI_BASE_URL`) |
 | `NIMBUS_OLLAMA_BASE_URL`   | `None`                             | Ollama server base URL, e.g. `http://localhost:11434` (falls back to `OLLAMA_HOST`) |
 | `NIMBUS_EVAL_RUNTIME_ARN`  | `None`                             | AgentCore Runtime ARN for the cloud evaluation lane (stack output `EvalWorkerRuntimeArn`) |
 | `NIMBUS_EVAL_TABLE`        | `None`                             | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |

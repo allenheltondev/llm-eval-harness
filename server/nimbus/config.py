@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:3000"]
     fake_model: bool = False
 
+    #: Wall-clock limit, in seconds, on one run inside an evaluation. A run that
+    #: exceeds it is cancelled and reported as retryable ``run_timeout``. ``0``
+    #: means no limit. Not applied to ``POST /runs`` streams.
+    run_timeout_seconds: float = Field(default=0, ge=0)
+
     # -- non-Bedrock model providers ---------------------------------------- #
     #: Anthropic API key. Presence is what makes the provider "configured".
     anthropic_api_key: str | None = Field(
@@ -91,6 +96,24 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices(
             "NIMBUS_OPENAI_API_KEY", "EVALHARNESS_OPENAI_API_KEY", "OPENAI_API_KEY"
+        ),
+    )
+    #: Alternative endpoint for the Anthropic API, e.g. an LLM gateway that
+    #: speaks the Messages API. Unset uses Anthropic's own. Server-side only:
+    #: a run request can never name a URL.
+    anthropic_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "NIMBUS_ANTHROPIC_BASE_URL", "EVALHARNESS_ANTHROPIC_BASE_URL", "ANTHROPIC_BASE_URL"
+        ),
+    )
+    #: Alternative endpoint for the OpenAI API, e.g. an LLM gateway or any
+    #: OpenAI-compatible server, including its version path (``https://gw/v1``).
+    #: Unset uses OpenAI's own. Server-side only.
+    openai_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "NIMBUS_OPENAI_BASE_URL", "EVALHARNESS_OPENAI_BASE_URL", "OPENAI_BASE_URL"
         ),
     )
     #: Base URL of an Ollama server, e.g. ``http://localhost:11434``. Deliberately
@@ -137,6 +160,15 @@ class Settings(BaseSettings):
     #: is set. The deployed template sets it to ``/nimbus/{stack}/mcp``.
     mcp_ssm_prefix: str = "/nimbus/mcp"
 
+    # -- per-user spend (nimbus.spend) -------------------------------------- #
+    #: Ceiling, in USD, on what one signed-in user may spend per window; over it,
+    #: new evaluations and runs are refused with ``402 spend_limit_reached``.
+    #: Unset means uncapped (spend is still counted per user). Only applies to
+    #: callers with a verified identity, so never locally.
+    spend_limit_usd: float | None = Field(default=None, gt=0)
+    #: The calendar period (UTC) the ceiling applies to.
+    spend_window: Literal["day", "month"] = "day"
+
     # -- authentication (nimbus.auth) ---------------------------------------- #
     #: Cognito user pool the deployed server verifies bearer tokens against.
     #: The deployed template injects both of these from its own resources;
@@ -178,6 +210,19 @@ class Settings(BaseSettings):
         if not self.db_path:
             self.db_path = default_db_path()
         return self
+
+    @field_validator("anthropic_base_url", "openai_base_url")
+    @classmethod
+    def _base_url_is_http(cls, value: str | None) -> str | None:
+        """Blank means unset; anything else must be an ``http(s)`` URL."""
+        if value is None:
+            return None
+        value = value.strip().rstrip("/")
+        if not value:
+            return None
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("a base URL must start with http:// or https://")
+        return value
 
     @field_validator(
         "anthropic_api_key",

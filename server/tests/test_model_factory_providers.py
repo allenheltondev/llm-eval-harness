@@ -195,3 +195,50 @@ def test_stored_config_records_the_provider():
 def test_an_unknown_provider_is_a_validation_error():
     with pytest.raises(ValidationError):
         make_request(provider="cohere")
+
+
+def test_openai_uses_its_own_endpoint_unless_a_base_url_is_configured():
+    request = make_request(provider="openai", model_id="gpt-4o")
+
+    default = build_model(request, settings(openai_api_key="sk"))
+    routed = build_model(
+        request, settings(openai_api_key="sk", openai_base_url="https://gw.example/v1/")
+    )
+
+    assert "base_url" not in default.client_args
+    assert routed.client_args == {"api_key": "sk", "base_url": "https://gw.example/v1"}
+
+
+def test_anthropic_uses_its_own_endpoint_unless_a_base_url_is_configured():
+    request = make_request(provider="anthropic", model_id="claude-sonnet-4-5")
+
+    default = build_model(request, settings(anthropic_api_key="sk"))
+    routed = build_model(
+        request, settings(anthropic_api_key="sk", anthropic_base_url="https://gw.example")
+    )
+
+    assert "anthropic.com" in str(default.client.base_url)
+    assert str(routed.client.base_url).startswith("https://gw.example")
+
+
+def test_base_urls_read_the_standard_and_prefixed_env_names(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://standard.example/v1")
+    monkeypatch.setenv("NIMBUS_ANTHROPIC_BASE_URL", "https://prefixed.example")
+
+    configured = Settings()
+
+    assert configured.openai_base_url == "https://standard.example/v1"
+    assert configured.anthropic_base_url == "https://prefixed.example"
+
+
+def test_a_blank_base_url_is_unset_and_a_non_http_one_is_refused():
+    assert Settings(openai_base_url="  ").openai_base_url is None
+    with pytest.raises(ValidationError, match="http"):
+        Settings(anthropic_base_url="gateway.example")
+
+
+def test_a_run_request_cannot_name_an_endpoint():
+    """The URL is deployment config: a request that carries one is a 422, so a
+    caller can never point a deployed server at a host of their choosing."""
+    with pytest.raises(ValidationError):
+        make_request(provider="openai", base_url="https://evil.example/v1")

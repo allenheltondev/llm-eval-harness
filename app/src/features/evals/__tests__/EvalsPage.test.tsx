@@ -5,6 +5,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { EvaluationDetail } from '../../../api'
 
@@ -15,6 +16,7 @@ const healthMock = vi.fn().mockResolvedValue({
 })
 
 const getEvaluationMock = vi.fn()
+const compareEvaluationsMock = vi.fn()
 
 vi.mock('../../../api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../api')>()
@@ -25,7 +27,11 @@ vi.mock('../../../api', async importOriginal => {
       health: healthMock,
       // Never settles: the launcher's tool picker is not under test here.
       tools: vi.fn(() => new Promise(() => {})),
-      evaluations: { ...actual.api.evaluations, get: getEvaluationMock }
+      evaluations: {
+        ...actual.api.evaluations,
+        get: getEvaluationMock,
+        compare: compareEvaluationsMock
+      }
     }
   }
 })
@@ -103,6 +109,8 @@ beforeEach(() => {
   })
   healthMock.mockClear()
   getEvaluationMock.mockReset()
+  compareEvaluationsMock.mockReset()
+  compareEvaluationsMock.mockReturnValue(new Promise(() => {}))
   loadEvaluations.mockClear()
   loadMoreEvaluations.mockClear()
   refreshEvaluation.mockClear()
@@ -371,5 +379,170 @@ describe('EvalsPage', () => {
     fireEvent.click(row)
 
     expect(followEvaluation).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('EvalsPage: comparing models', () => {
+  function suiteRow(id: string, status = 'completed'): EvaluationDetail {
+    return {
+      ...rows[0],
+      id,
+      kind: 'suite',
+      status,
+      result: status === 'completed' ? rows[0].result : null
+    }
+  }
+
+  function withSuites(...ids: string[]) {
+    useEvalStore.setState({ evaluations: [...rows, ...ids.map(id => suiteRow(id))] })
+  }
+
+  it('offers the comparison checkbox on finished suite evaluations only', () => {
+    useEvalStore.setState({
+      evaluations: [...rows, suiteRow('suite-done'), suiteRow('suite-running', 'running')]
+    })
+    render(<EvalsPage />)
+
+    expect(screen.getByTestId('eval-compare-checkbox-suite-done')).toBeInTheDocument()
+    // Not a suite (a determinism run), and not finished (no result to compare yet).
+    expect(screen.queryByTestId('eval-compare-checkbox-eval-completed')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('eval-compare-checkbox-suite-running')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('eval-compare-btn')).not.toBeInTheDocument()
+  })
+
+  it('needs two ticked evaluations before it will compare', () => {
+    withSuites('s1', 's2')
+    const onCompare = vi.fn()
+    render(<EvalsPage onCompare={onCompare} />)
+
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s1'))
+    const button = screen.getByTestId('eval-compare-btn')
+    expect(button).toHaveTextContent('Compare models (1)')
+    expect(button).toBeDisabled()
+
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s2'))
+    expect(button).toHaveTextContent('Compare models (2)')
+    expect(button).toBeEnabled()
+
+    fireEvent.click(button)
+    expect(onCompare).toHaveBeenCalledWith(['s1', 's2'])
+  })
+
+  it('compares in the order the evaluations were ticked', () => {
+    withSuites('s1', 's2', 's3')
+    const onCompare = vi.fn()
+    render(<EvalsPage onCompare={onCompare} />)
+
+    for (const id of ['s3', 's1', 's2']) {
+      fireEvent.click(screen.getByTestId(`eval-compare-checkbox-${id}`))
+    }
+    fireEvent.click(screen.getByTestId('eval-compare-btn'))
+
+    expect(onCompare).toHaveBeenCalledWith(['s3', 's1', 's2'])
+  })
+
+  it('unticking takes an evaluation back out, and the button goes with the last one', () => {
+    withSuites('s1', 's2')
+    render(<EvalsPage />)
+
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s1'))
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s2'))
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s1'))
+    expect(screen.getByTestId('eval-compare-btn')).toHaveTextContent('(1)')
+
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s2'))
+    expect(screen.queryByTestId('eval-compare-btn')).not.toBeInTheDocument()
+  })
+
+  it('stops at six, the most one comparison can hold', () => {
+    const ids = ['s1', 's2', 's3', 's4', 's5', 's6', 's7']
+    withSuites(...ids)
+    render(<EvalsPage />)
+
+    for (const id of ids.slice(0, 6)) {
+      fireEvent.click(screen.getByTestId(`eval-compare-checkbox-${id}`))
+    }
+
+    expect(screen.getByTestId('eval-compare-checkbox-s7')).toBeDisabled()
+    expect(screen.getByTestId('eval-compare-checkbox-s6')).toBeEnabled() // still untickable
+  })
+
+  it('ticking a box does not also open the evaluation', () => {
+    withSuites('s1')
+    const onSelectEvaluation = vi.fn()
+    render(<EvalsPage onSelectEvaluation={onSelectEvaluation} />)
+
+    const box = screen.getByTestId('eval-compare-checkbox-s1')
+    fireEvent.click(box)
+    fireEvent.keyDown(box, { key: ' ' })
+    fireEvent.keyDown(box, { key: 'Enter' })
+
+    expect(onSelectEvaluation).not.toHaveBeenCalled()
+  })
+
+  it('shows the comparison when opened by link, for the evaluations named', () => {
+    render(<EvalsPage compareIds={['s1', 's2']} />)
+
+    expect(screen.getByTestId('model-compare')).toBeInTheDocument()
+    expect(compareEvaluationsMock.mock.calls[0][0]).toEqual(['s1', 's2'])
+  })
+
+  it('shows no comparison for fewer than two evaluations', () => {
+    render(<EvalsPage compareIds={['s1']} />)
+
+    expect(screen.queryByTestId('model-compare')).not.toBeInTheDocument()
+    render(<EvalsPage compareIds={null} />)
+    expect(screen.queryByTestId('model-compare')).not.toBeInTheDocument()
+  })
+
+  it('closing the comparison clears the ticks and tells the address bar', () => {
+    withSuites('s1', 's2')
+    const onCompare = vi.fn()
+    render(<EvalsPage compareIds={['s1', 's2']} onCompare={onCompare} />)
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s1'))
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s2'))
+
+    fireEvent.click(screen.getByTestId('model-compare-close'))
+
+    expect(onCompare).toHaveBeenCalledWith(null)
+    expect(screen.queryByTestId('eval-compare-btn')).not.toBeInTheDocument()
+  })
+
+  it('can be used with no listener for compare events', () => {
+    withSuites('s1', 's2')
+    render(<EvalsPage compareIds={['s1', 's2']} />)
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s1'))
+    fireEvent.click(screen.getByTestId('eval-compare-checkbox-s2'))
+
+    fireEvent.click(screen.getByTestId('eval-compare-btn'))
+    fireEvent.click(screen.getByTestId('model-compare-close'))
+
+    expect(screen.getByTestId('evals-page')).toBeInTheDocument()
+  })
+})
+
+describe('EvalsPage: a link that opens something', () => {
+  it('is kept when the page mounts under React StrictMode', () => {
+    // StrictMode runs effects twice in development. The second pass is the same
+    // mount, not a filter switch, so it must not clear what the link opened.
+    const onSelectEvaluation = vi.fn()
+
+    render(
+      <StrictMode>
+        <EvalsPage evaluationId="eval-completed" onSelectEvaluation={onSelectEvaluation} />
+      </StrictMode>
+    )
+
+    expect(onSelectEvaluation).not.toHaveBeenCalled()
+    expect(screen.getByTestId('eval-result')).toBeInTheDocument()
+  })
+
+  it('is still dropped when the filter really is switched', () => {
+    const onSelectEvaluation = vi.fn()
+    render(<EvalsPage evaluationId="eval-completed" onSelectEvaluation={onSelectEvaluation} />)
+
+    fireEvent.click(screen.getByTestId('eval-cloud-filter'))
+
+    expect(onSelectEvaluation).toHaveBeenCalledWith(null)
   })
 })

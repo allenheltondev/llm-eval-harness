@@ -64,6 +64,7 @@ COMMANDS: dict[str, Command] = {
     "mcp": mcp_commands.mcp,
     "runs": commands.runs,
     "show": commands.show,
+    "promote": commands.promote,
     "serve": commands.serve,
     "login": commands.login,
     "logout": commands.logout,
@@ -245,6 +246,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     evaluate.add_argument(
+        "--arm",
+        action="append",
+        metavar="MODEL",
+        help=(
+            "with --suite: run the suite on this model, and compare the models side by "
+            "side (repeatable; PROVIDER=MODEL, e.g. openai=gpt-4o, picks the provider). "
+            "Each arm is a separate stored evaluation; --max-cost applies to each; runs "
+            "on this machine"
+        ),
+    )
+    evaluate.add_argument(
         "--run",
         action="append",
         metavar="RUN_ID",
@@ -271,6 +283,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="which SDK runs the judge (default: bedrock)",
     )
     evaluate.add_argument("--grader-system", help="override the judge's system prompt")
+    evaluate.add_argument(
+        "--panel-judge",
+        action="append",
+        metavar="MODEL",
+        help=(
+            "with --suite: add a judge to the panel (repeatable; PROVIDER=MODEL picks "
+            "the provider, a bare id is a Bedrock model). Each judge grades every "
+            "answer; a case's score is their mean. Replaces the file's `panel`"
+        ),
+    )
     evaluate.add_argument(
         "--max-cost",
         type=float,
@@ -376,6 +398,31 @@ def build_parser() -> argparse.ArgumentParser:
         "show", parents=[output], help="print one stored run or evaluation as JSON"
     )
     show.add_argument("id", help="a run id or an evaluation id")
+
+    promote = subparsers.add_parser(
+        "promote",
+        parents=[output],
+        help="turn a stored run into a suite case",
+        description=(
+            "Take a run's prompt as a new test case. Prints the case to paste; with "
+            "--suite FILE, adds it to that suite (created if it does not exist) without "
+            "touching the rest of the file. The run's answer is not treated as correct "
+            "unless you say so with --expected."
+        ),
+    )
+    promote.add_argument("run_id", help="the run's id (`nimbus runs`)")
+    promote.add_argument(
+        "--suite", type=Path, metavar="FILE", help="add the case to this suite file"
+    )
+    promote.add_argument(
+        "--id", dest="case_id", metavar="CASE_ID", help="the case's id (default: run-<run id>)"
+    )
+    promote.add_argument(
+        "--expected",
+        action="store_true",
+        help="use the run's output as the case's reference answer (check it is right first)",
+    )
+    promote.add_argument("--criteria", help="what a good answer to this case must satisfy")
 
     login = subparsers.add_parser(
         "login",
@@ -536,8 +583,47 @@ def _prepare_suite(args: argparse.Namespace) -> None:
     args.suite_spec = load_suite_file(args.suite)
     try:
         commands.build_suite_request(args)
+        if args.arm:
+            commands.build_arm_requests(args)
     except (ValidationError, AppError) as exc:
         raise _suite_problem(args.suite, exc) from None
+
+
+def _check_panel(args: argparse.Namespace) -> None:
+    """A panel grades a suite's answers; nothing else has one to add to."""
+    if args.panel_judge and args.suite is None:
+        raise UsageError("--panel-judge adds judges to a suite's grading: pass --suite FILE")
+
+
+def _check_arms(args: argparse.Namespace) -> None:
+    """``--arm`` compares models on one suite; what would make that ambiguous is refused."""
+    if not args.arm:
+        return
+    if args.suite is None:
+        raise UsageError("--arm compares models on a suite: pass --suite FILE")
+    if args.model:
+        raise UsageError("--arm names each model to compare; drop --model")
+    conflicts = [
+        flag
+        for flag, given in (
+            ("--detach", args.detach),
+            ("--remote", args.remote),
+            ("--junit", args.junit is not None),
+            ("--gate", args.gate),
+            ("--fail-on-case-failure", args.fail_on_case_failure),
+            ("--fail-under", args.fail_under is not None),
+        )
+        if given
+    ]
+    if conflicts:
+        raise UsageError(
+            f"{', '.join(conflicts)} cannot apply to a comparison: it ranks models, "
+            "it does not gate one"
+        )
+    if args.target is not None:
+        raise UsageError(
+            "--arm runs on this machine, not on the stack you are signed in to: add --local"
+        )
 
 
 def _check_gating(args: argparse.Namespace) -> None:
@@ -571,6 +657,8 @@ def _check_required(args: argparse.Namespace) -> None:
             "or --suite (to run a test suite)"
         )
     if args.command == "eval":
+        _check_panel(args)
+        _check_arms(args)
         _check_gating(args)
         if args.calibrate and args.suite is None:
             raise UsageError(
@@ -594,7 +682,7 @@ def _check_required(args: argparse.Namespace) -> None:
 
 
 #: The commands that run wherever the target is: a signed-in stack, or here.
-TARGETED = frozenset({"run", "eval", "runs", "show", "models", "tools", "mcp"})
+TARGETED = frozenset({"run", "eval", "runs", "show", "promote", "models", "tools", "mcp"})
 
 
 def resolve_target(args: argparse.Namespace) -> None:

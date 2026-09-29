@@ -64,6 +64,23 @@ Parameters:
       sooner) either way. Changing this applies to items as they are written:
       a finished evaluation keeps the expiry it was stored with.
 
+  SpendLimitUsd:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(|[1-9][0-9]*(\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$'
+    ConstraintDescription: a positive number of US dollars, or empty for no limit
+    Description: >
+      The most, in US dollars, one signed-in user may spend per window (see
+      SpendWindow) on evaluations and runs. Over it, new work is refused with
+      402. Empty (the default) sets no limit; spend is still counted per user.
+      Estimates from the built-in price table, and the model must be priced.
+
+  SpendWindow:
+    Type: String
+    Default: day
+    AllowedValues: [day, month]
+    Description: The calendar period (UTC) SpendLimitUsd applies to.
+
   ServerMemorySize:
     Type: Number
     Default: 1024
@@ -180,6 +197,8 @@ Conditions:
   # that uses it: without an explicit name, the stack's own (unique per account
   # and region) is the group's.
   HasAccessGroupName: !Not [!Equals [!Ref AccessGroupName, '']]
+  # No limit unless one is given; an unset variable is what "uncapped" means.
+  HasSpendLimit: !Not [!Equals [!Ref SpendLimitUsd, '']]
   # Both halves are needed: the certificate validates, and the alias records
   # live, in the hosted zone.
   DeployCustomDomain: !And
@@ -326,6 +345,9 @@ Resources:
           # Read by worker.lambda_app.build_store for the evaluation and run
           # items it writes -- the same rule the server applies to its own.
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
+          # Per-user spend: counted in the shared table, capped when a limit is set.
+          NIMBUS_SPEND_LIMIT_USD: !If [HasSpendLimit, !Ref SpendLimitUsd, !Ref 'AWS::NoValue']
+          NIMBUS_SPEND_WINDOW: !Ref SpendWindow
           # Runs name saved MCP servers by id; the worker reads each MCP#
           # item (GetItem) and its headers' SecureString when the run starts.
           NIMBUS_MCP_TABLE: !Ref EvalTable
@@ -415,6 +437,9 @@ Resources:
           NIMBUS_LOCAL_EVALS: 'off'
           NIMBUS_EVAL_TABLE: !Ref EvalTable
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
+          # Per-user spend: counted in the shared table, capped when a limit is set.
+          NIMBUS_SPEND_LIMIT_USD: !If [HasSpendLimit, !Ref SpendLimitUsd, !Ref 'AWS::NoValue']
+          NIMBUS_SPEND_WINDOW: !Ref SpendWindow
           # Saved MCP servers (the Tools page): MCP# items in the same table,
           # auth header values as SSM SecureString parameters under this path.
           NIMBUS_MCP_TABLE: !Ref EvalTable

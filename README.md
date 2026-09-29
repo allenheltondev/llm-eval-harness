@@ -263,6 +263,10 @@ Deployed history is **kept forever** by default. To expire it, deploy with
 evaluations and their runs then expire that many days after they were written. Progress events —
 a replay log, not history — always expire after 90 days.
 
+To cap what each signed-in user spends, deploy with `SPEND_LIMIT_USD=25 make deploy-backend`
+(per-day by default; `SPEND_WINDOW=month` for monthly). See
+[Per-user spend](docs/serverless-deploy.md#per-user-spend).
+
 ## Guardrails
 
 `server/nimbus/routers/guardrails.py` authors AWS Bedrock Guardrails directly: create/update
@@ -548,6 +552,10 @@ to `~/.config/nimbus` the first time it is read.
 | `NIMBUS_PRICING_FILE` | *(unset)* | JSON file of per-model prices (USD per 1M tokens) that adds to or overrides the built-in table behind run and evaluation cost estimates — see [docs/suites.md](docs/suites.md#cost-and-budgets) |
 | `NIMBUS_ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key — enables the `anthropic` provider (falls back to `ANTHROPIC_API_KEY`) |
 | `NIMBUS_OPENAI_API_KEY` | *(unset)* | OpenAI API key — enables the `openai` provider (falls back to `OPENAI_API_KEY`) |
+| `NIMBUS_ANTHROPIC_BASE_URL` | *(unset)* | Alternative Anthropic API endpoint, e.g. an LLM gateway (falls back to `ANTHROPIC_BASE_URL`) |
+| `NIMBUS_OPENAI_BASE_URL` | *(unset)* | Alternative OpenAI API endpoint including its version path, e.g. `https://gateway.example/v1` (falls back to `OPENAI_BASE_URL`) |
+| `NIMBUS_SPEND_LIMIT_USD` | *(unset)* | Most a signed-in user may spend per window; over it, new evaluations and runs get `402`. Unset counts spend without capping — see [docs/serverless-deploy.md](docs/serverless-deploy.md#per-user-spend) |
+| `NIMBUS_SPEND_WINDOW` | `day` | `day` \| `month` (UTC): the period the limit applies to |
 | `NIMBUS_OLLAMA_BASE_URL` | *(unset)* | Ollama server base URL, e.g. `http://localhost:11434` — enables the `ollama` provider (falls back to `OLLAMA_HOST`) |
 | `NIMBUS_EVAL_FUNCTION_NAME` | *(unset)* | Name of the eval worker Lambda (stack output `EvalWorkerFunctionName`). With `EVAL_TABLE`, enables the cloud lane |
 | `NIMBUS_EVAL_TABLE` | *(unset)* | DynamoDB table for cloud-eval state and deployed history (stack output `TableName`) |

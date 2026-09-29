@@ -52,8 +52,16 @@ from nimbus.engine.events import ErrorEvent, RunEvent, RunStartEvent
 from nimbus.engine.model_factory import ModelFactory, build_model
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import RunRequest
-from nimbus.errors import ConflictError, InternalError, NotFoundError, UpstreamError
+from nimbus.errors import (
+    BadRequestError,
+    ConflictError,
+    InternalError,
+    NotFoundError,
+    UpstreamError,
+)
+from nimbus.evals import admission
 from nimbus.evals import cloud as evals_cloud
+from nimbus.evals import compare as evals_compare
 from nimbus.evals import engine as evals_engine
 from nimbus.evals import jobs as evals_jobs
 from nimbus.evals.cloud import (
@@ -99,6 +107,11 @@ def _export_ndjson(
         yield RunDetail.model_validate(record).model_dump_json() + "\n"
 
 
+def get_claims(request: Request) -> dict | None:
+    """The verified token claims :func:`nimbus.auth.require_auth` left on the request, if any."""
+    return getattr(request.state, "user", None)
+
+
 def get_model_factory(settings: Settings = Depends(get_settings)) -> ModelFactory:
     """The model provider builder used by ``POST /runs``.
 
@@ -127,6 +140,7 @@ async def create_run(
     payload: RunRequest,
     settings: Settings = Depends(get_settings),
     model_factory: ModelFactory = Depends(get_model_factory),
+    claims: dict | None = Depends(get_claims),
 ):
     """Execute a run; stream it as NDJSON, or return the finished ``RunDetail``.
 
@@ -141,11 +155,16 @@ async def create_run(
     the engine, which owns it for the life of the stream.
     """
     repo = get_history_repo(settings)
-    events = execute_run(
-        payload,
-        settings=settings,
-        model_factory=model_factory,
-        repo=repo,
+    principal = admission.admit_run(payload, claims, settings)
+    events = admission.settle_stream(
+        execute_run(
+            payload,
+            settings=settings,
+            model_factory=model_factory,
+            repo=repo,
+        ),
+        principal,
+        settings,
     )
     first = await anext(events)
 
@@ -288,6 +307,7 @@ async def create_evaluation(
     repo: HistoryRepo = Depends(get_repo),
     invoker: Invoker | None = Depends(get_invoker),
     eval_writer_factory: EvalWriterFactory | None = Depends(get_eval_writer_factory),
+    claims: dict | None = Depends(get_claims),
 ):
     """Accept an evaluation and run it in the background.
 
@@ -308,7 +328,28 @@ async def create_evaluation(
     decision to make.
     """
     _check_mcp_servers(payload, settings)
+    # Identity is the token's, never the body's; spend is reserved before any work.
+    payload = admission.admit(payload, claims, settings)
 
+    try:
+        return await _start_evaluation(
+            payload, settings, model_factory, judge_factory, repo, invoker, eval_writer_factory
+        )
+    except BaseException:
+        admission.release(payload, settings)  # it never started: give the reservation back
+        raise
+
+
+async def _start_evaluation(
+    payload: EvaluationRequest,
+    settings: Settings,
+    model_factory: ModelFactory,
+    judge_factory: JudgeFactory,
+    repo: HistoryRepo,
+    invoker: Invoker | None,
+    eval_writer_factory: EvalWriterFactory | None,
+):
+    """Hand an admitted evaluation to its lane; the lane settles its spend when it ends."""
     if payload.execution == "cloud":
         return await evals_cloud.submit(
             payload, settings=settings, invoker=invoker, store_factory=eval_writer_factory
@@ -339,12 +380,9 @@ async def create_evaluation(
     return EvaluationDetail.model_validate(record)
 
 
-@router.get("/evaluations/{evaluation_id}", response_model=EvaluationDetail)
-def get_evaluation(
-    evaluation_id: str,
-    repo: HistoryRepo = Depends(get_repo),
-    table: EvalTable | None = Depends(get_eval_table),
-):
+def _load_evaluation(
+    evaluation_id: str, repo: HistoryRepo, table: EvalTable | None
+) -> EvaluationDetail:
     """An evaluation from the history store, falling back to the cloud ``META`` item."""
     try:
         record = repo.get_evaluation(evaluation_id)
@@ -353,6 +391,60 @@ def get_evaluation(
             raise
         return evals_cloud.get_evaluation(table, evaluation_id)
     return EvaluationDetail.model_validate(record)
+
+
+#: How many models one comparison may hold.
+MAX_COMPARED_EVALUATIONS = 6
+
+
+# Declared before ``/evaluations/{evaluation_id}``, which would otherwise take "compare" as an id.
+@router.get("/evaluations/compare")
+def compare_evaluations(
+    ids: list[str] = Query(min_length=2, max_length=MAX_COMPARED_EVALUATIONS),
+    repo: HistoryRepo = Depends(get_repo),
+    table: EvalTable | None = Depends(get_eval_table),
+):
+    """Compare suite evaluations that ran the same suite on different models.
+
+    Reads only stored results (:func:`nimbus.evals.compare.compare`), so it costs
+    nothing and works for evaluations from either lane. A ``400`` names why a set
+    cannot be compared: not all suites, not the same suite, or the same model twice.
+    """
+    loaded = [_load_evaluation(evaluation_id, repo, table).model_dump() for evaluation_id in ids]
+    not_suites = [entry["id"] for entry in loaded if entry["kind"] != "suite"]
+    if not_suites:
+        raise BadRequestError(
+            "Only suite evaluations can be compared; not a suite: " + ", ".join(not_suites),
+            detail={"evaluation_ids": not_suites},
+            code="compare_not_suite",
+        )
+    differing = evals_compare.suite_differences(loaded)
+    if differing:
+        raise BadRequestError(
+            "These evaluations did not run the same suite; the cases differ on: "
+            + ", ".join(differing),
+            detail={"cases": differing},
+            code="compare_different_suites",
+        )
+    try:
+        comparison = evals_compare.compare([evals_compare.arm_from_evaluation(e) for e in loaded])
+    except ValueError:
+        raise BadRequestError(
+            "Every evaluation must have run a different model", code="compare_duplicate_model"
+        ) from None
+    suite = loaded[0]["config"].get("suite") or {}
+    cases = len(suite.get("cases") or [])
+    return {**comparison, "suite": {"name": suite.get("name"), "cases": cases}}
+
+
+@router.get("/evaluations/{evaluation_id}", response_model=EvaluationDetail)
+def get_evaluation(
+    evaluation_id: str,
+    repo: HistoryRepo = Depends(get_repo),
+    table: EvalTable | None = Depends(get_eval_table),
+):
+    """An evaluation from the history store, falling back to the cloud ``META`` item."""
+    return _load_evaluation(evaluation_id, repo, table)
 
 
 def _replay_finished(record: history.EvaluationRecord) -> Iterator[str]:

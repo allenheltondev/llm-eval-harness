@@ -69,3 +69,17 @@ class McpServerRow(SQLModel, table=True):
     headers: str = "{}"  # JSON: dict[str, str] -- secret
     created_at: datetime = Field(default_factory=_utcnow, index=True)
     updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class SpendCounter(SQLModel, table=True):
+    """What one user has spent in one window, in whole micro-dollars.
+
+    Written only through :class:`nimbus.spend.SqliteSpendStore`, whose atomic
+    upsert is the reason this is a table of its own rather than a JSON field:
+    two requests adding at once must both count.
+    """
+
+    user_id: str = Field(primary_key=True)
+    #: ``2026-09-28`` for a daily window, ``2026-09`` for a monthly one.
+    window_key: str = Field(primary_key=True)
+    micros: int = 0

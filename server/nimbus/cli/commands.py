@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import contextlib
 import getpass
+import json
 import platform
 import time
 from collections.abc import AsyncIterator
@@ -27,6 +28,7 @@ from typing import Annotated, Any, TextIO
 
 from pydantic import Field, TypeAdapter, ValidationError
 
+from nimbus import suite_edit
 from nimbus.awscat.catalog import ModelCatalog
 from nimbus.cli import diagnose, gating, remote, render
 from nimbus.config import Settings
@@ -41,6 +43,7 @@ from nimbus.engine.model_factory import build_model
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import GuardrailConfig, InferenceConfig, RunRequest
 from nimbus.errors import AppError, NotFoundError
+from nimbus.evals.compare import Arm, compare
 from nimbus.evals.engine import EvalDeps, LocalEvalStore, execute_evaluation_with_seam
 from nimbus.evals.jobs import to_json_line
 from nimbus.evals.judge import build_judge_model
@@ -50,7 +53,7 @@ from nimbus.evals.schemas import (
     GraderConfig,
 )
 from nimbus.models_catalog import ProviderCatalog
-from nimbus.providers import DEFAULT_PROVIDER
+from nimbus.providers import DEFAULT_PROVIDER, PROVIDERS
 from nimbus.schemas.runs import EvaluationDetail, RunDetail
 from nimbus.store.repo import HistoryRepo, get_history_repo
 from nimbus.tools.registry import list_handlers
@@ -206,6 +209,9 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
     max_cost = spec.pop("max_cost_usd", None)
     if getattr(args, "max_cost", None) is not None:
         max_cost = args.max_cost
+    panel = list(spec.pop("panel", None) or [])
+    if getattr(args, "panel_judge", None):
+        panel = [_panel_entry(text) for text in args.panel_judge]
     if getattr(args, "calibrate", False):
         spec["calibrate"] = True
 
@@ -229,10 +235,17 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
             "suite": spec,
             "rubric": args.rubric if args.rubric is not None else rubric,
             "grader": grader,
+            "panel": panel,
             "source": "cli",
             "max_cost_usd": max_cost,
         }
     )
+
+
+def _panel_entry(text: str) -> dict[str, str]:
+    """``--panel-judge openai=gpt-4o`` as a ``panel`` entry; a bare id is a Bedrock judge."""
+    provider, model_id = _split_arm(text)
+    return {"model_id": model_id, **({"provider": provider} if provider else {})}
 
 
 def build_eval_request(args: argparse.Namespace) -> EvaluationRequest:
@@ -336,6 +349,8 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
     drives the engine's seam directly: no job registry, no polling, and Ctrl-C
     means cancel this evaluation rather than "stop watching it".
     """
+    if getattr(args, "arm", None):
+        return await compare_arms(args, settings, out, err)
     request = build_eval_request(args)
     if getattr(args, "target", None) is not None or getattr(args, "remote", False):
         try:
@@ -344,6 +359,24 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
             # `eval --run` with ids from this machine's history: the stack has
             # never seen them, so grade them where they are -- and say so.
             _note(err, f"| {missing} on {args.target.url}; grading on this machine instead")
+    terminal = await _evaluate_locally(args, request, settings, out, err)
+
+    if not args.json:
+        for line in render.eval_result_lines(terminal.get("result")):
+            _write(err, line + "\n")
+        _write(out, render.dumps(terminal) + "\n")
+
+    return _settle(args, request, terminal, err)
+
+
+async def _evaluate_locally(
+    args: argparse.Namespace,
+    request: EvaluationRequest,
+    settings: Settings,
+    out: TextIO,
+    err: TextIO,
+) -> dict[str, Any]:
+    """Create the evaluation's history row, run it here, and return its terminal state."""
     repo = get_history_repo(settings)
 
     if request.kind == "grade":
@@ -381,13 +414,96 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
         ),
         evaluation_id=record.id,
     )
+    return terminal
 
-    if not args.json:
-        for line in render.eval_result_lines(terminal.get("result")):
+
+# --------------------------------------------------------------------------- #
+# eval --arm: one suite, several models
+# --------------------------------------------------------------------------- #
+
+
+def _split_arm(text: str) -> tuple[str | None, str]:
+    """``openai=gpt-4o`` -> ``("openai", "gpt-4o")``; a bare model id has no provider.
+
+    The provider is only taken from a prefix that names one, because model ids
+    themselves contain ``:`` and ``.`` (``llama3.1:8b``) and, on some gateways,
+    ``=``.
+    """
+    provider, separator, model_id = text.partition("=")
+    if separator and provider in PROVIDERS and model_id:
+        return provider, model_id
+    return None, text
+
+
+def build_arm_requests(args: argparse.Namespace) -> list[EvaluationRequest]:
+    """One ``kind="suite"`` request per ``--arm``: the same suite, a different model.
+
+    Each is exactly what ``eval --suite FILE -m MODEL`` builds, so an arm is an
+    ordinary evaluation with its own history row, cost and budget. Naming the
+    same model twice is refused up front rather than after the first arm ran.
+    """
+    requests: list[EvaluationRequest] = []
+    labels: set[str] = set()
+    for text in args.arm:
+        provider, model_id = _split_arm(text)
+        arm_args = argparse.Namespace(**vars(args))
+        arm_args.model = model_id
+        if provider is not None:
+            arm_args.provider = provider
+        request = build_suite_request(arm_args)
+        assert request.suite is not None
+        label = Arm(request.suite.run_config.provider, model_id, None, "pending", None).label
+        if label in labels:
+            raise AppError(
+                f"--arm {text}: {label} is already an arm; each must be a different model"
+            )
+        labels.add(label)
+        requests.append(request)
+    return requests
+
+
+async def compare_arms(
+    args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO
+) -> int:
+    """Run the suite once per arm, one after another, and print how they compare.
+
+    Arms run in sequence so each keeps the engine's own concurrency limit and
+    ``--max-cost`` bounds each arm separately. An arm that fails does not stop
+    the others: the comparison says which produced a result. The exit code is
+    ``0`` when every arm completed and the first failing arm's otherwise.
+    """
+    requests = build_arm_requests(args)
+    arms: list[Arm] = []
+    code = EXIT_OK
+    for request in requests:
+        assert request.suite is not None
+        config = request.suite.run_config
+        _note(err, f"| arm {config.provider}:{config.model_id}")
+        terminal = await _evaluate_locally(args, request, settings, out, err)
+        status = str(terminal.get("status"))
+        if code == EXIT_OK:
+            code = _EXIT_FOR_STATUS.get(status, EXIT_FAILED)
+        if not args.json:
+            for line in render.eval_result_lines(terminal.get("result")):
+                _write(err, line + "\n")
+        arms.append(
+            Arm(
+                config.provider,
+                config.model_id,
+                terminal.get("evaluation_id"),
+                status,
+                terminal.get("result"),
+            )
+        )
+
+    comparison = compare(arms)
+    if args.json:
+        _write(out, json.dumps({"type": "comparison", **comparison}, default=str) + "\n")
+    else:
+        for line in render.comparison_lines(comparison):
             _write(err, line + "\n")
-        _write(out, render.dumps(terminal) + "\n")
-
-    return _settle(args, request, terminal, err)
+        _write(out, render.dumps(comparison) + "\n")
+    return code
 
 
 def _gate_for(args: argparse.Namespace, request: EvaluationRequest) -> gating.Gate:
@@ -886,6 +1002,56 @@ async def show(args: argparse.Namespace, settings: Settings, out: TextIO, err: T
         return EXIT_OK
 
     _write(out, render.dumps(RunDetail.model_validate(record).model_dump()) + "\n")
+    return EXIT_OK
+
+
+async def _fetch_run(
+    run_id: str, args: argparse.Namespace, settings: Settings, err: TextIO
+) -> dict[str, Any]:
+    """One stored run as a plain dict, from the signed-in stack or this machine."""
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        _on_stack(err, target)
+        async with remote.http_client() as http:
+            try:
+                return await remote.RemoteApi(http, target).get(f"/runs/{run_id}")
+            except remote.RemoteNotFoundError:
+                raise NotFoundError(f"No run with id {run_id!r} on {target.url}") from None
+    return RunDetail.model_validate(get_history_repo(settings).get_run(run_id)).model_dump()
+
+
+async def promote(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """Turn a stored run into a suite case.
+
+    Without ``--suite`` the case is printed, ready to paste. With it, the case
+    is appended to that file (created if missing), which is only done when the
+    result reads back exactly as intended: see :mod:`nimbus.suite_edit`.
+    """
+    run = await _fetch_run(args.run_id, args, settings, err)
+    case = suite_edit.case_from_run(
+        run, case_id=args.case_id, expected=args.expected, criteria=args.criteria
+    )
+    path = args.suite
+    if path is None:
+        _write(out, suite_edit.render_case(case))
+        return EXIT_OK
+
+    as_json = path.suffix.lower() == ".json"
+    try:
+        existing = path.read_text(encoding="utf-8") if path.exists() else None
+        if existing is None:
+            updated = suite_edit.new_suite_text(run, case, as_json=as_json)
+        else:
+            updated = suite_edit.append_case(existing, case, as_json=as_json)
+        path.write_text(updated, encoding="utf-8")
+    except suite_edit.SuiteEditError as exc:
+        raise AppError(
+            f"--suite {path}: {exc.message}; `nimbus promote {args.run_id}` prints the case to add"
+        ) from None
+    except OSError as exc:
+        raise AppError(f"--suite {path}: {exc.strerror or exc}") from None
+    verb = "created" if existing is None else "added case to"
+    _note(err, f"| {verb} {path}: {case['id']}")
     return EXIT_OK
 
 

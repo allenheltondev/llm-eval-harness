@@ -165,6 +165,8 @@ function TabPage({ route, navigate }: { route: Route; navigate: (next: Route) =>
         <EvalsPage
           evaluationId={route.evaluationId ?? null}
           onSelectEvaluation={id => navigate({ tab: 'evals', evaluationId: id ?? undefined })}
+          compareIds={route.compareIds ?? null}
+          onCompare={ids => navigate({ tab: 'evals', compareIds: ids ?? undefined })}
         />
       )
     case 'history':

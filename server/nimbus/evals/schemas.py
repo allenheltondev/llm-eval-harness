@@ -21,6 +21,7 @@ from nimbus.errors import BadRequestError
 from nimbus.evals.assertions import MAX_CASE_ASSERTIONS, Assertion, expand_shorthand
 from nimbus.evals.judge import DEFAULT_JUDGE_MODEL_ID
 from nimbus.providers import DEFAULT_PROVIDER, Provider
+from nimbus.spend import Principal
 
 MIN_RUNS = 2
 MAX_RUNS = 25
@@ -36,6 +37,9 @@ MAX_SUITE_RUNS = 200
 #: (``engine.MAX_RESULT_BYTES``); this keeps the verdicts inside it even when
 #: every other part of the result is at its own limit.
 MAX_SUITE_ASSERTION_CHECKS = 1_000
+#: Judges beyond the primary one a suite may add. Every extra judge grades every
+#: answer, so each is another full pass of judge spend.
+MAX_PANEL_JUDGES = 3
 #: A case passes when its mean judge score (0-1) reaches this, unless the suite
 #: sets its own ``pass_threshold``.
 DEFAULT_PASS_THRESHOLD = 0.7
@@ -274,6 +278,12 @@ class EvaluationRequest(BaseModel):
     run_ids: list[str] = Field(default_factory=list)
     rubric: str | None = None
     grader: GraderConfig = Field(default_factory=GraderConfig)
+    #: Further judges for a suite, beside ``grader``. Each grades every answer
+    #: and a repeat's score is the mean of the judges that scored it, which
+    #: dilutes one judge's bias (a model favouring its own family's answers, say).
+    #: Empty means ``grader`` alone. A panel member with no ``system_prompt``
+    #: uses ``grader``'s.
+    panel: list[GraderConfig] = Field(default_factory=list, max_length=MAX_PANEL_JUDGES)
     #: Which lane executes this evaluation -- in-process ("local", the default)
     #: or the worker Lambda ("cloud"). See ``docs/cloud-evals.md``.
     execution: Literal["local", "cloud"] = "local"
@@ -281,6 +291,11 @@ class EvaluationRequest(BaseModel):
     #: calling the API directly. Descriptive only -- nothing branches on it --
     #: and stored with the evaluation so its history can say where it came from.
     source: Literal["cli", "ui", "api"] = "api"
+    #: Who the server says this evaluation belongs to, and what it reserved
+    #: against their spend window. Set from the verified token by
+    #: :func:`nimbus.evals.admission.admit`, which overwrites anything a client
+    #: sends; it only travels in a request so the cloud worker can settle it.
+    principal: Principal | None = None
     #: Stop scheduling new runs once the estimated spend would pass this many
     #: USD; the evaluation still completes, with ``budget_exhausted: true``.
     #: See ``nimbus.evals.budget``.
@@ -299,8 +314,27 @@ class EvaluationRequest(BaseModel):
                 raise BadRequestError("suite is required when kind is 'suite'")
         elif not self.run_ids:
             raise BadRequestError("run_ids is required when kind is 'grade'")
+        self._check_panel()
         self._check_budget_is_enforceable()
         return self
+
+    def _check_panel(self) -> None:
+        """A panel grades a suite, and each judge is a different model."""
+        if not self.panel:
+            return
+        if self.kind != "suite":
+            raise BadRequestError(
+                f"panel judges a suite's cases; it does nothing for kind {self.kind!r}",
+                code="panel_requires_suite",
+            )
+        labels = [f"{judge.provider}:{judge.model_id}" for judge in (self.grader, *self.panel)]
+        repeated = sorted({label for label in labels if labels.count(label) > 1})
+        if repeated:
+            raise BadRequestError(
+                f"Every judge must be a different model; repeated: {', '.join(repeated)}",
+                detail={"duplicates": repeated},
+                code="panel_duplicate_judge",
+            )
 
     def _check_budget_is_enforceable(self) -> None:
         """A budget needs a price: an unpriced model's spend cannot be counted."""
@@ -327,6 +361,12 @@ class EvaluationRequest(BaseModel):
         }
         if self.max_cost_usd is not None:
             config["max_cost_usd"] = self.max_cost_usd
+        if self.principal is not None:
+            config["user"] = self.principal.user
+            if self.principal.email:
+                config["user_email"] = self.principal.email
+        if self.panel:
+            config["panel"] = [judge.model_dump() for judge in self.panel]
         if self.suite is not None:
             # The whole suite, so a stored evaluation says exactly what was tested.
             config["suite"] = self.suite.model_dump()

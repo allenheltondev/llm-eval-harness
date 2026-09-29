@@ -8,6 +8,7 @@ import asyncio
 import json
 
 import pytest
+from botocore.exceptions import ClientError
 from sqlmodel import Session
 from strands.types.exceptions import ModelThrottledException
 
@@ -118,12 +119,111 @@ async def test_backoff_is_actually_awaited_between_attempts(initialized_db, monk
         slept.append(seconds)
 
     monkeypatch.setattr(evals_engine, "RETRY_BACKOFF_SECONDS", (5.0, 10.0))
+    monkeypatch.setattr(evals_engine, "_jittered", lambda seconds: seconds)
     monkeypatch.setattr(evals_engine.asyncio, "sleep", record)
     models = SequencedModels(THROTTLE, THROTTLE, [Text("finally")])
 
     await evals_engine._execute_with_retries(_job(request()), deps(models))
 
     assert slept == [5.0, 10.0]
+
+
+async def test_a_retryable_provider_error_is_retried_like_a_throttle(initialized_db):
+    server_error = ClientError(
+        {"Error": {"Code": "InternalServerException", "Message": "try later"}}, "ConverseStream"
+    )
+    models = SequencedModels([Error(server_error)], [Text("recovered")])
+
+    outcome = await evals_engine._execute_with_retries(_job(request()), deps(models))
+
+    assert models.calls == 2
+    assert outcome.succeeded
+    assert outcome.attempts == 2
+
+
+async def test_a_non_retryable_provider_error_is_not_retried(initialized_db):
+    denied = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "ConverseStream"
+    )
+    models = SequencedModels([Error(denied)])
+
+    outcome = await evals_engine._execute_with_retries(_job(request()), deps(models))
+
+    assert models.calls == 1
+    assert outcome.error["retryable"] is False
+
+
+def test_backoff_jitter_stays_within_half_to_full_of_the_nominal_delay():
+    delays = [evals_engine._jittered(10.0) for _ in range(500)]
+
+    assert all(5.0 <= delay <= 10.0 for delay in delays)
+    assert len(set(delays)) > 1  # actually random, not a constant
+
+
+def hanging_models(hang_on_calls: set[int]):
+    """A factory whose listed (1-based) attempts never produce output."""
+    created: list[FakeModel] = []
+
+    def factory(_request) -> FakeModel:
+        model = FakeModel(script=[Text("done")])
+        created.append(model)
+        if len(created) in hang_on_calls:
+
+            async def hang(*_args, **_kwargs):
+                await asyncio.sleep(30)
+                yield {}
+
+            model.stream = hang  # type: ignore[method-assign]
+        return model
+
+    factory.created = created  # type: ignore[attr-defined]
+    return factory
+
+
+def deps_with_timeout(factory, seconds: float) -> evals_engine.EvalDeps:
+    return evals_engine.EvalDeps(
+        settings=Settings(run_timeout_seconds=seconds),
+        model_factory=factory,
+        judge_factory=lambda _model_id: FakeJudgeModel(),
+    )
+
+
+async def test_a_run_past_the_timeout_is_cancelled_and_retried(initialized_db):
+    factory = hanging_models({1})
+
+    outcome = await evals_engine._execute_with_retries(
+        _job(request()), deps_with_timeout(factory, 0.05)
+    )
+
+    assert outcome.succeeded
+    assert outcome.attempts == 2
+    assert len(factory.created) == 2
+    with Session(db.get_engine()) as session:
+        rows, _ = history.list_runs(session)
+    assert sorted(row.status for row in rows) == ["cancelled", "completed"]
+
+
+async def test_a_run_that_always_times_out_reports_run_timeout(initialized_db):
+    factory = hanging_models({1, 2, 3})
+
+    outcome = await evals_engine._execute_with_retries(
+        _job(request()), deps_with_timeout(factory, 0.05)
+    )
+
+    assert not outcome.succeeded
+    assert outcome.error["code"] == evals_engine.RUN_TIMEOUT_ERROR_CODE
+    assert outcome.error["retryable"] is True
+    assert "0.05s" in outcome.error["message"]
+    assert outcome.run_id is not None  # the cut-off attempt is still on record
+
+
+async def test_no_timeout_is_applied_by_default(initialized_db):
+    assert Settings().run_timeout_seconds == 0
+    models = SequencedModels([Text("fine")])
+
+    outcome = await evals_engine._execute_with_retries(_job(request()), deps(models))
+
+    assert outcome.succeeded
 
 
 async def test_a_setup_failure_before_run_start_is_reported_as_the_outcomes_error(

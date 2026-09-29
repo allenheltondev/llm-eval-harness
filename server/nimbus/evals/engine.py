@@ -36,10 +36,12 @@ own run row, so every repeat is inspectable in ``/runs`` afterwards. At most
 :data:`MAX_CONCURRENT_RUNS` repeats are in flight at once.
 
 A repeat whose in-band error is throttle-classified (``model_throttled``, from
-``engine.model_factory.classify_error``) is retried, sleeping
-:data:`RETRY_BACKOFF_SECONDS` between attempts -- a module-level tuple so tests
-can shorten it. Retries keep the repeat's index; only the successful attempt's
-run id is kept. Anything still failing after the last attempt is reported as
+``engine.model_factory.classify_error``) or otherwise marked ``retryable`` (a
+provider 5xx, a dropped connection, a run timeout) is retried, sleeping
+:data:`RETRY_BACKOFF_SECONDS` between attempts, each sleep jittered so
+concurrent runs that were throttled together do not retry together. The tuple is
+module-level so tests can shorten it. Retries keep the repeat's index; only the
+successful attempt's run id is kept. Anything still failing after the last attempt is reported as
 ``run_failed``, excluded from grading, listed in ``result.failed_runs`` (with its
 ``run_id`` when the run got far enough to be recorded, else ``None``), and the
 other repeats carry on.
@@ -62,12 +64,14 @@ import asyncio
 import copy
 import json
 import logging
+import random
 import time
 from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol
 
+from nimbus import spend as spend_module
 from nimbus.config import Settings, get_settings
 from nimbus.engine.events import ErrorEvent, RunCompleteEvent, RunStartEvent
 from nimbus.engine.model_factory import ModelFactory, build_model, classify_error
@@ -90,7 +94,7 @@ from nimbus.evals.jobs import EvalJob
 from nimbus.evals.judge import JudgeFactory, build_judge_model
 from nimbus.evals.metrics import local_metrics
 from nimbus.evals.outcomes import RunOutcome
-from nimbus.evals.schemas import EvaluationRequest, Suite
+from nimbus.evals.schemas import EvaluationRequest, GraderConfig, Suite
 from nimbus.providers import DEFAULT_PROVIDER
 from nimbus.store import history
 from nimbus.store.repo import HistoryRepo, get_history_repo
@@ -101,6 +105,11 @@ MAX_CONCURRENT_RUNS = 3
 #: Sleep between throttle retries; index 0 is used after the first failure.
 RETRY_BACKOFF_SECONDS: tuple[float, ...] = (5.0, 10.0)
 THROTTLE_ERROR_CODE = "model_throttled"
+#: The error code of a run cut off by ``Settings.run_timeout_seconds``.
+RUN_TIMEOUT_ERROR_CODE = "run_timeout"
+#: Each backoff sleeps between ``1 - RETRY_JITTER`` and ``1`` times its nominal
+#: length.
+RETRY_JITTER = 0.5
 
 
 @dataclass
@@ -121,6 +130,13 @@ class EvalDeps:
     #: local server wants too. It is a field rather than a lookup so a test can
     #: drive the whole pipeline against an in-memory table.
     repo: HistoryRepo | None = None
+    #: Where per-user spend is settled. ``None`` means the store these settings
+    #: resolve to; a field so a test can drive settlement against its own.
+    spend: spend_module.SpendStore | None = None
+
+    def spend_store(self) -> spend_module.SpendStore:
+        """The counter store these deps settle spend into."""
+        return self.spend if self.spend is not None else spend_module.get_spend_store(self.settings)
 
     def history_repo(self) -> HistoryRepo:
         """The repository these deps write history through."""
@@ -276,6 +292,16 @@ def _suite_jobs(suite: Suite) -> list[_Job]:
     return jobs
 
 
+def planned_jobs(request: EvaluationRequest) -> list[_Job]:
+    """Every run ``request`` will make (none for ``grade``, which re-reads stored runs)."""
+    if request.kind == "determinism":
+        return _determinism_jobs(request)
+    if request.kind == "suite":
+        assert request.suite is not None
+        return _suite_jobs(request.suite)
+    return []
+
+
 async def _execute_once(
     job: _Job,
     deps: EvalDeps,
@@ -299,8 +325,10 @@ async def _execute_once(
         model_factory=deps.model_factory,
         repo=deps.repo,
     )
+    timeout_seconds = deps.settings.run_timeout_seconds
+    deadline = asyncio.timeout(timeout_seconds or None)
     try:
-        async with aclosing(events):
+        async with deadline, aclosing(events):
             async for event in events:
                 match event:
                     case RunStartEvent():
@@ -322,9 +350,18 @@ async def _execute_once(
         # Setup failures (an unknown toolset, a missing provider key) never
         # reach the stream -- they are raised before ``run_start``.
         outcome.error = {"code": exc.code, "message": exc.message, "retryable": False}
-    except Exception as exc:  # pragma: no cover - defensive
-        code, message, retryable = classify_error(exc)
-        outcome.error = {"code": code, "message": message, "retryable": retryable}
+    except Exception as exc:
+        if deadline.expired():
+            # The runner persisted the cut-off run as ``cancelled``; the outcome
+            # says why, and lets the retry loop have another go.
+            outcome.error = {
+                "code": RUN_TIMEOUT_ERROR_CODE,
+                "message": f"Run exceeded the {timeout_seconds:g}s run timeout",
+                "retryable": True,
+            }
+        else:  # pragma: no cover - defensive
+            code, message, retryable = classify_error(exc)
+            outcome.error = {"code": code, "message": message, "retryable": retryable}
 
     outcome.duration_ms = int((time.perf_counter() - started) * 1000)
     if outcome.run_id is not None:
@@ -336,8 +373,17 @@ async def _execute_once(
     return outcome
 
 
-def _is_throttle(outcome: RunOutcome) -> bool:
-    return bool(outcome.error) and outcome.error.get("code") == THROTTLE_ERROR_CODE
+def _is_retryable(outcome: RunOutcome) -> bool:
+    """Whether a failed attempt is worth another go: throttled, or marked retryable."""
+    error = outcome.error
+    if not error:
+        return False
+    return error.get("code") == THROTTLE_ERROR_CODE or bool(error.get("retryable"))
+
+
+def _jittered(seconds: float) -> float:
+    """``seconds`` scaled into ``[1 - RETRY_JITTER, 1]`` of itself."""
+    return seconds * random.uniform(1 - RETRY_JITTER, 1.0)
 
 
 async def _execute_with_retries(
@@ -345,13 +391,19 @@ async def _execute_with_retries(
     deps: EvalDeps,
     store: EvalStore | None = None,
 ) -> RunOutcome:
-    """Execute one run, retrying throttled attempts with backoff."""
+    """Execute one run, retrying retryable failures with jittered backoff."""
     outcome = await _execute_once(job, deps, store)
     for attempt, backoff in enumerate(RETRY_BACKOFF_SECONDS, start=1):
-        if outcome.succeeded or not _is_throttle(outcome):
+        if outcome.succeeded or not _is_retryable(outcome):
             break
-        logger.info("eval run %d throttled, retrying in %.1fs", job.index, backoff)
-        await asyncio.sleep(backoff)
+        delay = _jittered(backoff)
+        logger.info(
+            "eval run %d failed (%s), retrying in %.1fs",
+            job.index,
+            (outcome.error or {}).get("code"),
+            delay,
+        )
+        await asyncio.sleep(delay)
         spent_before = outcome.cost_usd
         outcome = await _execute_once(job, deps, store)
         outcome.attempts = attempt + 1
@@ -683,6 +735,8 @@ def _suite_case_result(
             "failed": failures,
         }
     assertions_failed = any(passed is False for passed in repeat_passed)
+    if verdict.spread is not None:
+        entry["judge_spread"] = round(verdict.spread, 4)
     if verdict.reasons:
         entry["reasoning"] = _clip(" | ".join(verdict.reasons))
     if not succeeded:
@@ -767,6 +821,7 @@ def _build_suite_result(
             "model_id": request.grader.model_id,
             "system_prompt_used": request.grader.system_prompt is not None,
             "rubric_used": request.rubric is not None,
+            **({"panel": _judge_labels(request.panel)} if request.panel else {}),
         },
         "metrics": {
             "pass_rate": passed / len(cases),
@@ -874,13 +929,37 @@ async def _judge_suite(
     to_judge = [outcome for outcome in successes if outcome.case_id not in skipped]
     if successes and not to_judge:
         return grader.SuiteJudgement()
-    return await grader.judge_suite(
-        to_judge,
-        suite=suite,
-        rubric=request.rubric,
-        grader=request.grader,
-        judge_factory=judge_factory or seam.deps.judge_factory,
+    factory = judge_factory or seam.deps.judge_factory
+    judges = [request.grader, *_panel_members(request)]
+    judgements = await asyncio.gather(
+        *(
+            grader.judge_suite(
+                to_judge,
+                suite=suite,
+                rubric=request.rubric,
+                grader=judge,
+                judge_factory=factory,
+            )
+            for judge in judges
+        )
     )
+    return grader.combine_judgements(
+        list(zip(_judge_labels(judges), judgements, strict=True))
+    )
+
+
+def _panel_members(request: EvaluationRequest) -> list[GraderConfig]:
+    """The panel's judges, each defaulting to the primary judge's system prompt."""
+    return [
+        member
+        if member.system_prompt is not None
+        else member.model_copy(update={"system_prompt": request.grader.system_prompt})
+        for member in request.panel
+    ]
+
+
+def _judge_labels(judges: list[GraderConfig]) -> list[str]:
+    return [f"{judge.provider}:{judge.model_id}" for judge in judges]
 
 
 def _terminal(
@@ -957,10 +1036,15 @@ async def execute_evaluation_with_seam(
         deps=deps or default_deps(),
     )
     outcomes: list[RunOutcome] = []
+    judge_meter: budget.JudgeMeter | None = None
     try:
         if not isinstance(request, EvaluationRequest):
             request = EvaluationRequest.model_validate(request)
-        seam.ledger = budget.CostLedger(request.max_cost_usd)
+        batch = planned_jobs(request)
+        seam.ledger = budget.CostLedger(
+            request.max_cost_usd,
+            prior_per_run=budget.prior_per_run(job.run_config for job in batch),
+        )
         judge_meter = budget.JudgeMeter(seam.deps.judge_factory)
 
         seam.store.save_evaluation(status="running")
@@ -970,11 +1054,8 @@ async def execute_evaluation_with_seam(
             )
         )
 
-        if request.kind == "determinism":
-            await _execute_batch(seam, _determinism_jobs(request), outcomes)
-        elif request.kind == "suite":
-            assert request.suite is not None
-            await _execute_batch(seam, _suite_jobs(request.suite), outcomes)
+        if request.kind in ("determinism", "suite"):
+            await _execute_batch(seam, batch, outcomes)
         else:
             outcomes.extend(_load_stored_runs(seam, request.run_ids))
 
@@ -1030,6 +1111,28 @@ async def execute_evaluation_with_seam(
         seam.store.save_evaluation(status="error", error=error)
         seam.publish(EvalCompleteEvent(status="error", result=None))
         return _terminal(seam, "error", outcomes, None, error)
+
+    finally:
+        _settle_spend(seam, request, judge_meter)
+
+
+def _settle_spend(
+    seam: _Seam, request: EvaluationRequest | dict[str, Any], judge_meter: budget.JudgeMeter | None
+) -> None:
+    """Swap the evaluation's spend reservation for what it actually cost.
+
+    Runs however the evaluation ended (finished, failed, cancelled): a cancelled
+    one still spent what it spent. Never raises: an accounting failure must not
+    turn a finished evaluation into a failed one, so it is logged instead.
+    """
+    principal = getattr(request, "principal", None)
+    if principal is None:
+        return
+    actual = seam.ledger.spent + ((judge_meter.cost_usd() or 0.0) if judge_meter else 0.0)
+    try:
+        spend_module.settle(seam.deps.spend_store(), principal, actual)
+    except Exception:
+        logger.exception("could not settle spend for evaluation %s", seam.evaluation_id)
 
 
 # --------------------------------------------------------------------------- #

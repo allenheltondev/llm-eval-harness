@@ -392,3 +392,29 @@ def cost_usd(provider: str, model_id: str, usage: Mapping[str, Any] | None) -> f
     # Full precision on purpose: budgets add these up, and rounding each one
     # first would let many tiny runs count as $0. Round only for display.
     return total
+
+
+#: Output length assumed for an up-front estimate when a run sets no ``max_tokens``.
+DEFAULT_ESTIMATED_OUTPUT_TOKENS = 1_024
+#: Rough characters per token, for sizing a prompt before it is sent.
+_CHARS_PER_TOKEN = 4
+
+
+def estimate_run_cost(
+    provider: str, model_id: str, prompt_chars: int, max_tokens: int | None = None
+) -> float | None:
+    """A pre-flight guess at one run's USD cost, or ``None`` when the model is unpriced.
+
+    Prompt tokens are approximated from ``prompt_chars``; output is assumed to
+    fill ``max_tokens`` (or :data:`DEFAULT_ESTIMATED_OUTPUT_TOKENS`). Tool loops
+    and retries make real runs cost more or less, so this only stands in until
+    measured runs replace it (see :class:`nimbus.evals.budget.CostLedger`).
+    """
+    return cost_usd(
+        provider,
+        model_id,
+        {
+            "input_tokens": -(-prompt_chars // _CHARS_PER_TOKEN),
+            "output_tokens": max_tokens or DEFAULT_ESTIMATED_OUTPUT_TOKENS,
+        },
+    )
