@@ -444,6 +444,14 @@ describe('api.evaluations', () => {
     expect(result).toEqual(comparison)
   })
 
+  it('names the baseline in the query when one is chosen', async () => {
+    const spy = mockFetch(jsonResponse({ arms: [], ranking: [], winner: null, tied: [] }))
+
+    await api.evaluations.compare(['e1', 'e2'], { baseline: 'e2' })
+
+    expect(urlOf(spy)).toBe(`${BASE}/evaluations/compare?ids=e1&ids=e2&baseline=e2`)
+  })
+
   it('forwards execution:"cloud" on create', async () => {
     const spy = mockFetch(jsonResponse({ id: 'e1', status: 'pending' }, 202))
 

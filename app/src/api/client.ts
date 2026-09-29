@@ -200,13 +200,19 @@ const evaluations = {
     }),
 
   /**
-   * `GET /evaluations/compare?ids=..` — one suite's evaluations on different
-   * models, ranked. Two to six ids; a 400 names why a set cannot be compared
-   * (`compare_not_suite`, `compare_different_suites`, `compare_duplicate_model`).
+   * `GET /evaluations/compare?ids=..` — one suite's evaluations as arms, ranked.
+   * Two to twelve ids. `baseline` (an evaluation id or an arm's label) turns on
+   * the fallback analysis; without it the arm tagged as baseline is used, if any.
+   * A 400 names why a set cannot be compared (`compare_not_suite`,
+   * `compare_different_suites`, `compare_duplicate_model`, `compare_duplicate_arm`,
+   * `compare_unknown_baseline`).
    */
-  compare: (ids: string[], options: CallOptions = {}): Promise<ModelComparison> =>
+  compare: (
+    ids: string[],
+    options: CallOptions & { baseline?: string } = {}
+  ): Promise<ModelComparison> =>
     http.get<ModelComparison>('/evaluations/compare', {
-      query: { ids },
+      query: { ids, baseline: options.baseline },
       signal: options.signal
     }),
 

@@ -871,3 +871,16 @@ async def test_a_critical_case_the_engine_marked_stays_critical_through_storage(
 
     assert arm.critical == frozenset({"refund"})
     assert arm.readiness == ReadinessBar(max_regression_rate=0.10)
+
+
+def test_a_case_marked_critical_in_any_arms_suite_is_critical_in_the_grid():
+    comparison = build(
+        evaluation("a", all_pass(3), baseline=True, critical=("c01",)),
+        evaluation("b", all_pass(3), model="m2"),
+    )
+
+    assert {row["id"]: row["critical"] for row in comparison["cases"]} == {
+        "c00": False,
+        "c01": True,
+        "c02": False,
+    }

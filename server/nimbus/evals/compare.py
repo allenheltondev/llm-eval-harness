@@ -532,7 +532,14 @@ def _case_rows(arms: list[Arm]) -> list[dict[str, Any]]:
             results[label] = (
                 None if case is None else {"status": case["status"], "score": case["score"]}
             )
-        rows.append({"id": case_id, "results": results, "agreement": _agreement(results)})
+        rows.append(
+            {
+                "id": case_id,
+                "results": results,
+                "agreement": _agreement(results),
+                "critical": any(case_id in arm.critical for arm in arms),
+            }
+        )
     return rows
 
 

@@ -340,6 +340,12 @@ export default function EvalsPage({
                       >
                         {row.execution}
                       </Badge>
+                      {row.config.arm && (
+                        <Badge variant="neutral" data-testid={`eval-arm-${row.id}`}>
+                          {row.config.arm.name}
+                          {row.config.arm.baseline ? ' · baseline' : ''}
+                        </Badge>
+                      )}
                       {sourceLabel(row.source) && (
                         <Badge variant="primary" data-testid={`eval-source-${row.id}`}>
                           {sourceLabel(row.source)}

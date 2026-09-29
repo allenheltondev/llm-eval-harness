@@ -35,6 +35,13 @@ function arm(model: string, overrides: Partial<ComparisonArm> = {}): ComparisonA
     repeats: 1,
     cost_usd: 0.0123,
     budget_exhausted: false,
+    name: null,
+    prompt_id: null,
+    baseline: false,
+    assertions_failed: null,
+    latency_p50_ms: null,
+    latency_p95_ms: null,
+    changes: [],
     ...overrides
   }
 }
@@ -54,17 +61,21 @@ function comparison(overrides: Partial<ModelComparison> = {}): ModelComparison {
     cases: [
       {
         id: 'both-pass',
+        critical: false,
         results: { 'bedrock:strong': passed, 'bedrock:weak': passed },
         agreement: 'all_passed'
       },
       {
         id: 'strong-only',
+        critical: false,
         results: { 'bedrock:strong': passed, 'bedrock:weak': failed },
         agreement: 'split'
       }
     ],
     split_cases: ['strong-only'],
     suite: { name: 'support', cases: 4 },
+    baseline: null,
+    warnings: [],
     ...overrides
   }
 }
@@ -246,6 +257,7 @@ describe('ModelComparisonView', () => {
         cases: [
           {
             id: 'odd',
+            critical: false,
             results: {
               'bedrock:strong': { status: 'judge_error', score: null },
               'bedrock:weak': null
@@ -269,6 +281,7 @@ describe('ModelComparisonView', () => {
         cases: [
           {
             id: 'new',
+            critical: false,
             results: { 'bedrock:strong': { status: 'skipped', score: null }, 'bedrock:weak': null },
             agreement: 'incomplete'
           }
@@ -289,6 +302,7 @@ describe('ModelComparisonView', () => {
         cases: [
           {
             id: 'c',
+            critical: false,
             results: { 'bedrock:done': passed, 'bedrock:cut': passed },
             agreement: 'all_passed'
           }
@@ -379,5 +393,269 @@ describe('ModelComparisonView', () => {
 
     await Promise.resolve()
     expect(screen.queryByTestId('model-compare-error')).not.toBeInTheDocument()
+  })
+})
+
+describe('ModelComparisonView: as a fallback check', () => {
+  const assessment = {
+    status: 'not_ready' as const,
+    reasons: ['1 of the 2 cases the baseline passes now fails (50%), over the 10% limit'],
+    regressions: ['strong-only'],
+    improvements: [],
+    critical_regressions: [],
+    baseline_passed: 2,
+    regression_rate: 0.5,
+    regression_upper_bound: 0.9,
+    cases_needed: 29,
+    sign_test_p: 1,
+    pass_rate_delta: -0.5,
+    score_delta: -25,
+    latency_ratio: 2,
+    cost_ratio: 0.5,
+    changes: ['model', 'prompt']
+  }
+
+  function withBaseline(overrides: Partial<ModelComparison> = {}): ModelComparison {
+    return comparison({
+      arms: [
+        arm('strong', {
+          name: 'primary',
+          label: 'primary',
+          model_id: 'claude-x',
+          prompt_id: 'ab12cd34',
+          baseline: true,
+          latency_p95_ms: 1200
+        }),
+        arm('weak', {
+          name: 'fallback',
+          label: 'fallback',
+          pass_rate: 0.5,
+          cases_passed: 2,
+          latency_p95_ms: 2400,
+          vs_baseline: assessment,
+          changes: ['model', 'prompt']
+        })
+      ],
+      ranking: ['primary', 'fallback'],
+      winner: 'primary',
+      baseline: 'primary',
+      bar: {
+        max_regression_rate: 0.1,
+        max_latency_ratio: null,
+        max_cost_ratio: null,
+        source: 'suite'
+      },
+      cases: [
+        {
+          id: 'strong-only',
+          critical: true,
+          results: { primary: passed, fallback: failed },
+          agreement: 'split'
+        },
+        {
+          id: 'both-pass',
+          critical: false,
+          results: { primary: passed, fallback: passed },
+          agreement: 'all_passed'
+        }
+      ],
+      ...overrides
+    })
+  }
+
+  it('shows the readiness panel once there is a baseline', async () => {
+    await shown(withBaseline())
+
+    expect(screen.getByTestId('readiness-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('readiness-status-fallback')).toHaveTextContent('Not ready')
+  })
+
+  it('shows no readiness panel when it only ranks', async () => {
+    await shown(comparison())
+
+    expect(screen.queryByTestId('readiness-panel')).not.toBeInTheDocument()
+    expect(screen.queryByText('As a fallback')).not.toBeInTheDocument()
+  })
+
+  it('marks the baseline and shows the verdict for the others in the table', async () => {
+    await shown(withBaseline())
+
+    expect(screen.getByTestId('compare-arm-primary')).toHaveTextContent('Baseline')
+    const fallbackRow = screen.getByTestId('compare-arm-fallback')
+    expect(within(fallbackRow).getByText('Not ready')).toBeInTheDocument()
+    // The baseline has no verdict of its own.
+    expect(within(screen.getByTestId('compare-arm-primary')).queryByText('Not ready')).toBeNull()
+  })
+
+  it('shows p95 latency when any arm has it', async () => {
+    await shown(withBaseline())
+
+    expect(screen.getByTestId('compare-arm-primary')).toHaveTextContent('1.2 s')
+    expect(screen.getByTestId('compare-arm-fallback')).toHaveTextContent('2.4 s')
+  })
+
+  it('has no latency column for results that predate it', async () => {
+    await shown(comparison())
+
+    expect(screen.queryByText('p95 latency')).not.toBeInTheDocument()
+  })
+
+  it('shows what a named arm is made of under its name', async () => {
+    await shown(withBaseline())
+
+    expect(screen.getByTestId('compare-arm-primary')).toHaveTextContent('bedrock:claude-x')
+    expect(screen.getByTestId('compare-arm-primary')).toHaveTextContent('prompt ab12cd34')
+  })
+
+  it('highlights the cells where the baseline passes and a candidate does not', async () => {
+    await shown(withBaseline())
+
+    const regressed = screen
+      .getByTestId('compare-case-strong-only')
+      .querySelectorAll('[data-regression]')
+    expect(regressed).toHaveLength(1)
+    expect(regressed[0]).toHaveTextContent('Fail')
+    expect(regressed[0]).toHaveTextContent('regressed from the baseline')
+    expect(
+      screen.getByTestId('compare-case-both-pass').querySelectorAll('[data-regression]')
+    ).toHaveLength(0)
+  })
+
+  it('does not call a case a regression when the baseline itself did not pass it', async () => {
+    await shown(
+      withBaseline({
+        cases: [
+          {
+            id: 'never',
+            critical: false,
+            results: { primary: failed, fallback: failed },
+            agreement: 'all_failed'
+          }
+        ]
+      })
+    )
+
+    expect(
+      screen.getByTestId('compare-case-never').querySelectorAll('[data-regression]')
+    ).toHaveLength(0)
+  })
+
+  it('does not highlight anything without a baseline', async () => {
+    await shown(comparison())
+
+    expect(document.querySelectorAll('[data-regression]')).toHaveLength(0)
+  })
+
+  it('marks the cases a fallback must not break', async () => {
+    await shown(withBaseline())
+
+    expect(screen.getByTestId('compare-critical-strong-only')).toBeInTheDocument()
+    expect(screen.queryByTestId('compare-critical-both-pass')).not.toBeInTheDocument()
+  })
+
+  it('labels the baseline column in the grid', async () => {
+    await shown(withBaseline())
+
+    const headings = within(screen.getByTestId('compare-cases')).getAllByRole('columnheader')
+    expect(headings.map(cell => cell.textContent)).toContain('primary (baseline)')
+  })
+
+  it('shows the warnings', async () => {
+    await shown(
+      withBaseline({
+        warnings: [{ code: 'small_suite', message: 'The suite has fewer than 20 cases.', arms: [] }]
+      })
+    )
+
+    expect(screen.getByTestId('warning-small_suite')).toBeInTheDocument()
+  })
+
+  it('shows the effects of a grid', async () => {
+    await shown(
+      withBaseline({
+        effects: {
+          axes: { model: [{ value: 'a', mean_pass_rate: 0.7, arms: 2 }] },
+          spread: { model: 0.2 },
+          dominant: 'model'
+        }
+      })
+    )
+
+    expect(screen.getByTestId('effects-panel')).toBeInTheDocument()
+  })
+
+  it('shows no effects panel without a grid', async () => {
+    await shown(withBaseline())
+
+    expect(screen.queryByTestId('effects-panel')).not.toBeInTheDocument()
+  })
+
+  it('offers each arm as a baseline and starts on the one the server chose', async () => {
+    await shown(withBaseline())
+
+    const picker = screen.getByTestId('model-compare-baseline') as HTMLSelectElement
+    expect(
+      within(picker)
+        .getAllByRole('option')
+        .map(option => option.textContent)
+    ).toEqual(['primary', 'fallback'])
+    expect(picker.value).toBe('eval-strong')
+  })
+
+  it('asks the server again, with the chosen baseline, when the reader picks another', async () => {
+    await shown(withBaseline())
+    compareMock.mockResolvedValue(withBaseline({ baseline: 'fallback' }))
+
+    fireEvent.change(screen.getByTestId('model-compare-baseline'), {
+      target: { value: 'eval-weak' }
+    })
+
+    await waitFor(() => expect(compareMock).toHaveBeenCalledTimes(2))
+    expect(compareMock.mock.calls[1][1]).toMatchObject({ baseline: 'eval-weak' })
+    await screen.findByTestId('model-compare-verdict')
+  })
+
+  it('invites the reader to choose a baseline when there is none', async () => {
+    await shown(comparison({ arms: [arm('weak'), arm('strong')] }))
+
+    const picker = screen.getByTestId('model-compare-baseline') as HTMLSelectElement
+    expect(picker.value).toBe('')
+    expect(within(picker).getByRole('option', { name: 'Choose a baseline…' })).toBeInTheDocument()
+    expect(screen.getByText(/to see what each other arm breaks/)).toBeInTheDocument()
+  })
+
+  it('ignores the placeholder being chosen again', async () => {
+    await shown(comparison({ arms: [arm('weak'), arm('strong')] }))
+
+    fireEvent.change(screen.getByTestId('model-compare-baseline'), { target: { value: '' } })
+
+    expect(compareMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('forgets the chosen baseline when the evaluations being compared change', async () => {
+    compareMock.mockResolvedValue(withBaseline())
+    const { rerender } = render(<ModelComparisonView evaluationIds={['a', 'b']} />)
+    await screen.findByTestId('model-compare-baseline')
+    fireEvent.change(screen.getByTestId('model-compare-baseline'), {
+      target: { value: 'eval-weak' }
+    })
+    await waitFor(() => expect(compareMock).toHaveBeenCalledTimes(2))
+
+    rerender(<ModelComparisonView evaluationIds={['c', 'd']} />)
+
+    await waitFor(() =>
+      expect(compareMock.mock.calls.at(-1)?.[1]).toMatchObject({ baseline: undefined })
+    )
+  })
+
+  it('clips its scrolling tables, so hidden text in a far column cannot widen the page', async () => {
+    await shown(withBaseline())
+
+    // An absolutely positioned element (the "regressed" note) escapes an overflow clip unless
+    // the scroll container is the containing block. jsdom has no layout, so the class is checked.
+    for (const testId of ['compare-arms', 'compare-cases']) {
+      const container = screen.getByTestId(testId).parentElement
+      expect(container).toHaveClass('overflow-x-auto', 'relative')
+    }
   })
 })

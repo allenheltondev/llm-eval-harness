@@ -374,6 +374,8 @@ export interface EvaluationStoredConfig {
   grader: { model_id: string; system_prompt: string | null; provider?: ModelSource }
   /** Where it was started (absent on rows recorded before sources existed). */
   source?: EvaluationSource
+  /** `kind: 'suite'` only — which arm of a comparison this was, when it was one. */
+  arm?: { name: string; baseline?: boolean; axes?: Record<string, string> }
   /** `kind: 'suite'` only — the whole suite, exactly as it was run. */
   suite?: StoredSuite
   [key: string]: unknown
@@ -474,6 +476,80 @@ export interface ComparisonArm {
   /** `null` when the model is unpriced. */
   cost_usd: number | null
   budget_exhausted: boolean
+  /** The arm's own name (`ArmTag.name`); `null` for an arm identified only by its model. */
+  name: string | null
+  /** A short id of the arm's system prompt, so arms with the same prompt are recognisable. */
+  prompt_id: string | null
+  /** Whether this is the arm the others are measured against. */
+  baseline: boolean
+  /** Failed deterministic checks across the suite; `null` when it has none. */
+  assertions_failed: number | null
+  /** Run latency percentiles over the runs that answered; `null` on results that predate them. */
+  latency_p50_ms: number | null
+  latency_p95_ms: number | null
+  /** What this arm changes from the baseline: `model`, `prompt`, `inference`, `tools`. */
+  changes: string[]
+  /** Absent on the baseline itself and when no baseline is set; `null` if it cannot be measured. */
+  vs_baseline?: BaselineAssessment | null
+}
+
+/** Whether a candidate can stand in for the baseline. */
+export type ReadinessStatus = 'ready' | 'not_ready' | 'inconclusive'
+
+/** One arm measured against the baseline (`evals/compare.py::_against_baseline`). */
+export interface BaselineAssessment {
+  status: ReadinessStatus
+  /** Why, in words: every failure, or what is not yet known. */
+  reasons: string[]
+  /** Cases the baseline passes and this arm does not. */
+  regressions: string[]
+  /** Cases this arm passes and the baseline does not. */
+  improvements: string[]
+  /** The regressions that were marked critical. */
+  critical_regressions: string[]
+  /** Cases the baseline passes: the population a regression can happen in. */
+  baseline_passed: number
+  /** `null` when the baseline passes nothing. */
+  regression_rate: number | null
+  /** Exact one-sided 95% bound on the true regression rate. */
+  regression_upper_bound: number
+  /** Baseline-passing cases that would certify the limit with no regressions; `null` if never. */
+  cases_needed: number | null
+  /** Two-sided exact sign test of "no difference" between regressions and improvements. */
+  sign_test_p: number
+  pass_rate_delta: number | null
+  score_delta: number | null
+  /** This arm's p95 latency over the baseline's. */
+  latency_ratio: number | null
+  /** This arm's estimated cost over the baseline's. */
+  cost_ratio: number | null
+  changes: string[]
+}
+
+/** The bar a candidate is judged by, and where it came from. */
+export interface ComparisonBar {
+  max_regression_rate: number
+  max_latency_ratio: number | null
+  max_cost_ratio: number | null
+  /** `suite` (stored with the evaluations), `default`, or `requested`. */
+  source: 'suite' | 'default' | 'requested'
+}
+
+/** Something a reader should know before trusting the comparison. */
+export interface ComparisonWarning {
+  code: string
+  message: string
+  /** The arms it concerns; empty when it concerns the whole comparison. */
+  arms: string[]
+}
+
+/** The main effect of each axis of a complete models-by-prompts grid. */
+export interface ComparisonEffects {
+  axes: Record<string, Array<{ value: string; mean_pass_rate: number; arms: number }>>
+  /** Best value's mean pass rate minus the worst's, per axis (0 – 1). */
+  spread: Record<string, number>
+  /** The axis that moves the pass rate clearly more, or `null` when neither does. */
+  dominant: string | null
 }
 
 /** How the arms fared on one case: the same, differently, or not all decided. */
@@ -482,6 +558,8 @@ export type CaseAgreement = 'all_passed' | 'all_failed' | 'split' | 'incomplete'
 /** One suite case across every arm (`evals/compare.py::_case_rows`). */
 export interface ComparisonCaseRow {
   id: string
+  /** A fallback that breaks this case is never ready. */
+  critical: boolean
   /** Keyed by arm label; `null` when that arm's result has no such case. */
   results: Record<string, { status: SuiteCaseResult['status']; score: number | null } | null>
   agreement: CaseAgreement
@@ -501,6 +579,13 @@ export interface ModelComparison {
   /** The case ids the arms disagree on. */
   split_cases: string[]
   suite: { name: string | null; cases: number }
+  /** The arm the others are measured against; `null` when the comparison only ranks. */
+  baseline: string | null
+  warnings: ComparisonWarning[]
+  /** Present with a baseline. */
+  bar?: ComparisonBar
+  /** Present when the arms are a complete grid of completed runs. */
+  effects?: ComparisonEffects
 }
 
 /** Local determinism metrics merged with the judge's metrics (`evals/metrics.py`). */
