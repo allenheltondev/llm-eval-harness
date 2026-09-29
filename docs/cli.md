@@ -238,6 +238,9 @@ nimbus eval --suite cases.yaml -m <other>      # same cases, another model
 | `--calibrate` | Suites only: also have the judge score each case's `expected` answer and an empty one, and flag cases where it can't tell them apart. See [Calibrating the judge](suites.md#calibrating-the-judge). |
 | `--max-cost USD` | Stop starting new runs once the estimated spend would pass this many dollars; the evaluation still completes, graded on the runs it made, with `budget_exhausted: true`. Overrides a suite file's `max_cost_usd`. Costs are estimates — see [Cost and budgets](suites.md#cost-and-budgets). |
 | `--arm MODEL` | With `--suite`: run the suite on this model and compare the models — see [Comparing models](#comparing-models). Repeatable; `PROVIDER=MODEL` picks the provider. |
+| `--all-arms` | With `--suite`: run every arm the file declares (`arms:` or `matrix:`) and compare them — see [Fallback readiness](suites.md#fallback-readiness). Run options such as `--temperature` apply to every arm; `-m`, `--provider`, `--system` and `--system-file` are refused, since they would override what the arms vary. |
+| `--baseline ARM` | With `--all-arms` or `--arm`: the arm the others are measured against. Turns on the fallback analysis. |
+| `--require-ready` | With a baseline: exit `3` unless every other arm is `ready`. `inconclusive` counts as not ready. |
 | `--remote` | Insist on the stack you signed in to with `login` (already the default once signed in); fails rather than running here when you are not — see [Running on a deployed stack](#running-on-a-deployed-stack). |
 | `--detach` | On a stack: submit, print the evaluation's id and link, and return without following it. |
 | `--fail-under SCORE` | Exit `3` when the overall score (0–100) is below `SCORE` — see [Exit codes](#exit-codes). |
@@ -253,6 +256,27 @@ cannot wait fifteen minutes. A CLI invocation *is* the job: it runs in the
 foreground, and Ctrl-C cancels the evaluation rather than just stopping your
 view of it. The terminal state lands on stdout as JSON; the grade and the
 judge's reasoning are summarised on stderr.
+
+### Fallback readiness
+
+To ask *"if the primary is unavailable, can this stand in?"*, declare the arms (a model **and** the
+prompt it gets) in the suite file and run them all:
+
+```bash
+nimbus eval --suite fallback-suite.yaml --all-arms
+nimbus eval --suite fallback-suite.yaml --all-arms --require-ready   # CI: exit 3 unless ready
+nimbus compare <eval-id> <eval-id> --baseline <arm>                  # re-judge what already ran
+```
+
+Each arm is a stored evaluation tagged with its name, so `nimbus compare` and the web app can
+re-run the analysis with a different baseline and no model calls. The output lists, per candidate,
+its verdict and the reasons, the cases it broke and fixed, what it changes from the baseline, and
+warnings about how far to trust it. stdout is the comparison as JSON; with `--json` it is the last
+line (`"type": "comparison"`). The verdicts, the statistics behind them, and the file format are in
+[Fallback readiness](suites.md#fallback-readiness).
+
+`nimbus compare` takes two or more evaluation ids (`--baseline` by arm name or evaluation id,
+`--require-ready`, `--local` for this machine) and works on the signed-in stack too.
 
 ### Comparing models
 
@@ -279,8 +303,9 @@ Each arm is a stored evaluation, so the web app shows the same comparison: tick 
 finished suite evaluations in the Evals tab's list and choose **Compare models**, or open
 `#/evals/compare/<id>,<id>`. It ranks the same way, calls level quality a tie, marks the cases
 the models disagree on, and lists a model that did not complete without ranking it. The API is
-`GET /api/v1/evaluations/compare?ids=<id>&ids=<id>` (2–6 evaluations; `400` when they are not
-all suites, did not run the same suite, or ran the same model twice).
+`GET /api/v1/evaluations/compare?ids=<id>&ids=<id>` (2–12 evaluations; `400` when they are not
+all suites, did not run the same suite, share an arm name, or ran the same model twice; `baseline=` turns on the
+[fallback analysis](suites.md#fallback-readiness)).
 
 `--arm` cannot be combined with `--model`, `--detach`, `--remote`, `--junit` or
 the gate flags (it ranks models, it does not gate one), and it does not run on
@@ -413,7 +438,7 @@ nimbus promote <run-id> --suite new.yaml --criteria "Must say 30 days"   # creat
 
 The case takes the run's prompt as its `input`. The run's *answer* is not assumed correct: it
 becomes the case's `expected` reference only with `--expected`, so check it first. `--criteria`
-adds what a good answer must satisfy. Works on the signed-in stack too, like `show`.
+adds what a good answer must satisfy. `--critical` marks the case one a fallback must never break. Works on the signed-in stack too, like `show`.
 
 With `--suite` the case is appended to the file as text, so the file's comments and layout stay
 exactly as they were, and the file is created (configured as the run was) when it does not exist.

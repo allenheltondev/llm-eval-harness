@@ -47,6 +47,7 @@ cases:
 | `cases[].criteria` | no | What *this* answer must do, in plain language (“must say 10am”, “must not promise a refund”). Every criterion must be met. |
 | `cases[].assert` | no | Up to 10 deterministic checks every repeat's answer must pass — see [Assertions](#assertions). |
 | `cases[].judge` | no | `false` skips the LLM judge for this case: it is scored from its `assert` checks alone. Default `true`. |
+| `cases[].critical` | no | `true` marks a case a fallback must never break — see [Fallback readiness](#fallback-readiness). Default `false`. |
 | `repeats` | no | Runs per case, 1–10 (default 1). A case's score is the mean across its repeats, so more than one catches a case that passes only some of the time. |
 | `pass_threshold` | no | A case passes when its score (0–1) reaches this (default 0.7). |
 | `min_pass_rate` | no | The fraction of cases (0–1) that must pass for `nimbus eval --gate` to exit `0`. Unset means every case. Ignored without `--gate`. |
@@ -54,6 +55,9 @@ cases:
 | `rubric` | no | How every case is judged. Defaults to the built-in suite rubric. |
 | `grader` | no | The judge: `model_id`, `provider`, `system_prompt` — same as any evaluation. |
 | `panel` | no | Up to 3 more judges (each `model_id`, `provider`, `system_prompt`), beside `grader` — see [A judge panel](#a-judge-panel). |
+| `arms` / `matrix` | no | Model-and-prompt variants to compare — see [Fallback readiness](#fallback-readiness). A file that has them still runs its plain `run_config` with `nimbus eval --suite`. |
+| `baseline` | no | The arm the others are measured against (default: an arm marked `baseline: true`, else the first). |
+| `readiness` | no | What a fallback must meet: `max_regression_rate`, `max_latency_ratio`, `max_cost_ratio`. |
 
 A case may have `expected`, `criteria`, both, or neither. With neither it is
 judged on the rubric alone: is this a correct, helpful answer?
@@ -146,6 +150,83 @@ Each judge is a separate pass of judge spend, priced with its own rates in
 `cost.judge_usd`, and every judge must be a different model.
 With `calibrate`, every judge is shown the calibration probes and each probe's score in the
 result is the mean across the judges that scored it.
+
+## Fallback readiness
+
+Ranking models says which is best. A fallback question is different: *if the primary is
+unavailable, what breaks?* And because another model usually needs a prompt of its own, the
+thing to test is a **model and prompt pair**, an *arm*. The runnable example is
+[`examples/fallback-suite.yaml`](examples/fallback-suite.yaml), kept valid by the test suite.
+
+```yaml
+arms:
+  - name: primary
+    model_id: amazon.nova-pro-v1:0
+    system_prompt_file: prompts/primary.md
+  - name: fallback
+    model_id: amazon.nova-lite-v1:0
+    system_prompt_file: prompts/fallback.md
+readiness:
+  max_regression_rate: 0.10
+  max_latency_ratio: 1.5
+```
+
+`nimbus eval --suite f.yaml --all-arms` runs each arm as its own stored evaluation and measures
+every other arm against the **baseline** (the first arm unless one says `baseline: true` or the
+file's `baseline:` names it; `--baseline NAME` overrides). An arm names only what it changes from
+`run_config`. `system_prompt_file` is read from the suite file's own directory and nowhere else:
+a borrowed suite cannot make nimbus read `~/.aws/credentials` and send it to a model provider.
+
+### What is measured
+
+For each other arm, the cases the baseline passes that it **fails** (its *regressions*), the
+cases it fixes, and the ratio of its p95 latency and estimated cost to the baseline's. The
+question is the **regression rate**: of the cases the baseline passes, the fraction the arm
+now fails. A `critical` case that regresses fails the arm outright, whatever the rate.
+
+The verdict is one of three:
+
+| Verdict | Meaning |
+|---|---|
+| `not_ready` | The evidence already shows it falls short: it did not complete, a critical case regressed, the regression rate is over the limit, or it is slower or dearer than allowed. |
+| `ready` | Even the exact one-sided 95% upper bound on its regression rate is inside the limit. |
+| `inconclusive` | It looks fine, but the suite is too small to rule out a rate over the limit. |
+
+`inconclusive` is the point. Zero regressions in 10 cases is consistent with a true regression
+rate of about 26%, so a short suite is never allowed to certify a fallback. The reason says how
+many cases would: with a 10% limit and no regressions, about **29** baseline-passing cases. A limit
+of `0` can never be certified, because a true rate just above zero always remains possible.
+
+### The caveats it addresses
+
+| Caveat | What it does about it |
+|---|---|
+| Model and prompt effects are tangled | Each arm lists what it changes (`model`, `prompt`, `inference`, `tools`). A `matrix:` runs every model with every prompt and reports each axis's **main effect**, the mean pass rate per value, and which axis moves it more. An arm that changes both at once gets a warning that a gain or loss cannot be credited to either. |
+| Answering well is not the same as being ready | Latency and cost ratios are part of the bar. A warning fires when the suite gives the model tools but no case asserts anything about tool calls; add `tool_called`, `tool_sequence` or `no_tool_errors` checks so a fallback that calls tools wrongly cannot pass. |
+| A small suite is noise | The verdict above; a warning below 20 cases; and a sign test on the cases the arm and baseline differ on, so a difference is called chance until it is not. |
+| One repeat hides flaky cases | A warning for arms that ran each case once. Raise `repeats`. |
+| A judge favours its own family | A warning when a judge (or panel member) is from the same model family as an arm. Add a judge from another family to the [panel](#a-judge-panel). |
+
+A grid instead of a list:
+
+```yaml
+matrix:
+  models:  [{name: pro, model_id: amazon.nova-pro-v1:0}, {name: lite, model_id: amazon.nova-lite-v1:0}]
+  prompts: [{name: primary, system_prompt_file: prompts/primary.md}, {name: fallback, system_prompt_file: prompts/fallback.md}]
+  baseline: {model: pro, prompt: primary}
+```
+
+Cells are named `model/prompt`, the baseline defaults to the first model and prompt, and a
+comparison holds at most 12 arms. Effects are main effects only: a prompt that helps one model and
+hurts another averages out, and is not reported separately.
+
+What no comparison can tell you: whether the fallback will be *available* when it is needed (rate
+limits, regional capacity), or how it behaves on inputs the suite does not cover. The suite bounds
+the second by how well it samples real traffic; `nimbus promote RUN_ID --critical` turns a run that
+mattered into a case a fallback must not break.
+
+`nimbus compare ID ID…` and the Evals tab's **Compare models** view (`#/evals/compare/…`) run the
+same analysis over evaluations that already ran, so a different baseline needs no new model calls.
 
 ## Assertions
 
