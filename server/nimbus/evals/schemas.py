@@ -20,6 +20,7 @@ from nimbus.engine.schemas import RunRequest
 from nimbus.errors import BadRequestError
 from nimbus.evals.assertions import MAX_CASE_ASSERTIONS, Assertion, expand_shorthand
 from nimbus.evals.judge import DEFAULT_JUDGE_MODEL_ID
+from nimbus.evals.readiness import ReadinessBar
 from nimbus.providers import DEFAULT_PROVIDER, Provider
 from nimbus.spend import Principal
 
@@ -87,6 +88,35 @@ class GraderConfig(BaseModel):
         return self
 
 
+class ArmTag(BaseModel):
+    """Which variant of a suite an evaluation is: a name, and where it sits in a grid.
+
+    An *arm* is a model and prompt pair (with its inference settings) that runs
+    the same suite as other arms, so they can be compared. The tag is
+    descriptive: the engine ignores it. It is stored with the evaluation so a
+    comparison built later can name the arm, find the baseline, and see which
+    axis (model, prompt) the arm varies on.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/:+-]*$")
+    #: The arm the others are measured against (usually the primary model and prompt).
+    baseline: bool = False
+    #: Where the arm sits in a models-by-prompts grid, e.g. ``{"model": "sonnet",
+    #: "prompt": "terse"}``. Lets a comparison say which axis moves the score.
+    axes: dict[str, str] = Field(default_factory=dict, max_length=4)
+
+    def stored(self) -> dict:
+        """The tag as persisted: only what is set, so an untagged suite stores nothing."""
+        stored: dict = {"name": self.name}
+        if self.baseline:
+            stored["baseline"] = True
+        if self.axes:
+            stored["axes"] = dict(self.axes)
+        return stored
+
+
 class SuiteRunConfig(RunRequest):
     """What every case in a suite runs with: a ``RunRequest`` minus the prompt.
 
@@ -146,6 +176,9 @@ class SuiteCase(BaseModel):
     #: ``False`` skips the LLM judge for this case: it is scored 1.0 / 0.0 per
     #: repeat from its assertions alone.
     judge: bool = True
+    #: A case a fallback must never regress on: if the baseline passes it and a
+    #: candidate does not, the candidate is not ready, whatever its overall rate.
+    critical: bool = False
 
     @field_validator("assert_", mode="before")
     @classmethod
@@ -162,9 +195,11 @@ class SuiteCase(BaseModel):
 
     @model_serializer(mode="wrap")
     def _omit_defaults(self, handler: SerializerFunctionWrapHandler) -> dict:
-        """Leave ``assert`` / ``judge`` out when unset, so a suite without them
-        serializes (and is stored) exactly as it did before they existed."""
+        """Leave ``assert`` / ``judge`` / ``critical`` out when unset, so a suite
+        without them serializes (and is stored) exactly as it did before they existed."""
         data = handler(self)
+        if not self.critical:
+            data.pop("critical", None)
         if not self.assert_:
             data.pop("assert", None)
             data.pop("assert_", None)
@@ -296,6 +331,13 @@ class EvaluationRequest(BaseModel):
     #: :func:`nimbus.evals.admission.admit`, which overwrites anything a client
     #: sends; it only travels in a request so the cloud worker can settle it.
     principal: Principal | None = None
+    #: Which arm of a comparison this suite evaluation is. Descriptive only; see
+    #: :class:`ArmTag`. Suites only.
+    arm: ArmTag | None = None
+    #: What a fallback must meet, kept with the evaluation so a later comparison
+    #: (the API, the web app) judges by the bar the suite's author set. It does
+    #: not affect how this evaluation runs. Suites only.
+    readiness: ReadinessBar | None = None
     #: Stop scheduling new runs once the estimated spend would pass this many
     #: USD; the evaluation still completes, with ``budget_exhausted: true``.
     #: See ``nimbus.evals.budget``.
@@ -315,8 +357,18 @@ class EvaluationRequest(BaseModel):
         elif not self.run_ids:
             raise BadRequestError("run_ids is required when kind is 'grade'")
         self._check_panel()
+        self._check_arm()
         self._check_budget_is_enforceable()
         return self
+
+    def _check_arm(self) -> None:
+        """An arm tag and a readiness bar describe suites; nothing else has arms."""
+        if (self.arm is not None or self.readiness is not None) and self.kind != "suite":
+            raise BadRequestError(
+                f"arm and readiness describe a suite's place in a comparison; "
+                f"they do nothing for kind {self.kind!r}",
+                code="arm_requires_suite",
+            )
 
     def _check_panel(self) -> None:
         """A panel grades a suite, and each judge is a different model."""
@@ -367,6 +419,10 @@ class EvaluationRequest(BaseModel):
                 config["user_email"] = self.principal.email
         if self.panel:
             config["panel"] = [judge.model_dump() for judge in self.panel]
+        if self.arm is not None:
+            config["arm"] = self.arm.stored()
+        if self.readiness is not None:
+            config["readiness"] = self.readiness.model_dump(exclude_none=True)
         if self.suite is not None:
             # The whole suite, so a stored evaluation says exactly what was tested.
             config["suite"] = self.suite.model_dump()
