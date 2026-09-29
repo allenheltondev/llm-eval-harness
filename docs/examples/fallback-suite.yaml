@@ -1,0 +1,65 @@
+# Can a cheaper model, with its own prompt, stand in for the primary?
+#
+#   nimbus eval --suite fallback-suite.yaml --all-arms
+#   nimbus eval --suite fallback-suite.yaml --all-arms --require-ready   # exit 3 unless ready
+#
+# Reference: docs/suites.md#fallback-readiness
+
+name: support-fallback
+
+run_config:
+  model_id: amazon.nova-lite-v1:0
+  inference:
+    temperature: 0
+
+# The variants to run. Each names only what it changes from run_config. Prompt files are read
+# from this file's directory (nothing outside it). The first arm is the baseline unless one says
+# `baseline: true` or `baseline:` below names it.
+arms:
+  - name: primary
+    model_id: amazon.nova-pro-v1:0
+    system_prompt_file: prompts/primary.md
+  - name: fallback
+    model_id: amazon.nova-lite-v1:0
+    system_prompt_file: prompts/fallback.md
+
+# What a fallback must meet. Regression rate: of the cases the primary passes, the fraction the
+# fallback may fail. The verdict is only "ready" when the suite is big enough to rule out more
+# than this -- with 0 regressions and a 10% limit that takes about 29 cases, so a short suite
+# reports "inconclusive" and says how many more it needs.
+readiness:
+  max_regression_rate: 0.10
+  max_latency_ratio: 1.5   # p95 no more than 1.5x the primary's
+  max_cost_ratio: 1.0      # and no dearer
+
+# To tell whether the model or the prompt is responsible for a difference, run a grid instead of
+# a list: every model with every prompt, judged against the first cell.
+#
+# matrix:
+#   models:
+#     - {name: pro,  model_id: amazon.nova-pro-v1:0}
+#     - {name: lite, model_id: amazon.nova-lite-v1:0}
+#   prompts:
+#     - {name: primary,  system_prompt_file: prompts/primary.md}
+#     - {name: fallback, system_prompt_file: prompts/fallback.md}
+#   baseline: {model: pro, prompt: primary}
+
+cases:
+  # `critical`: if the primary passes it and a fallback does not, the fallback is never ready.
+  - id: refund-window
+    critical: true
+    input: I bought shoes 20 days ago. Can I still get my money back?
+    expected: No refund -- refunds are only within 14 days -- but store credit is allowed to 30 days.
+    assert:
+      - contains: store credit
+        case_sensitive: false
+
+  - id: sunday-hours
+    input: What time do you open on Sunday?
+    criteria: Must say 10am, not the weekday time.
+    assert:
+      - regex: '\b10(:00)?\s*a\.?m\b'
+        flags: i
+
+  # If the model is given tools, assert on how it uses them (tool_called, tool_sequence,
+  # no_tool_errors): a fallback that answers well but calls tools wrongly should not pass.

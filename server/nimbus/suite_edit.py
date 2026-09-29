@@ -22,12 +22,13 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from nimbus.arms import FILE_KEYS
 from nimbus.errors import AppError, BadRequestError
 from nimbus.evals.schemas import EvaluationRequest
 
 #: Top-level keys a suite *file* carries that belong to the evaluation request,
 #: not to the suite proper (mirrors ``commands.build_suite_request``).
-_REQUEST_LEVEL_KEYS = ("rubric", "grader", "panel", "max_cost_usd")
+_REQUEST_LEVEL_KEYS = ("rubric", "grader", "panel", "max_cost_usd", *FILE_KEYS)
 
 _CASE_ID_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -62,6 +63,7 @@ def case_from_run(
     case_id: str | None = None,
     expected: bool = False,
     criteria: str | None = None,
+    critical: bool = False,
 ) -> dict[str, Any]:
     """A suite case from a stored run's prompt.
 
@@ -84,6 +86,8 @@ def case_from_run(
         case["expected"] = output
     if criteria:
         case["criteria"] = criteria
+    if critical:
+        case["critical"] = True
     return case
 
 
