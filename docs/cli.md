@@ -278,6 +278,13 @@ line (`"type": "comparison"`). The verdicts, the statistics behind them, and the
 `nimbus compare` takes two or more evaluation ids (`--baseline` by arm name or evaluation id,
 `--require-ready`, `--local` for this machine) and works on the signed-in stack too.
 
+`--save PLAN` (on `eval --all-arms` or `--arm … --baseline`, and on `compare`) writes a **fallback
+plan**: the arms shown ready to stand in for the baseline, pinned to the suite, prompts and bar they
+were judged on. `nimbus plan check PLAN [--suite FILE]` says, offline and free, whether that still
+holds, and exits `3` when it does not, so CI can hold a deploy on it. `--max-age-days` (with
+`--save`) sets how long a plan stays good (default 30). See
+[Saving the result](suites.md#saving-the-result-the-fallback-plan).
+
 ### Comparing models
 
 `--arm` runs one suite on several models and ranks them:

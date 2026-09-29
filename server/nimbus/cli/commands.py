@@ -16,20 +16,24 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import getpass
 import json
+import os
 import platform
 import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from typing import Annotated, Any, TextIO
 
+import yaml
 from pydantic import Field, TypeAdapter, ValidationError
 
 from nimbus import arms as arms_module
+from nimbus import plan as plan_module
 from nimbus import suite_edit
 from nimbus.awscat.catalog import ModelCatalog
 from nimbus.cli import diagnose, gating, remote, render
@@ -600,9 +604,83 @@ def _present(
         for line in unready:
             _note(err, f"| not ready: {line}")
         if unready:
+            _save_plan(args, comparison, err)
             return gating.EXIT_GATE_FAILED
         _note(err, "| every candidate is ready")
+    _save_plan(args, comparison, err)
     return code
+
+
+def _save_plan(args: argparse.Namespace, comparison: dict[str, Any], err: TextIO) -> None:
+    """Write the fallback plan the comparison supports, when ``--save`` asked for one."""
+    path: Path | None = getattr(args, "save", None)
+    if path is None:
+        return
+    suite: Path | None = getattr(args, "suite", None)
+    document = plan_module.build(
+        comparison,
+        suite_file=Path(os.path.relpath(suite, path.resolve().parent)).as_posix()
+        if suite is not None
+        else None,
+        max_age_days=args.max_age_days or plan_module.DEFAULT_MAX_AGE_DAYS,
+    )
+    try:
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise AppError(f"--save {path}: {exc.strerror or exc}") from None
+    ready = [entry["label"] for entry in document["fallbacks"]]
+    _note(
+        err,
+        f"| plan written to {path}: "
+        + (
+            f"ready to stand in for {document['baseline']['label']}: {', '.join(ready)}"
+            if ready
+            else "no arm is ready"
+        ),
+    )
+
+
+async def plan(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """``plan check``: does a saved fallback plan still describe what would run?
+
+    Offline: reads the plan and the suite file, calls no model. Exit ``3`` when
+    the plan is stale, so a CI job or a deploy can hold on it.
+    """
+    try:
+        document = plan_module.load(json.loads(args.file.read_text(encoding="utf-8")))
+    except OSError as exc:
+        raise AppError(f"{args.file}: {exc.strerror or exc}") from None
+    except json.JSONDecodeError:
+        raise AppError(f"{args.file}: not valid JSON") from None
+    recorded = document["suite"].get("file")
+    suite_path: Path | None = args.suite or (
+        args.file.resolve().parent / recorded if recorded else None
+    )
+    spec = None
+    if suite_path is not None and suite_path.is_file():
+        try:
+            spec = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise AppError(f"{suite_path}: cannot read the suite: {exc}") from None
+        if not isinstance(spec, dict):
+            raise AppError(f"{suite_path}: expected a mapping at the top level")
+    base_dir = suite_path.parent if suite_path is not None else args.file.resolve().parent
+    findings = plan_module.check(document, spec, base_dir, datetime.now(UTC))
+    stale = [finding for finding in findings if finding.stale]
+    if args.json:
+        payload = {
+            "type": "plan_check",
+            "stale": bool(stale),
+            "findings": [dataclasses.asdict(finding) for finding in findings],
+        }
+        _write(out, json.dumps(payload) + "\n")
+    else:
+        for finding in findings:
+            _write(err, f"{'stale' if finding.stale else 'note'}: {finding.message}\n")
+        if not stale:
+            ready = ", ".join(entry["label"] for entry in document["fallbacks"]) or "none"
+            _write(err, f"plan is current; ready fallbacks: {ready}\n")
+    return gating.EXIT_GATE_FAILED if stale else EXIT_OK
 
 
 def readiness_failures(comparison: dict[str, Any]) -> list[str]:

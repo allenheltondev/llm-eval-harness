@@ -75,7 +75,9 @@ async def test_two_stored_evaluations_are_compared(client):
     body = response.json()
     assert body["winner"] == "bedrock:strong"
     assert body["ranking"] == ["bedrock:strong", "bedrock:weak"]
-    assert body["suite"] == {"name": "support", "cases": 2}
+    assert body["suite"]["name"] == "support"
+    assert body["suite"]["cases"] == 2
+    assert body["suite"]["fingerprint"]
     assert [arm["evaluation_id"] for arm in body["arms"]] == [weak, strong]
     assert body["split_cases"] == ["b"]
 

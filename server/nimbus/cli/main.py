@@ -66,6 +66,7 @@ COMMANDS: dict[str, Command] = {
     "show": commands.show,
     "promote": commands.promote,
     "compare": commands.compare_stored,
+    "plan": commands.plan,
     "serve": commands.serve,
     "login": commands.login,
     "logout": commands.logout,
@@ -274,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
             "the file's baseline, else the first arm); turns on the fallback analysis"
         ),
     )
+    _add_plan_flags(evaluate, "with --all-arms or --arm and a baseline: ")
     evaluate.add_argument(
         "--require-ready",
         action="store_true",
@@ -434,6 +436,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-ready",
         action="store_true",
         help="exit 3 unless every other arm is ready to stand in for the baseline",
+    )
+    _add_plan_flags(compare, "")
+    compare.add_argument(
+        "--suite",
+        type=Path,
+        metavar="FILE",
+        help="the suite file these evaluations ran, recorded in the plan so `plan check` finds it",
+    )
+
+    plan = subparsers.add_parser(
+        "plan",
+        parents=[output],
+        help="check a saved fallback plan against the suite as it is now",
+        description=(
+            "A fallback plan (written by `eval --save` or `compare --save`) pins which "
+            "variants were shown ready to stand in for the baseline. `plan check` says "
+            "whether that still holds: the suite's cases, each arm's model and prompt, "
+            "the readiness bar, and the plan's age. It calls no model and costs nothing; "
+            "exit 3 when the plan is stale."
+        ),
+    )
+    plan_actions = plan.add_subparsers(dest="plan_command", metavar="ACTION", required=True)
+    plan_check = plan_actions.add_parser("check", parents=[output], help="is the plan still good?")
+    plan_check.add_argument("file", type=Path, metavar="PLAN", help="the plan file")
+    plan_check.add_argument(
+        "--suite",
+        type=Path,
+        metavar="FILE",
+        help="the suite file to check against (default: the one the plan recorded)",
     )
 
     runs = subparsers.add_parser("runs", parents=[output], help="list stored runs, newest first")
@@ -642,6 +673,26 @@ def _prepare_suite(args: argparse.Namespace) -> None:
         raise _suite_problem(args.suite, exc) from None
 
 
+def _add_plan_flags(parser: argparse.ArgumentParser, when: str) -> None:
+    """``--save`` and ``--max-age-days``: write the comparison's fallback plan."""
+    parser.add_argument(
+        "--save",
+        type=Path,
+        metavar="PLAN",
+        help=(
+            f"{when}write a fallback plan: the arms shown ready to stand in for the baseline, "
+            "pinned to this suite, these prompts and this bar (see `nimbus plan check`)"
+        ),
+    )
+    parser.add_argument(
+        "--max-age-days",
+        type=int,
+        metavar="DAYS",
+        default=None,
+        help="with --save: how long the plan stays good before it must be re-run (default: 30)",
+    )
+
+
 def _check_panel(args: argparse.Namespace) -> None:
     """A panel grades a suite's answers; nothing else has one to add to."""
     if args.panel_judge and args.suite is None:
@@ -660,6 +711,8 @@ def _check_arms(args: argparse.Namespace) -> None:
             raise UsageError(
                 "--require-ready judges arms against a baseline: use --all-arms or --arm"
             )
+        if args.save is not None:
+            raise UsageError("--save writes a comparison's plan: use --all-arms or --arm")
         return
     flag = "--all-arms" if args.all_arms else "--arm"
     if args.arm and args.all_arms:
@@ -685,6 +738,8 @@ def _check_arms(args: argparse.Namespace) -> None:
             )
     if args.require_ready and not (args.all_arms or args.baseline):
         raise UsageError("--require-ready needs a baseline: pass --baseline ARM")
+    if args.save is not None and not (args.all_arms or args.baseline):
+        raise UsageError("--save records who can stand in for a baseline: pass --baseline ARM")
     conflicts = [
         name
         for name, given in (
@@ -735,6 +790,11 @@ def _check_required(args: argparse.Namespace) -> None:
         raise UsageError("run needs a model: pass --model (see `nimbus models`)")
     if args.command == "compare" and len(args.ids) < 2:
         raise UsageError("compare needs at least two evaluation ids")
+    if args.command in ("eval", "compare") and args.max_age_days is not None:
+        if args.save is None:
+            raise UsageError("--max-age-days sets how long a saved plan lasts: pass --save PLAN")
+        if args.max_age_days < 1:
+            raise UsageError("--max-age-days must be at least 1")
     if args.command == "eval" and not (args.run or args.model or args.suite):
         raise UsageError(
             "eval needs --model (to execute new runs), --run (to grade stored ones), "

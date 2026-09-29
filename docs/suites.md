@@ -228,6 +228,39 @@ mattered into a case a fallback must not break.
 `nimbus compare ID ID…` and the Evals tab's **Compare models** view (`#/evals/compare/…`) run the
 same analysis over evaluations that already ran, so a different baseline needs no new model calls.
 
+### Saving the result: the fallback plan
+
+A comparison describes one moment. To let a runbook, a deploy check or an on-call engineer act on
+it, write it down:
+
+```bash
+nimbus eval --suite fallback-suite.yaml --all-arms --save fallback-plan.json
+nimbus compare <eval-id> <eval-id> --baseline primary --suite fallback-suite.yaml --save fallback-plan.json
+nimbus plan check fallback-plan.json        # offline, no model calls; exit 3 when stale
+```
+
+The plan is a JSON file (commit it next to the suite). `fallbacks` lists only the arms whose verdict
+was `ready`, best first; `evidence` keeps the `not_ready` and `inconclusive` ones with their reasons,
+so the file also says what was tried and left out. Each entry pins the model, the prompt id and the
+evaluation the verdict came from. The plan also pins the suite (a fingerprint of its cases, and
+where the file is), the readiness bar, and when it was made.
+
+`plan check` reads the suite file as it is now and reports every way the plan has drifted:
+
+| Finding | Meaning |
+|---|---|
+| `suite_changed` | a case's input, checks, expected answer or `critical` flag changed, so the verdicts are about different questions |
+| `arm_changed` | an arm now runs a different model or prompt than was judged, or is gone from the file |
+| `bar_changed` | the file's `readiness:` is not the bar the arms were judged by |
+| `expired` | the plan is older than `--max-age-days` (default 30, set with `--save`) |
+| `unverifiable` | the suite file is missing (stale), or declares no `arms:` so models and prompts were not rechecked (advice only) |
+| `no_fallback` | no arm was ready (advice only) |
+
+Only the first four and a missing file make the plan stale and the exit code `3`. Checking never
+proves a fallback still *works*, only that what was proven is what would run; re-running
+`--all-arms` and saving again is what makes a stale plan current. Prompt files are read the same
+way they are for a run, so a reworded prompt file is caught.
+
 ## Assertions
 
 Some requirements do not need a judge: “must mention store credit”, “must be

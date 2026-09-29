@@ -1992,3 +1992,256 @@ class TestPromoteCritical:
 
     def test_a_promoted_case_is_not_critical_unless_asked(self, cli, stored_run_id):
         assert "critical" not in cli("promote", stored_run_id).out
+
+
+class TestFallbackPlan:
+    @pytest.fixture
+    def saved(self, cli, suite_file, tmp_path, prompted_models):
+        """A 30-case suite whose `other` arm is ready, and the plan `--save` wrote for it."""
+        path = suite_file(many_cases_suite(30, ARMS_PRIMARY_AND_OTHER))
+        plan_path = tmp_path / "fallback-plan.json"
+        result = cli("eval", "--suite", path, "--all-arms", "--save", str(plan_path))
+        assert result.code == 0, result.err
+        return Path(path), plan_path
+
+    def test_save_writes_only_the_ready_arms_as_fallbacks(self, saved):
+        _, plan_path = saved
+
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        assert plan["baseline"]["label"] == "primary"
+        assert [entry["label"] for entry in plan["fallbacks"]] == ["other"]
+        assert plan["suite"]["file"] == "suite.yaml"
+        assert plan["suite"]["cases"] == 30
+        assert plan["fallbacks"][0]["evaluation_id"]
+
+    def test_an_arm_that_is_not_ready_is_kept_as_evidence_not_as_a_fallback(
+        self, cli, suite_file, tmp_path, prompted_models
+    ):
+        plan_path = tmp_path / "plan.json"
+
+        cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms", "--save", str(plan_path))
+
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        assert plan["fallbacks"] == []
+        assert [entry["label"] for entry in plan["evidence"]] == ["terse"]
+        assert plan["evidence"][0]["status"] == "not_ready"
+        assert plan["evidence"][0]["reasons"]
+
+    def test_a_fresh_plan_checks_clean_with_no_model_calls(self, cli, saved, prompted_models):
+        _, plan_path = saved
+        calls_before = len(prompted_models)
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 0, result.err
+        assert "plan is current; ready fallbacks: other" in result.err
+        assert len(prompted_models) == calls_before
+
+    def test_a_changed_case_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace("input: q3,", "input: a new question,"),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "the suite's cases changed" in result.err
+
+    def test_a_reworded_prompt_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace("system_prompt: OTHER", "system_prompt: NEW"),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "other now runs" in result.err
+
+    def test_a_swapped_model_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace(
+                "{name: other, system_prompt: OTHER}",
+                "{name: other, model_id: another-model, system_prompt: OTHER}",
+            ),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "another-model" in result.err
+
+    def test_a_removed_arm_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace(
+                "  - {name: other, system_prompt: OTHER}\n",
+                "  - {name: third, system_prompt: OTHER}\n",
+            ),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "other is no longer an arm" in result.err
+
+    def test_a_changed_bar_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace(
+                "max_regression_rate: 0.1", "max_regression_rate: 0.05"
+            ),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "readiness bar" in result.err
+
+    def test_an_old_plan_expires(self, cli, saved):
+        _, plan_path = saved
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["created_at"] = "2020-01-01T00:00:00Z"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "days old" in result.err
+
+    def test_max_age_days_is_kept_in_the_plan(self, cli, suite_file, tmp_path, prompted_models):
+        plan_path = tmp_path / "plan.json"
+
+        cli(
+            "eval",
+            "--suite",
+            suite_file(many_cases_suite(30, ARMS_PRIMARY_AND_OTHER)),
+            "--all-arms",
+            "--save",
+            str(plan_path),
+            "--max-age-days",
+            "7",
+        )
+
+        assert json.loads(plan_path.read_text(encoding="utf-8"))["max_age_days"] == 7
+
+    def test_a_missing_suite_file_cannot_be_verified(self, cli, saved):
+        suite, plan_path = saved
+        suite.unlink()
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "suite file was not found" in result.err
+
+    def test_json_output_lists_the_findings(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace("input: q3,", "input: other,"),
+            encoding="utf-8",
+        )
+
+        report = cli("plan", "check", str(plan_path), "--json").json()
+
+        assert report["stale"] is True
+        assert [finding["code"] for finding in report["findings"]] == ["suite_changed"]
+
+    def test_a_plan_from_stored_evaluations(self, cli, saved, tmp_path):
+        """`compare --save` builds the plan from history; `--suite` records where the suite is."""
+        suite, _ = saved
+        evaluations = [
+            arm["evaluation_id"]
+            for arm in cli("eval", "--suite", str(suite), "--all-arms").json()["arms"]
+        ]
+        plan_path = tmp_path / "from-history.json"
+
+        result = cli("compare", *evaluations, "--save", str(plan_path), "--suite", str(suite))
+
+        assert result.code == 0, result.err
+        assert cli("plan", "check", str(plan_path)).code == 0
+
+    def test_a_comparison_without_a_baseline_cannot_be_saved(self, cli, saved, tmp_path):
+        suite, _ = saved
+        evaluations = [
+            arm["evaluation_id"]
+            for arm in cli("eval", "--suite", str(suite), "--arm", "m1", "--arm", "m2").json()[
+                "arms"
+            ]
+        ]
+
+        result = cli("compare", *evaluations, "--save", str(tmp_path / "p.json"))
+
+        assert result.code != 0
+        assert "needs a baseline" in result.err
+
+    def test_save_needs_a_comparison(self, cli, suite_file):
+        result = cli("eval", "--suite", suite_file(), "--save", "plan.json")
+
+        assert result.code == 2
+        assert "--save writes a comparison's plan" in result.err
+
+    def test_save_with_ad_hoc_arms_needs_a_baseline(self, cli, suite_file):
+        result = cli(
+            "eval", "--suite", suite_file(), "--arm", "m1", "--arm", "m2", "--save", "plan.json"
+        )
+
+        assert result.code == 2
+        assert "pass --baseline" in result.err
+
+    def test_max_age_days_needs_save_and_a_positive_number(self, cli, suite_file):
+        assert cli("eval", "--suite", suite_file(), "--max-age-days", "3").code == 2
+        result = cli(
+            "eval",
+            "--suite",
+            suite_file(ARMS_SUITE),
+            "--all-arms",
+            "--save",
+            "p.json",
+            "--max-age-days",
+            "0",
+        )
+        assert result.code == 2
+
+    def test_a_file_that_is_not_a_plan_is_an_error(self, cli, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text('{"hello": 1}', encoding="utf-8")
+
+        result = cli("plan", "check", str(bad))
+
+        assert result.code != 0
+        assert "not a fallback plan" in result.err
+
+    def test_a_missing_or_malformed_plan_is_an_error(self, cli, tmp_path):
+        assert "No such file" in cli("plan", "check", str(tmp_path / "nope.json")).err
+        broken = tmp_path / "broken.json"
+        broken.write_text("{", encoding="utf-8")
+        assert "not valid JSON" in cli("plan", "check", str(broken)).err
+
+    def test_an_unwritable_plan_path_is_an_error(self, cli, suite_file, tmp_path, prompted_models):
+        result = cli(
+            "eval",
+            "--suite",
+            suite_file(ARMS_SUITE),
+            "--all-arms",
+            "--save",
+            str(tmp_path / "missing-dir" / "plan.json"),
+        )
+
+        assert result.code != 0
+        assert "--save" in result.err
+
+    def test_a_suite_that_is_not_a_mapping_or_not_yaml_is_an_error(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text("- just\n- a list\n", encoding="utf-8")
+        assert "expected a mapping" in cli("plan", "check", str(plan_path)).err
+
+        suite.write_text("a: [unclosed", encoding="utf-8")
+        assert "cannot read the suite" in cli("plan", "check", str(plan_path)).err

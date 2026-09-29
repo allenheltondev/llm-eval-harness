@@ -707,7 +707,23 @@ def test_arms_that_ran_different_questions_are_refused():
 def test_the_suite_header_names_the_suite_and_its_size():
     comparison = build(evaluation("a", all_pass(7)), evaluation("b", all_pass(7), model="m2"))
 
-    assert comparison["suite"] == {"name": "support", "cases": 7}
+    assert comparison["suite"]["name"] == "support"
+    assert comparison["suite"]["cases"] == 7
+
+
+def test_the_fingerprint_follows_the_cases_and_not_the_model_or_prompt():
+    from nimbus.evals.compare import suite_fingerprint
+
+    cases = [{"id": "a", "input": "q", "assert": [{"contains": "x"}]}]
+    base = {"cases": cases, "run_config": {"model_id": "m1", "system_prompt": "P"}}
+
+    same = {"cases": cases, "run_config": {"model_id": "m2", "system_prompt": "Q"}}
+    other_input = {"cases": [{**cases[0], "input": "different"}]}
+    other_check = {"cases": [{**cases[0], "assert": [{"contains": "y"}]}]}
+    critical = {"cases": [{**cases[0], "critical": True}]}
+
+    assert suite_fingerprint(base) == suite_fingerprint(same)
+    assert len({suite_fingerprint(x) for x in (base, other_input, other_check, critical)}) == 4
 
 
 # --------------------------------------------------------------------------- #

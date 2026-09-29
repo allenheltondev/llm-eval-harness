@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -619,6 +620,17 @@ def suite_differences(evaluations: list[dict[str, Any]]) -> list[str]:
     )
 
 
+def suite_fingerprint(suite: dict[str, Any]) -> str:
+    """A short stable id for what a stored suite asks: its cases, not its model or prompt.
+
+    Two suites with the same fingerprint pose the same questions with the same
+    checks, so results on one say something about the other. Changing a case,
+    its expected answer, its checks or its ``critical`` flag changes it.
+    """
+    cases = json.dumps(suite.get("cases") or [], sort_keys=True, default=str)
+    return hashlib.sha256(cases.encode("utf-8")).hexdigest()[:16]
+
+
 def build_comparison(
     evaluations: list[dict[str, Any]], *, baseline: str | None = None
 ) -> dict[str, Any]:
@@ -656,5 +668,9 @@ def build_comparison(
             else ("compare_duplicate_arm" if named else "compare_duplicate_model"),
         ) from None
     suite = (evaluations[0].get("config") or {}).get("suite") or {}
-    comparison["suite"] = {"name": suite.get("name"), "cases": len(suite.get("cases") or [])}
+    comparison["suite"] = {
+        "name": suite.get("name"),
+        "cases": len(suite.get("cases") or []),
+        "fingerprint": suite_fingerprint(suite),
+    }
     return comparison
