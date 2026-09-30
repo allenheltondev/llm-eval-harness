@@ -9,7 +9,6 @@ import yaml
 from nimbus import arms, suite_edit
 
 
-
 def _find_examples() -> Path:
     """Locate ``docs/examples`` by walking up, not by counting parents.
 
