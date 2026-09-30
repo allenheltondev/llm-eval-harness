@@ -546,3 +546,28 @@ describe('EvalsPage: a link that opens something', () => {
     expect(onSelectEvaluation).toHaveBeenCalledWith(null)
   })
 })
+
+describe('EvalsPage: arm names', () => {
+  it('shows which arm a suite evaluation was, so arms can be told apart', () => {
+    const arm = (id: string, config: EvaluationDetail['config']['arm']): EvaluationDetail => ({
+      ...rows[0],
+      id,
+      kind: 'suite',
+      config: { ...rows[0].config, arm: config }
+    })
+    useEvalStore.setState({
+      evaluations: [
+        arm('s-base', { name: 'primary', baseline: true }),
+        arm('s-fall', { name: 'fallback' }),
+        { ...rows[0], id: 's-plain', kind: 'suite' }
+      ]
+    })
+
+    render(<EvalsPage />)
+
+    expect(screen.getByTestId('eval-arm-s-base')).toHaveTextContent('primary · baseline')
+    expect(screen.getByTestId('eval-arm-s-fall')).toHaveTextContent('fallback')
+    expect(screen.getByTestId('eval-arm-s-fall')).not.toHaveTextContent('baseline')
+    expect(screen.queryByTestId('eval-arm-s-plain')).not.toBeInTheDocument()
+  })
+})

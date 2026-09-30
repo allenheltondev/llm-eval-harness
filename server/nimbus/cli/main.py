@@ -65,6 +65,8 @@ COMMANDS: dict[str, Command] = {
     "runs": commands.runs,
     "show": commands.show,
     "promote": commands.promote,
+    "compare": commands.compare_stored,
+    "plan": commands.plan,
     "serve": commands.serve,
     "login": commands.login,
     "logout": commands.logout,
@@ -257,6 +259,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     evaluate.add_argument(
+        "--all-arms",
+        action="store_true",
+        help=(
+            "with --suite: run every arm the file declares (`arms:` or `matrix:`: a model "
+            "and a prompt each) and compare them against the baseline. Run options such as "
+            "--temperature apply to every arm"
+        ),
+    )
+    evaluate.add_argument(
+        "--baseline",
+        metavar="ARM",
+        help=(
+            "with --all-arms or --arm: the arm the others are measured against (default: "
+            "the file's baseline, else the first arm); turns on the fallback analysis"
+        ),
+    )
+    _add_plan_flags(evaluate, "with --all-arms or --arm and a baseline: ")
+    evaluate.add_argument(
+        "--require-ready",
+        action="store_true",
+        help=(
+            "with a baseline: exit 3 unless every other arm is ready to stand in for it "
+            "(inconclusive counts as not ready)"
+        ),
+    )
+    evaluate.add_argument(
         "--run",
         action="append",
         metavar="RUN_ID",
@@ -388,6 +416,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp_test.add_argument("id", help="the server's id")
 
+    compare = subparsers.add_parser(
+        "compare",
+        parents=[output],
+        help="compare suite evaluations that already ran: no model calls, no cost",
+        description=(
+            "Compare two or more stored suite evaluations of the same suite: which cases a "
+            "candidate breaks, whether a suite this size can say it is ready, what differs "
+            "between the arms. Works on the signed-in stack, or here with --local."
+        ),
+    )
+    compare.add_argument("ids", nargs="+", metavar="EVALUATION_ID", help="two or more evaluations")
+    compare.add_argument(
+        "--baseline",
+        metavar="ARM",
+        help="the arm (its name, or its evaluation id) to measure the others against",
+    )
+    compare.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="exit 3 unless every other arm is ready to stand in for the baseline",
+    )
+    _add_plan_flags(compare, "")
+    compare.add_argument(
+        "--suite",
+        type=Path,
+        metavar="FILE",
+        help="the suite file these evaluations ran, recorded in the plan so `plan check` finds it",
+    )
+
+    plan = subparsers.add_parser(
+        "plan",
+        parents=[output],
+        help="check a saved fallback plan against the suite as it is now",
+        description=(
+            "A fallback plan (written by `eval --save` or `compare --save`) pins which "
+            "variants were shown ready to stand in for the baseline. `plan check` says "
+            "whether that still holds: the suite's cases, each arm's model and prompt, "
+            "the readiness bar, and the plan's age. It calls no model and costs nothing; "
+            "exit 3 when the plan is stale."
+        ),
+    )
+    plan_actions = plan.add_subparsers(dest="plan_command", metavar="ACTION", required=True)
+    plan_check = plan_actions.add_parser("check", parents=[output], help="is the plan still good?")
+    plan_check.add_argument("file", type=Path, metavar="PLAN", help="the plan file")
+    plan_check.add_argument(
+        "--suite",
+        type=Path,
+        metavar="FILE",
+        help="the suite file to check against (default: the one the plan recorded)",
+    )
+
     runs = subparsers.add_parser("runs", parents=[output], help="list stored runs, newest first")
     runs.add_argument("--limit", type=int, default=20, help="rows per page (default: 20)")
     runs.add_argument("--model", help="only runs on this model id")
@@ -423,6 +502,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="use the run's output as the case's reference answer (check it is right first)",
     )
     promote.add_argument("--criteria", help="what a good answer to this case must satisfy")
+    promote.add_argument(
+        "--critical",
+        action="store_true",
+        help="mark the case critical: a fallback that breaks it is never ready",
+    )
 
     login = subparsers.add_parser(
         "login",
@@ -583,10 +667,30 @@ def _prepare_suite(args: argparse.Namespace) -> None:
     args.suite_spec = load_suite_file(args.suite)
     try:
         commands.build_suite_request(args)
-        if args.arm:
+        if args.arm or args.all_arms:
             commands.build_arm_requests(args)
     except (ValidationError, AppError) as exc:
         raise _suite_problem(args.suite, exc) from None
+
+
+def _add_plan_flags(parser: argparse.ArgumentParser, when: str) -> None:
+    """``--save`` and ``--max-age-days``: write the comparison's fallback plan."""
+    parser.add_argument(
+        "--save",
+        type=Path,
+        metavar="PLAN",
+        help=(
+            f"{when}write a fallback plan: the arms shown ready to stand in for the baseline, "
+            "pinned to this suite, these prompts and this bar (see `nimbus plan check`)"
+        ),
+    )
+    parser.add_argument(
+        "--max-age-days",
+        type=int,
+        metavar="DAYS",
+        default=None,
+        help="with --save: how long the plan stays good before it must be re-run (default: 30)",
+    )
 
 
 def _check_panel(args: argparse.Namespace) -> None:
@@ -596,16 +700,49 @@ def _check_panel(args: argparse.Namespace) -> None:
 
 
 def _check_arms(args: argparse.Namespace) -> None:
-    """``--arm`` compares models on one suite; what would make that ambiguous is refused."""
-    if not args.arm:
+    """``--arm`` / ``--all-arms`` compare variants of a suite; the ambiguous is refused."""
+    comparing = bool(args.arm) or args.all_arms
+    if not comparing:
+        if args.baseline:
+            raise UsageError(
+                "--baseline names an arm to measure against: use it with --all-arms or --arm"
+            )
+        if args.require_ready:
+            raise UsageError(
+                "--require-ready judges arms against a baseline: use --all-arms or --arm"
+            )
+        if args.save is not None:
+            raise UsageError("--save writes a comparison's plan: use --all-arms or --arm")
         return
+    flag = "--all-arms" if args.all_arms else "--arm"
+    if args.arm and args.all_arms:
+        raise UsageError("--arm names models ad hoc and --all-arms runs the file's; pass one")
     if args.suite is None:
-        raise UsageError("--arm compares models on a suite: pass --suite FILE")
+        raise UsageError(f"{flag} compares variants of a suite: pass --suite FILE")
     if args.model:
-        raise UsageError("--arm names each model to compare; drop --model")
+        raise UsageError(f"{flag} names each model to compare; drop --model")
+    if args.all_arms:
+        varied = [
+            name
+            for name, given in (
+                ("--provider", args.provider is not None),
+                ("--system", args.system is not None),
+                ("--system-file", args.system_file is not None),
+            )
+            if given
+        ]
+        if varied:
+            raise UsageError(
+                f"{', '.join(varied)} would override what every arm varies; set it in the "
+                "file's arms instead"
+            )
+    if args.require_ready and not (args.all_arms or args.baseline):
+        raise UsageError("--require-ready needs a baseline: pass --baseline ARM")
+    if args.save is not None and not (args.all_arms or args.baseline):
+        raise UsageError("--save records who can stand in for a baseline: pass --baseline ARM")
     conflicts = [
-        flag
-        for flag, given in (
+        name
+        for name, given in (
             ("--detach", args.detach),
             ("--remote", args.remote),
             ("--junit", args.junit is not None),
@@ -617,12 +754,12 @@ def _check_arms(args: argparse.Namespace) -> None:
     ]
     if conflicts:
         raise UsageError(
-            f"{', '.join(conflicts)} cannot apply to a comparison: it ranks models, "
-            "it does not gate one"
+            f"{', '.join(conflicts)} cannot apply to a comparison: it ranks variants, "
+            "it does not gate one (--require-ready gates on readiness)"
         )
     if args.target is not None:
         raise UsageError(
-            "--arm runs on this machine, not on the stack you are signed in to: add --local"
+            f"{flag} runs on this machine, not on the stack you are signed in to: add --local"
         )
 
 
@@ -651,6 +788,13 @@ def _check_required(args: argparse.Namespace) -> None:
     """The requirements that depend on other arguments."""
     if args.command == "run" and not args.model:
         raise UsageError("run needs a model: pass --model (see `nimbus models`)")
+    if args.command == "compare" and len(args.ids) < 2:
+        raise UsageError("compare needs at least two evaluation ids")
+    if args.command in ("eval", "compare") and args.max_age_days is not None:
+        if args.save is None:
+            raise UsageError("--max-age-days sets how long a saved plan lasts: pass --save PLAN")
+        if args.max_age_days < 1:
+            raise UsageError("--max-age-days must be at least 1")
     if args.command == "eval" and not (args.run or args.model or args.suite):
         raise UsageError(
             "eval needs --model (to execute new runs), --run (to grade stored ones), "
@@ -682,7 +826,9 @@ def _check_required(args: argparse.Namespace) -> None:
 
 
 #: The commands that run wherever the target is: a signed-in stack, or here.
-TARGETED = frozenset({"run", "eval", "runs", "show", "promote", "models", "tools", "mcp"})
+TARGETED = frozenset(
+    {"run", "eval", "compare", "runs", "show", "promote", "models", "tools", "mcp"}
+)
 
 
 def resolve_target(args: argparse.Namespace) -> None:

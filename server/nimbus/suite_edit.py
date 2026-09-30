@@ -22,12 +22,13 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from nimbus.arms import FILE_KEYS
 from nimbus.errors import AppError, BadRequestError
 from nimbus.evals.schemas import EvaluationRequest
 
 #: Top-level keys a suite *file* carries that belong to the evaluation request,
 #: not to the suite proper (mirrors ``commands.build_suite_request``).
-_REQUEST_LEVEL_KEYS = ("rubric", "grader", "panel", "max_cost_usd")
+_REQUEST_LEVEL_KEYS = ("rubric", "grader", "panel", "max_cost_usd", *FILE_KEYS)
 
 _CASE_ID_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -62,6 +63,7 @@ def case_from_run(
     case_id: str | None = None,
     expected: bool = False,
     criteria: str | None = None,
+    critical: bool = False,
 ) -> dict[str, Any]:
     """A suite case from a stored run's prompt.
 
@@ -84,6 +86,8 @@ def case_from_run(
         case["expected"] = output
     if criteria:
         case["criteria"] = criteria
+    if critical:
+        case["critical"] = True
     return case
 
 
@@ -156,10 +160,25 @@ def append_case(text: str, case: dict[str, Any], *, as_json: bool = False) -> st
 
 def validate_suite_text(text: str) -> None:
     """Raise unless ``text`` is a suite the evaluation engine accepts."""
-    data = _parse(text)
+    _validated_request(_parse(text))
+
+
+def stored_suite(data: dict[str, Any]) -> dict[str, Any]:
+    """The suite a file's mapping becomes once validated, as an evaluation stores it.
+
+    Defaults are filled in exactly as for a run, so two files (or a file and a
+    stored evaluation) that mean the same suite come out equal.
+    """
+    request = _validated_request(dict(data))
+    if request.suite is None:
+        raise SuiteEditError("the file holds no suite")
+    return request.suite.model_dump()
+
+
+def _validated_request(data: dict[str, Any]) -> EvaluationRequest:
     request_level = {key: data.pop(key) for key in _REQUEST_LEVEL_KEYS if key in data}
     try:
-        EvaluationRequest.model_validate({"kind": "suite", "suite": data, **request_level})
+        return EvaluationRequest.model_validate({"kind": "suite", "suite": data, **request_level})
     except ValidationError as exc:
         problems = "; ".join(
             f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"

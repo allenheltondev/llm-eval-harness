@@ -64,6 +64,7 @@ import asyncio
 import copy
 import json
 import logging
+import math
 import random
 import time
 from collections.abc import Callable
@@ -831,6 +832,7 @@ def _build_suite_result(
             "cases_errored": sum(1 for case in cases if case["status"] in ("error", "judge_error")),
             "judge_overall_score": mean,
             **_assertion_metrics(cases),
+            **_latency_metrics(outcomes),
         },
         "run_ids": [outcome.run_id for outcome in outcomes if outcome.succeeded],
         "failed_runs": [
@@ -896,6 +898,22 @@ def _calibration(
         "empty_mean": mean("empty"),
         "flagged": flagged,
     }
+
+
+def _latency_metrics(outcomes: list[RunOutcome]) -> dict[str, dict[str, int]]:
+    """``latency_ms: {p50, p95}`` over the runs that answered; nothing when none did.
+
+    Nearest-rank percentiles of each run's wall-clock time, so a fallback that
+    answers as well but twice as slowly shows up next to its pass rate.
+    """
+    durations = sorted(outcome.duration_ms for outcome in outcomes if outcome.succeeded)
+    if not durations:
+        return {}
+
+    def percentile(fraction: float) -> int:
+        return durations[max(0, math.ceil(fraction * len(durations)) - 1)]
+
+    return {"latency_ms": {"p50": percentile(0.50), "p95": percentile(0.95)}}
 
 
 def _assertion_metrics(cases: list[dict[str, Any]]) -> dict[str, int]:

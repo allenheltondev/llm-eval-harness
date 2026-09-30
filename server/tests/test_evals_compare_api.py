@@ -75,7 +75,9 @@ async def test_two_stored_evaluations_are_compared(client):
     body = response.json()
     assert body["winner"] == "bedrock:strong"
     assert body["ranking"] == ["bedrock:strong", "bedrock:weak"]
-    assert body["suite"] == {"name": "support", "cases": 2}
+    assert body["suite"]["name"] == "support"
+    assert body["suite"]["cases"] == 2
+    assert body["suite"]["fingerprint"]
     assert [arm["evaluation_id"] for arm in body["arms"]] == [weak, strong]
     assert body["split_cases"] == ["b"]
 
@@ -171,14 +173,82 @@ async def test_at_least_two_evaluations_are_needed(client):
     assert (await compare(client)).status_code == 422
 
 
-async def test_no_more_than_six_can_be_compared(client):
-    ids = [store_evaluation(f"m{n}", result(ALL_PASS)) for n in range(7)]
+async def test_no_more_than_twelve_can_be_compared(client):
+    ids = [store_evaluation(f"m{n}", result(ALL_PASS)) for n in range(13)]
 
     assert (await compare(client, *ids)).status_code == 422
-    assert (await compare(client, *ids[:6])).status_code == 200
+    assert (await compare(client, *ids[:12])).status_code == 200
 
 
 async def test_the_compare_route_does_not_shadow_a_real_evaluation_lookup(client):
     known = store_evaluation("m1", result(ALL_PASS))
 
     assert (await client.get(f"/api/v1/evaluations/{known}")).status_code == 200
+
+
+def tagged_evaluation(name: str, model: str, outcome, *, baseline: bool = False) -> str:
+    """A stored, arm-tagged suite evaluation (the tag lives in its config)."""
+    repo = get_history_repo(Settings(_env_file=None))
+    record = repo.create_evaluation(
+        kind="suite",
+        run_ids=[],
+        config={
+            "kind": "suite",
+            "arm": {"name": name, **({"baseline": True} if baseline else {})},
+            "suite": {
+                "name": "support",
+                "run_config": {"model_id": model},
+                "cases": CASES,
+            },
+        },
+        status="pending",
+    )
+    repo.update_evaluation(record.id, status="completed", result=outcome)
+    return record.id
+
+
+async def test_a_baseline_turns_on_the_fallback_analysis(client):
+    primary = tagged_evaluation("primary", "m1", result(ALL_PASS), baseline=True)
+    fallback = tagged_evaluation("fallback", "m2", result(HALF))
+
+    response = await compare(client, primary, fallback)
+
+    body = response.json()
+    assert body["baseline"] == "primary"  # the tagged arm, with no query parameter needed
+    vs = next(arm for arm in body["arms"] if arm["label"] == "fallback")["vs_baseline"]
+    assert vs["regressions"] == ["b"]
+    assert vs["status"] in ("not_ready", "inconclusive")
+    assert body["bar"]["source"] == "default"
+
+
+async def test_a_baseline_can_be_named_in_the_query(client):
+    one = tagged_evaluation("one", "m1", result(ALL_PASS))
+    two = tagged_evaluation("two", "m2", result(HALF))
+
+    response = await client.get(
+        "/api/v1/evaluations/compare", params=[("ids", one), ("ids", two), ("baseline", two)]
+    )
+
+    assert response.json()["baseline"] == "two"
+
+
+async def test_an_unknown_baseline_is_a_named_400(client):
+    one = tagged_evaluation("one", "m1", result(ALL_PASS))
+    two = tagged_evaluation("two", "m2", result(HALF))
+
+    response = await client.get(
+        "/api/v1/evaluations/compare", params=[("ids", one), ("ids", two), ("baseline", "nope")]
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "compare_unknown_baseline"
+
+
+async def test_two_arms_with_one_name_are_refused_with_the_arm_code(client):
+    one = tagged_evaluation("same", "m1", result(ALL_PASS))
+    two = tagged_evaluation("same", "m2", result(HALF))
+
+    response = await compare(client, one, two)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "compare_duplicate_arm"

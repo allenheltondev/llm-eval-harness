@@ -310,35 +310,112 @@ def _failed_assertion_lines(case: dict[str, Any]) -> list[str]:
     return lines
 
 
-def comparison_lines(comparison: dict[str, Any]) -> list[str]:
-    """A model comparison for a human: one row per arm, best first, then the verdict.
+_VERDICT_LABELS = {"ready": "READY", "not_ready": "NOT READY", "inconclusive": "INCONCLUSIVE"}
 
-    The arms are listed in ranking order, arms with no result last. Below the
-    table go the winner (or the tie, which is what level quality is), and the
-    cases the models disagree on, since those are the ones worth reading.
+
+def _names(ids: list[str], limit: int = 8) -> str:
+    """Case ids for a line, shortened so a long list does not bury the rest."""
+    shown = ", ".join(ids[:limit])
+    return shown if len(ids) <= limit else f"{shown} (+{len(ids) - limit} more)"
+
+
+def _effects_line(effects: dict[str, Any]) -> str:
+    spread = {name: round(value * 100) for name, value in effects["spread"].items()}
+    moves = ", ".join(f"{name} {points} points" for name, points in spread.items())
+    dominant = effects["dominant"]
+    verdict = (
+        f"{dominant} matters more" if dominant else "neither clearly matters more than the other"
+    )
+    return f"effects: the pass rate moves by {moves}: {verdict}"
+
+
+def comparison_lines(comparison: dict[str, Any]) -> list[str]:
+    """A comparison for a human: one row per arm, best first, then what to make of it.
+
+    Arms are listed in ranking order, arms with no result last. Without a
+    baseline the rest is the winner (or the tie, which is what level quality is)
+    and the cases the arms disagree on. With one, each other arm also gets its
+    verdict and the reasons for it, the cases it broke and fixed, and what it
+    changes; then which axis moves the score, and any warnings about how far to
+    trust the result.
     """
     by_label = {arm["label"]: arm for arm in comparison["arms"]}
     ranked = [by_label[label] for label in comparison["ranking"]]
     unranked = [arm for arm in comparison["arms"] if arm["label"] not in comparison["ranking"]]
+    baseline = comparison.get("baseline")
+    show_latency = any(arm.get("latency_p95_ms") for arm in comparison["arms"])
+
+    headers = ["MODEL", "PASSED", "SCORE"]
+    if show_latency:
+        headers.append("P95")
+    headers.append("COST")
+    if baseline:
+        headers.append("VS BASELINE")
+
     rows: list[list[str]] = []
     for arm in ranked + unranked:
+        label = f"{arm['label']} (baseline)" if arm["label"] == baseline else arm["label"]
+        latency = _duration(arm["latency_p95_ms"]) if arm.get("latency_p95_ms") else "-"
         if arm["pass_rate"] is None:
-            rows.append([arm["label"], f"no result ({arm['status']})", "-", "-"])
-            continue
-        if arm["label"] not in comparison["ranking"]:
-            rows.append([arm["label"], f"not ranked ({arm['status']})", "-", usd(arm["cost_usd"])])
-            continue
-        passed = f"{arm['cases_passed']}/{arm['cases_total']} ({arm['pass_rate']:.0%})"
-        score = "-" if arm["score"] is None else f"{arm['score']} {arm['grade'] or ''}".strip()
-        rows.append([arm["label"], passed, score, usd(arm["cost_usd"])])
-    lines = table(rows, ["MODEL", "PASSED", "SCORE", "COST"]).splitlines()
+            cells = [label, f"no result ({arm['status']})", "-"]
+            cells += ["-"] if show_latency else []
+            cells += ["-"]
+        elif arm["label"] not in comparison["ranking"]:
+            cells = [label, f"not ranked ({arm['status']})", "-"]
+            cells += [latency] if show_latency else []
+            cells += [usd(arm["cost_usd"])]
+        else:
+            passed = f"{arm['cases_passed']}/{arm['cases_total']} ({arm['pass_rate']:.0%})"
+            score = "-" if arm["score"] is None else f"{arm['score']} {arm['grade'] or ''}".strip()
+            cells = [label, passed, score]
+            cells += [latency] if show_latency else []
+            cells += [usd(arm["cost_usd"])]
+        if baseline:
+            vs = arm.get("vs_baseline")
+            cells.append(
+                "-"
+                if arm["label"] == baseline
+                else _VERDICT_LABELS.get((vs or {}).get("status"), "?")
+            )
+        rows.append(cells)
+    lines = table(rows, headers).splitlines()
+
     if comparison["winner"]:
         lines.append(f"winner: {comparison['winner']}")
     elif comparison["tied"]:
         lines.append(f"tie at the top: {', '.join(comparison['tied'])}")
     if comparison["split_cases"]:
         lines.append(f"models disagree on: {', '.join(comparison['split_cases'])}")
-    return [_line(line) for line in lines]
+
+    if baseline:
+        for arm in comparison["arms"]:
+            vs = arm.get("vs_baseline")
+            if arm["label"] == baseline or vs is None:
+                continue
+            lines.append("")
+            lines.append(f"{arm['label']}: {_VERDICT_LABELS[vs['status']]}")
+            lines += [f"  - {reason}" for reason in vs["reasons"]]
+            detail = []
+            if vs["regressions"]:
+                detail.append(f"broke: {_names(vs['regressions'])}")
+            if vs["improvements"]:
+                detail.append(f"fixed: {_names(vs['improvements'])}")
+            if vs["changes"]:
+                detail.append(f"changes: {', '.join(vs['changes'])}")
+            if detail:
+                lines.append("  " + "; ".join(detail))
+            differing = len(vs["regressions"]) + len(vs["improvements"])
+            if differing:
+                lines.append(
+                    f"  differs from the baseline on {differing} case(s); "
+                    f"sign test p={vs['sign_test_p']:.2f}"
+                )
+    if comparison.get("effects"):
+        lines.append("")
+        lines.append(_effects_line(comparison["effects"]))
+    for warning in comparison.get("warnings") or []:
+        lines.append(f"warning: {warning['message']}")
+    return [_line(line) if line else _line("") for line in lines]
 
 
 def table(rows: list[list[str]], headers: list[str]) -> str:

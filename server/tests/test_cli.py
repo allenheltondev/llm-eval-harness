@@ -1382,7 +1382,7 @@ class TestArms:
         [
             (["--model", "m"], "drop --model"),
             (["--junit", "out.xml"], "cannot apply to a comparison"),
-            (["--gate"], "it ranks models, it does not gate one"),
+            (["--gate"], "it ranks variants, it does not gate one"),
             (["--fail-under", "50"], "--fail-under cannot apply to a comparison"),
             (["--fail-on-case-failure"], "cannot apply to a comparison"),
         ],
@@ -1401,7 +1401,7 @@ class TestArms:
         result = cli("eval", "-m", "m", "-p", "hi", "--arm", "good")
 
         assert result.code == 2
-        assert "--arm compares models on a suite: pass --suite FILE" in result.err
+        assert "--arm compares variants of a suite: pass --suite FILE" in result.err
 
     def test_the_same_model_twice_is_refused_before_anything_runs(
         self, cli, suite_file, answering_arms
@@ -1610,3 +1610,638 @@ class TestPromote:
 
         assert result.code != 0
         assert "has no output" in result.err
+
+
+# --------------------------------------------------------------------------- #
+# Fallback readiness: declared arms, a baseline, and a verdict
+# --------------------------------------------------------------------------- #
+
+#: What the model says for each system prompt an arm gives it.
+PROMPT_ANSWERS = {
+    "FULL": "The window is 30 days and we open Sunday.",
+    "TERSE": "30 days.",
+    "OTHER": "30 days and Sunday.",
+}
+
+
+@pytest.fixture
+def prompted_models(monkeypatch):
+    """A model that answers according to the system prompt it was given."""
+    seen: list = []
+
+    def build(request, settings):
+        seen.append(request)
+        return FakeModel([Text(PROMPT_ANSWERS.get(request.system_prompt, "no idea"))])
+
+    monkeypatch.setattr(commands, "build_model", build)
+    return seen
+
+
+ARMS_SUITE = """\
+run_config: {model_id: base-model}
+readiness: {max_regression_rate: 0.1}
+arms:
+  - {name: primary, system_prompt: FULL}
+  - {name: terse, system_prompt: TERSE}
+cases:
+  - {id: refund, input: q1, critical: true, judge: false, assert: [{contains: 30 days}]}
+  - {id: hours, input: q2, judge: false, assert: [{contains: Sunday}]}
+"""
+
+
+ARMS_PRIMARY_AND_OTHER = (
+    "arms:\n  - {name: primary, system_prompt: FULL}\n  - {name: other, system_prompt: OTHER}\n"
+)
+
+
+def many_cases_suite(count: int, arms: str = "") -> str:
+    """A suite of ``count`` cases every prompt but TERSE answers correctly."""
+    cases = "".join(
+        f"  - {{id: c{n:02d}, input: q{n}, judge: false, assert: [{{contains: Sunday}}]}}\n"
+        for n in range(count)
+    )
+    return (
+        "run_config: {model_id: base-model}\n"
+        "readiness: {max_regression_rate: 0.1}\n"
+        f"{arms}cases:\n{cases}"
+    )
+
+
+class TestFallbackArms:
+    def test_a_file_that_declares_arms_still_runs_plainly_without_the_flag(
+        self, cli, suite_file, prompted_models
+    ):
+        result = cli("eval", "--suite", suite_file(ARMS_SUITE))
+
+        assert result.code == 0, result.err
+        assert result.json()["status"] == "completed"
+        assert len(prompted_models) == 2  # one run per case: the run_config alone, no arms
+
+    def test_all_arms_runs_each_arm_and_measures_the_others_against_the_first(
+        self, cli, suite_file, prompted_models
+    ):
+        result = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms")
+
+        assert result.code == 0, result.err
+        comparison = result.json()
+        assert comparison["baseline"] == "primary"
+        assert comparison["bar"]["source"] == "suite"
+        terse = next(arm for arm in comparison["arms"] if arm["label"] == "terse")
+        assert terse["changes"] == ["prompt"]
+        assert terse["vs_baseline"]["regressions"] == ["hours"]
+        assert terse["vs_baseline"]["status"] == "not_ready"
+        assert {request.system_prompt for request in prompted_models} == {"FULL", "TERSE"}
+
+    def test_the_human_output_says_what_broke_and_why_it_is_not_ready(
+        self, cli, suite_file, prompted_models
+    ):
+        result = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms")
+
+        assert "primary (baseline)" in result.err
+        assert "terse: NOT READY" in result.err
+        assert "broke: hours" in result.err
+        assert "changes: prompt" in result.err
+        assert "2 arms, 4 runs in all" in result.err  # what it is about to do, before doing it
+
+    def test_each_arm_is_stored_tagged_with_its_name_and_the_suites_bar(
+        self, cli, suite_file, prompted_models
+    ):
+        comparison = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms").json()
+
+        stored = cli("show", comparison["arms"][1]["evaluation_id"]).json()
+
+        assert stored["config"]["arm"] == {"name": "terse"}
+        assert stored["config"]["readiness"] == {"max_regression_rate": 0.1}
+        assert stored["config"]["suite"]["cases"][0]["critical"] is True
+
+    def test_require_ready_exits_3_when_a_candidate_is_not_ready(
+        self, cli, suite_file, prompted_models
+    ):
+        result = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms", "--require-ready")
+
+        assert result.code == 3
+        assert "not ready: terse (not_ready)" in result.err
+
+    def test_require_ready_exits_0_when_the_evidence_is_strong_enough(
+        self, cli, suite_file, prompted_models
+    ):
+        arms = ARMS_PRIMARY_AND_OTHER
+
+        result = cli(
+            "eval",
+            "--suite",
+            suite_file(many_cases_suite(30, arms)),
+            "--all-arms",
+            "--require-ready",
+        )
+
+        assert result.code == 0, result.err
+        assert "every candidate is ready" in result.err
+
+    def test_a_small_clean_suite_is_inconclusive_and_does_not_pass_require_ready(
+        self, cli, suite_file, prompted_models
+    ):
+        arms = ARMS_PRIMARY_AND_OTHER
+
+        result = cli(
+            "eval",
+            "--suite",
+            suite_file(many_cases_suite(6, arms)),
+            "--all-arms",
+            "--require-ready",
+        )
+
+        assert result.code == 3
+        assert "other: INCONCLUSIVE" in result.err
+        assert "about 29 such cases" in result.err
+
+    def test_baseline_picks_a_different_arm_to_measure_against(
+        self, cli, suite_file, prompted_models
+    ):
+        result = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms", "--baseline", "terse")
+
+        comparison = result.json()
+        assert comparison["baseline"] == "terse"
+        primary = next(arm for arm in comparison["arms"] if arm["label"] == "primary")
+        assert primary["vs_baseline"]["improvements"] == ["hours"]
+
+    def test_json_mode_ends_with_one_comparison_line(self, cli, suite_file, prompted_models):
+        result = cli("--json", "eval", "--suite", suite_file(ARMS_SUITE), "--all-arms")
+
+        last = result.ndjson()[-1]
+        assert last["type"] == "comparison"
+        assert last["baseline"] == "primary"
+
+    def test_ad_hoc_arm_models_can_be_measured_against_a_baseline_too(
+        self, cli, suite_file, monkeypatch
+    ):
+        answers = {"good": "30 days and Sunday.", "weak": "30 days."}
+        monkeypatch.setattr(
+            commands, "build_model", lambda req, settings: FakeModel([Text(answers[req.model_id])])
+        )
+
+        result = cli(
+            "eval", "--suite", suite_file(ARMS_SUITE), "--arm", "good", "--arm", "weak",
+            "--baseline", "good",
+        )  # fmt: skip
+
+        weak = next(a for a in result.json()["arms"] if a["model_id"] == "weak")
+        assert weak["vs_baseline"]["regressions"] == ["hours"]
+
+    def test_a_matrix_runs_every_cell_and_says_which_axis_matters(
+        self, cli, suite_file, monkeypatch
+    ):
+        # Only the prompt decides: FULL answers everything, TERSE misses Sunday.
+        monkeypatch.setattr(
+            commands,
+            "build_model",
+            lambda req, settings: FakeModel([Text(PROMPT_ANSWERS[req.system_prompt])]),
+        )
+        text = many_cases_suite(
+            20,
+            "matrix:\n"
+            "  models: [{name: a, model_id: model-a}, {name: b, model_id: model-b}]\n"
+            "  prompts: [{name: full, system_prompt: FULL}, {name: terse, system_prompt: TERSE}]\n",
+        )
+
+        result = cli("eval", "--suite", suite_file(text), "--all-arms")
+
+        assert result.code == 0, result.err
+        comparison = result.json()
+        assert [arm["label"] for arm in comparison["arms"]] == [
+            "a/full", "a/terse", "b/full", "b/terse"
+        ]  # fmt: skip
+        assert comparison["baseline"] == "a/full"
+        assert comparison["effects"]["dominant"] == "prompt"
+        assert "effects: the pass rate moves by" in result.err
+        assert "prompt matters more" in result.err
+
+    @pytest.mark.parametrize(
+        ("extra", "message"),
+        [
+            (["--arm", "x"], "--arm names models ad hoc and --all-arms runs the file's"),
+            (["-m", "x"], "--all-arms names each model to compare; drop --model"),
+            (["--provider", "openai"], "--provider would override what every arm varies"),
+            (["--system", "x"], "--system would override what every arm varies"),
+            (["--junit", "x.xml"], "cannot apply to a comparison"),
+            (["--gate"], "cannot apply to a comparison"),
+        ],
+    )
+    def test_flags_that_would_undo_or_muddle_the_arms_are_refused(
+        self, cli, suite_file, prompted_models, extra, message
+    ):
+        result = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms", *extra)
+
+        assert result.code == 2
+        assert message in result.err
+        assert prompted_models == []
+
+    def test_all_arms_needs_a_file_that_declares_them(self, cli, suite_file, prompted_models):
+        result = cli("eval", "--suite", suite_file(SUITE_YAML), "--all-arms")
+
+        assert result.code != 0
+        assert "needs `arms:` or `matrix:`" in result.err
+        assert prompted_models == []
+
+    def test_all_arms_needs_a_suite(self, cli):
+        result = cli("eval", "-p", "hi", "-m", "m", "--all-arms")
+
+        assert result.code == 2
+        assert "--all-arms compares variants of a suite" in result.err
+
+    @pytest.mark.parametrize("flag", [["--baseline", "x"], ["--require-ready"]])
+    def test_baseline_and_require_ready_mean_nothing_without_arms(
+        self, cli, suite_file, prompted_models, flag
+    ):
+        result = cli("eval", "--suite", suite_file(ARMS_SUITE), *flag)
+
+        assert result.code == 2
+        assert "--all-arms or --arm" in result.err
+
+    def test_require_ready_with_ad_hoc_arms_needs_a_baseline(
+        self, cli, suite_file, prompted_models
+    ):
+        result = cli(
+            "eval", "--suite", suite_file(ARMS_SUITE), "--arm", "a", "--arm", "b", "--require-ready"
+        )
+
+        assert result.code == 2
+        assert "--require-ready needs a baseline" in result.err
+
+    def test_a_baseline_that_is_not_an_arm_is_refused_before_anything_runs(
+        self, cli, suite_file, prompted_models
+    ):
+        named = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms", "--baseline", "nope")
+        ad_hoc = cli(
+            "eval", "--suite", suite_file(ARMS_SUITE), "--arm", "a", "--arm", "b", "--baseline", "c"
+        )
+
+        assert named.code == 2 and "'nope' is not one of the arms (primary, terse)" in named.err
+        assert ad_hoc.code != 0 and "not one of the --arm models" in ad_hoc.err
+        assert prompted_models == []
+
+    def test_a_bad_arm_is_a_usage_error_naming_the_file_and_the_arm(
+        self, cli, suite_file, prompted_models
+    ):
+        text = ARMS_SUITE.replace(
+            "{name: terse, system_prompt: TERSE}", "{name: terse, modle_id: x}"
+        )
+
+        result = cli("eval", "--suite", suite_file(text), "--all-arms")
+
+        assert result.code == 2
+        assert "arms[1]: unknown key(s) modle_id" in result.err
+        assert prompted_models == []
+
+    def test_a_prompt_file_outside_the_suites_directory_is_refused(
+        self, cli, tmp_path, prompted_models
+    ):
+        (tmp_path / "secret.txt").write_text("TOP SECRET", encoding="utf-8")
+        inner = tmp_path / "inner"
+        inner.mkdir()
+        text = ARMS_SUITE.replace("system_prompt: TERSE", "system_prompt_file: ../secret.txt")
+        path = inner / "suite.yaml"
+        path.write_text(text, encoding="utf-8")
+
+        result = cli("eval", "--suite", str(path), "--all-arms")
+
+        assert result.code == 2
+        assert "must stay inside the suite file's directory" in result.err
+        assert prompted_models == []
+
+    def test_a_prompt_file_next_to_the_suite_is_read(self, cli, tmp_path, prompted_models):
+        (tmp_path / "terse.md").write_text("TERSE", encoding="utf-8")
+        text = ARMS_SUITE.replace("system_prompt: TERSE", "system_prompt_file: terse.md")
+        path = tmp_path / "suite.yaml"
+        path.write_text(text, encoding="utf-8")
+
+        result = cli("eval", "--suite", str(path), "--all-arms")
+
+        assert result.code == 0, result.err
+        assert {request.system_prompt for request in prompted_models} == {"FULL", "TERSE"}
+
+    def test_run_options_apply_to_every_arm(self, cli, suite_file, prompted_models):
+        cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms", "--temperature", "0.3")
+
+        assert {request.inference.temperature for request in prompted_models} == {0.3}
+
+
+class TestCompareStored:
+    @pytest.fixture
+    def evaluations(self, cli, suite_file, prompted_models):
+        comparison = cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms").json()
+        return [arm["evaluation_id"] for arm in comparison["arms"]]
+
+    def test_stored_evaluations_are_compared_with_no_model_calls(
+        self, cli, evaluations, prompted_models
+    ):
+        calls_before = len(prompted_models)
+
+        result = cli("compare", *evaluations)
+
+        assert result.code == 0, result.err
+        assert result.json()["baseline"] == "primary"  # the tag stored with the evaluation
+        assert "terse: NOT READY" in result.err
+        assert len(prompted_models) == calls_before
+
+    def test_a_different_baseline_can_be_chosen_after_the_fact(self, cli, evaluations):
+        result = cli("compare", *evaluations, "--baseline", "terse")
+
+        assert result.json()["baseline"] == "terse"
+
+    def test_a_baseline_can_be_named_by_evaluation_id(self, cli, evaluations):
+        result = cli("compare", *evaluations, "--baseline", evaluations[1])
+
+        assert result.json()["baseline"] == "terse"
+
+    def test_require_ready_gates_a_stored_comparison(self, cli, evaluations):
+        assert cli("compare", *evaluations, "--require-ready").code == 3
+
+    def test_it_needs_two_evaluations(self, cli, evaluations):
+        result = cli("compare", evaluations[0])
+
+        assert result.code == 2
+        assert "at least two evaluation ids" in result.err
+
+    def test_an_unknown_evaluation_is_an_error(self, cli, evaluations):
+        result = cli("compare", evaluations[0], "no-such-evaluation")
+
+        assert result.code != 0
+        assert "no-such-evaluation" in result.err
+
+    def test_evaluations_of_different_suites_are_refused_with_the_cases_named(
+        self, cli, suite_file, prompted_models
+    ):
+        first = cli("eval", "--suite", suite_file(ARMS_SUITE, "a.yaml")).json()["evaluation_id"]
+        changed = ARMS_SUITE.replace("input: q2", "input: a DIFFERENT question")
+        second = cli("eval", "--suite", suite_file(changed, "b.yaml")).json()["evaluation_id"]
+
+        result = cli("compare", first, second)
+
+        assert result.code != 0
+        assert "did not run the same suite" in result.err
+        assert "hours" in result.err
+
+
+class TestPromoteCritical:
+    def test_a_promoted_case_can_be_marked_critical(self, cli, stored_run_id):
+        result = cli("promote", stored_run_id, "--critical")
+
+        assert result.code == 0, result.err
+        assert "critical: true" in result.out
+
+    def test_a_promoted_case_is_not_critical_unless_asked(self, cli, stored_run_id):
+        assert "critical" not in cli("promote", stored_run_id).out
+
+
+class TestFallbackPlan:
+    @pytest.fixture
+    def saved(self, cli, suite_file, tmp_path, prompted_models):
+        """A 30-case suite whose `other` arm is ready, and the plan `--save` wrote for it."""
+        path = suite_file(many_cases_suite(30, ARMS_PRIMARY_AND_OTHER))
+        plan_path = tmp_path / "fallback-plan.json"
+        result = cli("eval", "--suite", path, "--all-arms", "--save", str(plan_path))
+        assert result.code == 0, result.err
+        return Path(path), plan_path
+
+    def test_save_writes_only_the_ready_arms_as_fallbacks(self, saved):
+        _, plan_path = saved
+
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        assert plan["baseline"]["label"] == "primary"
+        assert [entry["label"] for entry in plan["fallbacks"]] == ["other"]
+        assert plan["suite"]["file"] == "suite.yaml"
+        assert plan["suite"]["cases"] == 30
+        assert plan["fallbacks"][0]["evaluation_id"]
+
+    def test_an_arm_that_is_not_ready_is_kept_as_evidence_not_as_a_fallback(
+        self, cli, suite_file, tmp_path, prompted_models
+    ):
+        plan_path = tmp_path / "plan.json"
+
+        cli("eval", "--suite", suite_file(ARMS_SUITE), "--all-arms", "--save", str(plan_path))
+
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        assert plan["fallbacks"] == []
+        assert [entry["label"] for entry in plan["evidence"]] == ["terse"]
+        assert plan["evidence"][0]["status"] == "not_ready"
+        assert plan["evidence"][0]["reasons"]
+
+    def test_a_fresh_plan_checks_clean_with_no_model_calls(self, cli, saved, prompted_models):
+        _, plan_path = saved
+        calls_before = len(prompted_models)
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 0, result.err
+        assert "plan is current; ready fallbacks: other" in result.err
+        assert len(prompted_models) == calls_before
+
+    def test_a_changed_case_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace("input: q3,", "input: a new question,"),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "the suite's cases changed" in result.err
+
+    def test_a_reworded_prompt_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace("system_prompt: OTHER", "system_prompt: NEW"),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "other now runs" in result.err
+
+    def test_a_swapped_model_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace(
+                "{name: other, system_prompt: OTHER}",
+                "{name: other, model_id: another-model, system_prompt: OTHER}",
+            ),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "another-model" in result.err
+
+    def test_a_removed_arm_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace(
+                "  - {name: other, system_prompt: OTHER}\n",
+                "  - {name: third, system_prompt: OTHER}\n",
+            ),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "other is no longer an arm" in result.err
+
+    def test_a_changed_bar_makes_the_plan_stale(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace(
+                "max_regression_rate: 0.1", "max_regression_rate: 0.05"
+            ),
+            encoding="utf-8",
+        )
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "readiness bar" in result.err
+
+    def test_an_old_plan_expires(self, cli, saved):
+        _, plan_path = saved
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["created_at"] = "2020-01-01T00:00:00Z"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "days old" in result.err
+
+    def test_max_age_days_is_kept_in_the_plan(self, cli, suite_file, tmp_path, prompted_models):
+        plan_path = tmp_path / "plan.json"
+
+        cli(
+            "eval",
+            "--suite",
+            suite_file(many_cases_suite(30, ARMS_PRIMARY_AND_OTHER)),
+            "--all-arms",
+            "--save",
+            str(plan_path),
+            "--max-age-days",
+            "7",
+        )
+
+        assert json.loads(plan_path.read_text(encoding="utf-8"))["max_age_days"] == 7
+
+    def test_a_missing_suite_file_cannot_be_verified(self, cli, saved):
+        suite, plan_path = saved
+        suite.unlink()
+
+        result = cli("plan", "check", str(plan_path))
+
+        assert result.code == 3
+        assert "suite file was not found" in result.err
+
+    def test_json_output_lists_the_findings(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text(
+            suite.read_text(encoding="utf-8").replace("input: q3,", "input: other,"),
+            encoding="utf-8",
+        )
+
+        report = cli("plan", "check", str(plan_path), "--json").json()
+
+        assert report["stale"] is True
+        assert [finding["code"] for finding in report["findings"]] == ["suite_changed"]
+
+    def test_a_plan_from_stored_evaluations(self, cli, saved, tmp_path):
+        """`compare --save` builds the plan from history; `--suite` records where the suite is."""
+        suite, _ = saved
+        evaluations = [
+            arm["evaluation_id"]
+            for arm in cli("eval", "--suite", str(suite), "--all-arms").json()["arms"]
+        ]
+        plan_path = tmp_path / "from-history.json"
+
+        result = cli("compare", *evaluations, "--save", str(plan_path), "--suite", str(suite))
+
+        assert result.code == 0, result.err
+        assert cli("plan", "check", str(plan_path)).code == 0
+
+    def test_a_comparison_without_a_baseline_cannot_be_saved(self, cli, saved, tmp_path):
+        suite, _ = saved
+        evaluations = [
+            arm["evaluation_id"]
+            for arm in cli("eval", "--suite", str(suite), "--arm", "m1", "--arm", "m2").json()[
+                "arms"
+            ]
+        ]
+
+        result = cli("compare", *evaluations, "--save", str(tmp_path / "p.json"))
+
+        assert result.code != 0
+        assert "needs a baseline" in result.err
+
+    def test_save_needs_a_comparison(self, cli, suite_file):
+        result = cli("eval", "--suite", suite_file(), "--save", "plan.json")
+
+        assert result.code == 2
+        assert "--save writes a comparison's plan" in result.err
+
+    def test_save_with_ad_hoc_arms_needs_a_baseline(self, cli, suite_file):
+        result = cli(
+            "eval", "--suite", suite_file(), "--arm", "m1", "--arm", "m2", "--save", "plan.json"
+        )
+
+        assert result.code == 2
+        assert "pass --baseline" in result.err
+
+    def test_max_age_days_needs_save_and_a_positive_number(self, cli, suite_file):
+        assert cli("eval", "--suite", suite_file(), "--max-age-days", "3").code == 2
+        result = cli(
+            "eval",
+            "--suite",
+            suite_file(ARMS_SUITE),
+            "--all-arms",
+            "--save",
+            "p.json",
+            "--max-age-days",
+            "0",
+        )
+        assert result.code == 2
+
+    def test_a_file_that_is_not_a_plan_is_an_error(self, cli, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text('{"hello": 1}', encoding="utf-8")
+
+        result = cli("plan", "check", str(bad))
+
+        assert result.code != 0
+        assert "not a fallback plan" in result.err
+
+    def test_a_missing_or_malformed_plan_is_an_error(self, cli, tmp_path):
+        assert "No such file" in cli("plan", "check", str(tmp_path / "nope.json")).err
+        broken = tmp_path / "broken.json"
+        broken.write_text("{", encoding="utf-8")
+        assert "not valid JSON" in cli("plan", "check", str(broken)).err
+
+    def test_an_unwritable_plan_path_is_an_error(self, cli, suite_file, tmp_path, prompted_models):
+        result = cli(
+            "eval",
+            "--suite",
+            suite_file(ARMS_SUITE),
+            "--all-arms",
+            "--save",
+            str(tmp_path / "missing-dir" / "plan.json"),
+        )
+
+        assert result.code != 0
+        assert "--save" in result.err
+
+    def test_a_suite_that_is_not_a_mapping_or_not_yaml_is_an_error(self, cli, saved):
+        suite, plan_path = saved
+        suite.write_text("- just\n- a list\n", encoding="utf-8")
+        assert "expected a mapping" in cli("plan", "check", str(plan_path)).err
+
+        suite.write_text("a: [unclosed", encoding="utf-8")
+        assert "cannot read the suite" in cli("plan", "check", str(plan_path)).err

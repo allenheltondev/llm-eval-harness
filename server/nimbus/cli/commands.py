@@ -16,18 +16,24 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import getpass
 import json
+import os
 import platform
 import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib import resources
+from pathlib import Path
 from typing import Annotated, Any, TextIO
 
+import yaml
 from pydantic import Field, TypeAdapter, ValidationError
 
+from nimbus import arms as arms_module
+from nimbus import plan as plan_module
 from nimbus import suite_edit
 from nimbus.awscat.catalog import ModelCatalog
 from nimbus.cli import diagnose, gating, remote, render
@@ -43,8 +49,14 @@ from nimbus.engine.model_factory import build_model
 from nimbus.engine.runner import execute_run
 from nimbus.engine.schemas import GuardrailConfig, InferenceConfig, RunRequest
 from nimbus.errors import AppError, NotFoundError
-from nimbus.evals.compare import Arm, compare
-from nimbus.evals.engine import EvalDeps, LocalEvalStore, execute_evaluation_with_seam
+from nimbus.evals import budget
+from nimbus.evals.compare import Arm, build_comparison
+from nimbus.evals.engine import (
+    EvalDeps,
+    LocalEvalStore,
+    execute_evaluation_with_seam,
+    planned_jobs,
+)
 from nimbus.evals.jobs import to_json_line
 from nimbus.evals.judge import build_judge_model
 from nimbus.evals.schemas import (
@@ -195,15 +207,32 @@ def _run_overrides(args: argparse.Namespace) -> dict[str, Any]:
     return overrides
 
 
-def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
+def _merge_run_config(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """``overrides`` laid over ``base``; ``inference`` merges setting by setting."""
+    merged = {**base, **overrides}
+    if "inference" in overrides:
+        merged["inference"] = {**(base.get("inference") or {}), **overrides["inference"]}
+    return merged
+
+
+def build_suite_request(
+    args: argparse.Namespace, arm: arms_module.ArmSpec | None = None
+) -> EvaluationRequest:
     """The ``kind="suite"`` request for ``eval --suite FILE``.
 
     The file supplies the suite; flags override it. ``rubric`` and ``grader``
     live at the file's top level (they are the request's, not the suite's), and
     ``--rubric`` / ``--grader-*`` override those. Validation is the same model
     ``POST /evaluations`` uses, so a file that works here works over HTTP.
+
+    ``arm`` (from the file's ``arms:`` or ``matrix:``) lays that variant's model
+    and prompt over the suite's ``run_config`` and tags the request with the
+    arm's name, so a comparison built later knows which it was. The file's
+    arm keys are dropped either way: without ``--all-arms`` a file that declares
+    arms simply runs its ``run_config``.
     """
-    spec = dict(args.suite_spec)
+    spec, arm_keys = arms_module.split_file_keys(dict(args.suite_spec))
+    readiness = arms_module.readiness_bar(arm_keys)
     rubric = spec.pop("rubric", None)
     grader = dict(spec.pop("grader", None) or {})
     max_cost = spec.pop("max_cost_usd", None)
@@ -216,10 +245,9 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
         spec["calibrate"] = True
 
     run_config = dict(spec.get("run_config") or {})
-    overrides = _run_overrides(args)
-    if "inference" in overrides:
-        overrides["inference"] = {**(run_config.get("inference") or {}), **overrides["inference"]}
-    spec["run_config"] = {**run_config, **overrides}
+    if arm is not None:
+        run_config = _merge_run_config(run_config, arm.overrides)
+    spec["run_config"] = _merge_run_config(run_config, _run_overrides(args))
 
     for field, value in (
         ("model_id", args.grader_model),
@@ -238,6 +266,10 @@ def build_suite_request(args: argparse.Namespace) -> EvaluationRequest:
             "panel": panel,
             "source": "cli",
             "max_cost_usd": max_cost,
+            "arm": (
+                {"name": arm.name, "baseline": arm.baseline, "axes": arm.axes} if arm else None
+            ),
+            "readiness": readiness.model_dump(exclude_none=True) if readiness else None,
         }
     )
 
@@ -349,7 +381,7 @@ async def evaluate(args: argparse.Namespace, settings: Settings, out: TextIO, er
     drives the engine's seam directly: no job registry, no polling, and Ctrl-C
     means cancel this evaluation rather than "stop watching it".
     """
-    if getattr(args, "arm", None):
+    if getattr(args, "arm", None) or getattr(args, "all_arms", False):
         return await compare_arms(args, settings, out, err)
     request = build_eval_request(args)
     if getattr(args, "target", None) is not None or getattr(args, "remote", False):
@@ -435,13 +467,30 @@ def _split_arm(text: str) -> tuple[str | None, str]:
     return None, text
 
 
-def build_arm_requests(args: argparse.Namespace) -> list[EvaluationRequest]:
-    """One ``kind="suite"`` request per ``--arm``: the same suite, a different model.
+def declared_plan(args: argparse.Namespace) -> arms_module.ArmPlan | None:
+    """The arms the suite file declares (``--baseline`` applied), or ``None`` for none."""
+    _, keys = arms_module.split_file_keys(dict(args.suite_spec))
+    plan = arms_module.expand(keys, Path(args.suite).parent)
+    if plan is not None and getattr(args, "baseline", None):
+        plan = arms_module.with_baseline(plan, args.baseline)
+    return plan
 
-    Each is exactly what ``eval --suite FILE -m MODEL`` builds, so an arm is an
-    ordinary evaluation with its own history row, cost and budget. Naming the
-    same model twice is refused up front rather than after the first arm ran.
+
+def build_arm_requests(args: argparse.Namespace) -> list[EvaluationRequest]:
+    """One ``kind="suite"`` request per arm: the same suite, a different variant.
+
+    With ``--all-arms`` the variants are the file's ``arms:`` / ``matrix:`` (a
+    model and a prompt each). With ``--arm`` they are ad-hoc models, each exactly
+    what ``eval --suite FILE -m MODEL`` builds. Either way an arm is an ordinary
+    evaluation with its own history row, cost and budget, and naming the same
+    arm twice is refused up front rather than after the first one ran.
     """
+    if getattr(args, "all_arms", False):
+        plan = declared_plan(args)
+        if plan is None:
+            raise AppError("--all-arms needs `arms:` or `matrix:` in the suite file")
+        return [build_suite_request(args, arm=spec) for spec in plan.arms]
+
     requests: list[EvaluationRequest] = []
     labels: set[str] = set()
     for text in args.arm:
@@ -459,7 +508,45 @@ def build_arm_requests(args: argparse.Namespace) -> list[EvaluationRequest]:
             )
         labels.add(label)
         requests.append(request)
+    baseline_reference(args, requests)  # a bad --baseline is a usage error, not a late surprise
     return requests
+
+
+def _label(request: EvaluationRequest) -> str:
+    """What a request's arm is called in a comparison: its name, else ``provider:model``."""
+    if request.arm is not None:
+        return request.arm.name
+    assert request.suite is not None
+    config = request.suite.run_config
+    return f"{config.provider}:{config.model_id}"
+
+
+def baseline_reference(args: argparse.Namespace, requests: list[EvaluationRequest]) -> str | None:
+    """The arm to measure against, as a comparison label, or ``None`` to only rank.
+
+    For ``--all-arms`` the baseline is already tagged on the requests (the file's
+    choice, or ``--baseline``). For ad-hoc ``--arm`` models it is whichever
+    ``--baseline`` names, as it was typed after ``--arm`` or as a label.
+    """
+    wanted = getattr(args, "baseline", None)
+    if wanted is None or getattr(args, "all_arms", False):
+        return None
+    labels = [_label(request) for request in requests]
+    for text, label in zip(args.arm, labels, strict=True):
+        if wanted in (text, label):
+            return label
+    raise AppError(f"--baseline {wanted}: not one of the --arm models ({', '.join(labels)})")
+
+
+def _estimate_lines(requests: list[EvaluationRequest]) -> list[str]:
+    """What the whole comparison is about to do, before it does it."""
+    runs = sum(request.planned_runs for request in requests)
+    prior = sum(
+        budget.prior_per_run(job.run_config for job in planned_jobs(request)) * request.planned_runs
+        for request in requests
+    )
+    cost = f"; the runs alone ~{render.usd(prior)} before judging (estimate)" if prior else ""
+    return [f"| {len(requests)} arms, {runs} runs in all{cost}"]
 
 
 async def compare_arms(
@@ -470,15 +557,16 @@ async def compare_arms(
     Arms run in sequence so each keeps the engine's own concurrency limit and
     ``--max-cost`` bounds each arm separately. An arm that fails does not stop
     the others: the comparison says which produced a result. The exit code is
-    ``0`` when every arm completed and the first failing arm's otherwise.
+    ``0`` when every arm completed and the first failing arm's otherwise, and
+    ``3`` with ``--require-ready`` when a candidate is not ready.
     """
     requests = build_arm_requests(args)
-    arms: list[Arm] = []
+    for line in _estimate_lines(requests):
+        _note(err, line)
+    evaluations: list[dict[str, Any]] = []
     code = EXIT_OK
     for request in requests:
-        assert request.suite is not None
-        config = request.suite.run_config
-        _note(err, f"| arm {config.provider}:{config.model_id}")
+        _note(err, f"| arm {_label(request)}")
         terminal = await _evaluate_locally(args, request, settings, out, err)
         status = str(terminal.get("status"))
         if code == EXIT_OK:
@@ -486,24 +574,150 @@ async def compare_arms(
         if not args.json:
             for line in render.eval_result_lines(terminal.get("result")):
                 _write(err, line + "\n")
-        arms.append(
-            Arm(
-                config.provider,
-                config.model_id,
-                terminal.get("evaluation_id"),
-                status,
-                terminal.get("result"),
-            )
+        # The shape the API serves, so this comparison is the one the web app would show.
+        evaluations.append(
+            {
+                "id": terminal.get("evaluation_id"),
+                "kind": "suite",
+                "status": status,
+                "config": request.stored_config(),
+                "result": terminal.get("result"),
+            }
         )
 
-    comparison = compare(arms)
+    comparison = build_comparison(evaluations, baseline=baseline_reference(args, requests))
+    return _present(args, comparison, code, out, err)
+
+
+def _present(
+    args: argparse.Namespace, comparison: dict[str, Any], code: int, out: TextIO, err: TextIO
+) -> int:
+    """Print a comparison (JSON to stdout, the human table to stderr) and settle the exit code."""
     if args.json:
         _write(out, json.dumps({"type": "comparison", **comparison}, default=str) + "\n")
     else:
         for line in render.comparison_lines(comparison):
             _write(err, line + "\n")
         _write(out, render.dumps(comparison) + "\n")
+    if getattr(args, "require_ready", False) and code == EXIT_OK:
+        unready = readiness_failures(comparison)
+        for line in unready:
+            _note(err, f"| not ready: {line}")
+        if unready:
+            _save_plan(args, comparison, err)
+            return gating.EXIT_GATE_FAILED
+        _note(err, "| every candidate is ready")
+    _save_plan(args, comparison, err)
     return code
+
+
+def _save_plan(args: argparse.Namespace, comparison: dict[str, Any], err: TextIO) -> None:
+    """Write the fallback plan the comparison supports, when ``--save`` asked for one."""
+    path: Path | None = getattr(args, "save", None)
+    if path is None:
+        return
+    suite: Path | None = getattr(args, "suite", None)
+    document = plan_module.build(
+        comparison,
+        suite_file=Path(os.path.relpath(suite, path.resolve().parent)).as_posix()
+        if suite is not None
+        else None,
+        max_age_days=args.max_age_days or plan_module.DEFAULT_MAX_AGE_DAYS,
+    )
+    try:
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise AppError(f"--save {path}: {exc.strerror or exc}") from None
+    ready = [entry["label"] for entry in document["fallbacks"]]
+    _note(
+        err,
+        f"| plan written to {path}: "
+        + (
+            f"ready to stand in for {document['baseline']['label']}: {', '.join(ready)}"
+            if ready
+            else "no arm is ready"
+        ),
+    )
+
+
+async def plan(args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO) -> int:
+    """``plan check``: does a saved fallback plan still describe what would run?
+
+    Offline: reads the plan and the suite file, calls no model. Exit ``3`` when
+    the plan is stale, so a CI job or a deploy can hold on it.
+    """
+    try:
+        document = plan_module.load(json.loads(args.file.read_text(encoding="utf-8")))
+    except OSError as exc:
+        raise AppError(f"{args.file}: {exc.strerror or exc}") from None
+    except json.JSONDecodeError:
+        raise AppError(f"{args.file}: not valid JSON") from None
+    recorded = document["suite"].get("file")
+    suite_path: Path | None = args.suite or (
+        args.file.resolve().parent / recorded if recorded else None
+    )
+    spec = None
+    if suite_path is not None and suite_path.is_file():
+        try:
+            spec = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise AppError(f"{suite_path}: cannot read the suite: {exc}") from None
+        if not isinstance(spec, dict):
+            raise AppError(f"{suite_path}: expected a mapping at the top level")
+    base_dir = suite_path.parent if suite_path is not None else args.file.resolve().parent
+    findings = plan_module.check(document, spec, base_dir, datetime.now(UTC))
+    stale = [finding for finding in findings if finding.stale]
+    if args.json:
+        payload = {
+            "type": "plan_check",
+            "stale": bool(stale),
+            "findings": [dataclasses.asdict(finding) for finding in findings],
+        }
+        _write(out, json.dumps(payload) + "\n")
+    else:
+        for finding in findings:
+            _write(err, f"{'stale' if finding.stale else 'note'}: {finding.message}\n")
+        if not stale:
+            ready = ", ".join(entry["label"] for entry in document["fallbacks"]) or "none"
+            _write(err, f"plan is current; ready fallbacks: {ready}\n")
+    return gating.EXIT_GATE_FAILED if stale else EXIT_OK
+
+
+def readiness_failures(comparison: dict[str, Any]) -> list[str]:
+    """``label: status`` for every candidate that is not ``ready`` (or cannot be measured)."""
+    return [
+        f"{arm['label']} ({(arm.get('vs_baseline') or {}).get('status', 'not measured')})"
+        for arm in comparison["arms"]
+        if comparison["baseline"]
+        and not arm["baseline"]
+        and (arm.get("vs_baseline") or {}).get("status") != "ready"
+    ]
+
+
+async def compare_stored(
+    args: argparse.Namespace, settings: Settings, out: TextIO, err: TextIO
+) -> int:
+    """Compare evaluations that have already run: no model calls, no cost.
+
+    Reads them from this machine's history, or from the signed-in stack (which
+    runs the same comparison the web app shows). Useful for choosing a
+    different baseline, or judging by a different bar, without re-running.
+    """
+    target: remote.Login | None = getattr(args, "target", None)
+    if target is not None:
+        _on_stack(err, target)
+        async with remote.http_client() as http:
+            comparison = await remote.RemoteApi(http, target).get(
+                "/evaluations/compare", {"ids": args.ids, "baseline": args.baseline}
+            )
+    else:
+        repo = get_history_repo(settings)
+        loaded = [
+            EvaluationDetail.model_validate(repo.get_evaluation(evaluation_id)).model_dump()
+            for evaluation_id in args.ids
+        ]
+        comparison = build_comparison(loaded, baseline=args.baseline)
+    return _present(args, comparison, EXIT_OK, out, err)
 
 
 def _gate_for(args: argparse.Namespace, request: EvaluationRequest) -> gating.Gate:
@@ -1029,7 +1243,11 @@ async def promote(args: argparse.Namespace, settings: Settings, out: TextIO, err
     """
     run = await _fetch_run(args.run_id, args, settings, err)
     case = suite_edit.case_from_run(
-        run, case_id=args.case_id, expected=args.expected, criteria=args.criteria
+        run,
+        case_id=args.case_id,
+        expected=args.expected,
+        criteria=args.criteria,
+        critical=args.critical,
     )
     path = args.suite
     if path is None:

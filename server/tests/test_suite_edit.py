@@ -211,3 +211,32 @@ def test_a_new_json_suite_is_json():
 
 def test_rendering_a_case_indents_it_under_cases():
     assert render_case(case()).splitlines()[0] == "  - id: new-case"
+
+
+# --------------------------------------------------------------------------- #
+# A suite that declares arms
+# --------------------------------------------------------------------------- #
+
+
+def test_a_case_can_be_added_to_a_suite_that_declares_arms_and_a_bar():
+    text = (
+        "run_config: {model_id: m}\n"
+        "readiness: {max_regression_rate: 0.1}\n"
+        "arms:\n  - {name: a}\n  - {name: b, model_id: n}\n"
+        "baseline: a\n"
+        "cases:\n  - id: first\n    input: hello\n"
+    )
+
+    updated = append_case(text, case_from_run(RUN, case_id="added", critical=True))
+
+    assert updated.startswith(text)
+    assert yaml.safe_load(updated)["cases"][-1] == {
+        "id": "added",
+        "input": "How long do I have to return shoes?",
+        "critical": True,
+    }
+
+
+def test_a_promoted_case_is_critical_only_when_asked():
+    assert "critical" not in case_from_run(RUN)
+    assert case_from_run(RUN, critical=True)["critical"] is True
