@@ -10,30 +10,56 @@ Updraft Cloud                                   Nimbus (this stack)
 -------------                                   -------------------
 UpdraftTable stream
   -> EventBridge Pipe (+ enrichment)
-  -> bus `updraft-events` ── rule: updraft.cloud / Job Finished ──> AgentJobIngestFunction
+  -> bus `<stack>-events` ── rule: updraft.cloud / Job Finished ──> AgentJobIngestFunction
                                                                      -> AGENTJOB# items (EvalTable)
                                                                    GET /api/v1/agent-jobs/compare
 ```
 
-What Updraft has to add is tracked on its side:
+On Updraft's side (software-factory-cli):
 
-- software-factory-cli #110 publishes the event.
-- #111 adds the model and usage for each step.
-- #112 adds pinned benchmark dispatch.
+- #110 publishes the event, and #111 adds each step's model and usage. Both have shipped.
+- #112 adds pinned benchmark dispatch and is in progress.
+- #116 would replay events for jobs that finished before a tenant opted in.
 
-Until #110 ships, there is nothing to subscribe to. The pieces here deploy only when you give
-them a bus name.
+The harness pieces deploy only when you give them a bus name.
 
-## Deploying
+## Turning it on
 
-```sh
-make deploy-backend UPDRAFT_EVENT_BUS_NAME=updraft-events
-```
+Updraft and the harness are separate stacks in the same account and region. Do these in order.
 
-Updraft publishes the bus name in SSM as `/updraft/<stack>/event-bus-name`, and both stacks run
-in the same account and region. This deploy needs the eval worker as well, because the ingest
-function reuses the worker's zip. With `UpdraftEventBusName` left empty, which is the default,
-none of the following resources exist.
+1. **Deploy Updraft's event infrastructure.** First give Updraft's deploy role permission to
+   manage EventBridge Pipes on `pipe/<stack>-job-finished`, and to pass the stack's Pipe
+   execution role to `pipes.amazonaws.com` (Updraft's `cloud/README.md`, "Job Finished events
+   (v1)"). Then deploy Updraft with `JOB_FINISHED_EVENTS_INFRASTRUCTURE=true` (or set
+   `ENABLE_JOB_FINISHED_EVENTS=true` in its GitHub environment). This creates the bus
+   `<updraft-stack>-events` and publishes its name in SSM as
+   `/updraft/<updraft-stack>/event-bus-name`.
+2. **Opt tenants in.** A platform admin opts each tenant in with
+   `PUT /api/v1/admin/tenants/<installation-id>/job-finished-events` and the body
+   `{"enabled":true}`. Publishing is off by default. The Pipe starts from the latest stream
+   position, so jobs that finished before a tenant opted in are never sent (software-factory-cli
+   #116 tracks a replay).
+3. **Deploy the harness subscribed to the bus:**
+
+   ```sh
+   make deploy-backend UPDRAFT_EVENT_BUS_NAME=<updraft-stack>-events
+   ```
+
+   This needs the eval worker as well, because the ingest function reuses the worker's zip. With
+   `UpdraftEventBusName` left empty, which is the default, none of the resources below exist.
+4. **Smoke-test the harness side:**
+
+   ```sh
+   make smoke-agent-jobs UPDRAFT_EVENT_BUS_NAME=<updraft-stack>-events
+   ```
+
+   This sends one synthetic `Job Finished` event to the bus, waits for the stack to store it,
+   checks that the dead-letter queue gained nothing, and deletes the item again. The synthetic
+   job uses a `smoke-<timestamp>` stack and is a `review` job, so even before it is deleted it
+   can't appear in a default comparison. It needs AWS credentials that can call `PutEvents` on
+   the bus and `GetItem`/`DeleteItem` on the table. It makes no model calls. It proves the
+   harness half only; a real job finishing in Updraft is what tests the Pipe, the enrichment and
+   the tenant opt-in.
 
 | Resource | What it is |
 |---|---|
