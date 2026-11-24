@@ -39,6 +39,7 @@ def detail(**overrides: Any) -> dict[str, Any]:
         "configVersion": 7,
         "status": "finished",
         "outcome": "succeeded",
+        "updraftOutcome": "succeeded",
         "verificationPassed": True,
         "pr": {"url": "https://github.com/acme/app/pull/34", "number": 34},
         "loop": {"rounds": 2, "reviews": 2, "verdict": "approve", "merged": True},
@@ -473,23 +474,65 @@ async def test_a_server_without_the_table_says_agent_jobs_are_unavailable():
 
 
 @pytest.mark.parametrize(
-    ("outcome", "verdict"),
+    ("outcome", "updraft", "verdict"),
     [
-        ("succeeded", "success"),
-        ("failed", "failure"),
-        ("timed_out", "failure"),
-        ("launch_failed", "not_attributable"),
-        ("terminated", "not_attributable"),
-        ("runner_error", "not_attributable"),
-        ("state_not_saved", "not_attributable"),
-        ("unconfirmed", "unresolved"),
-        ("unknown", "unresolved"),
-        ("something_new", "unresolved"),
-        (None, "unresolved"),
+        # Both agree the agent's work succeeded.
+        ("succeeded", "succeeded", "success"),
+        # The runner's own failures, whatever Updraft's summary said (or if it was lost).
+        ("failed", None, "failure"),
+        ("failed", "failed", "failure"),
+        ("timed_out", None, "failure"),
+        ("failed", "succeeded", "failure"),
+        # Updraft says the agent's work failed under a runner exit of 0.
+        ("succeeded", "failed", "failure"),
+        # Runner outcomes that say nothing about the agent.
+        ("launch_failed", None, "not_attributable"),
+        ("terminated", "succeeded", "not_attributable"),
+        ("runner_error", None, "not_attributable"),
+        ("state_not_saved", "succeeded", "not_attributable"),
+        # #66: the runner exited 0, but no agent work was judged.
+        ("succeeded", "nothing-to-do", "not_attributable"),
+        ("succeeded", "canceled", "not_attributable"),
+        ("succeeded", "superseded", "not_attributable"),
+        ("succeeded", "deferred", "not_attributable"),
+        ("succeeded", "not-started", "not_attributable"),
+        ("succeeded", "state-pending", "not_attributable"),
+        ("failed", "error", "not_attributable"),
+        # The agent succeeded; only publishing to GitHub failed.
+        ("succeeded", "publish-failed", "not_attributable"),
+        ("failed", "publish-failed", "not_attributable"),
+        # Not enough to say either way.
+        ("succeeded", None, "unresolved"),
+        ("succeeded", "something-new", "unresolved"),
+        ("unconfirmed", "succeeded", "unresolved"),
+        ("unknown", None, "unresolved"),
+        (None, None, "unresolved"),
     ],
 )
-def test_outcomes_are_classified_from_a_known_vocabulary_only(outcome, verdict):
-    assert cmp.outcome_class(outcome) == verdict
+def test_outcomes_are_classified_from_both_fields(outcome, updraft, verdict):
+    assert cmp.outcome_class({"outcome": outcome, "updraft_outcome": updraft}) == verdict
+
+
+def test_a_runner_success_with_no_agent_work_is_not_a_model_success():
+    """#66: ``updraft run-event`` exits 0 for nothing-to-do, so the runner says succeeded."""
+    jobs = jobs_for("m", 2, 2) + [
+        stored(jobId=f"idle-{i}", steps=[{"kind": "implement", "model": "m"}], updraftOutcome=u)
+        for i, u in enumerate(["nothing-to-do", "superseded", "publish-failed"])
+    ]
+    result = cmp.compare_jobs(jobs)
+    only = arm(result, "m")
+    assert only["jobs"] == 4
+    assert only["success_rate"] == pytest.approx(0.5)
+    assert result["excluded"]["not_attributable"] == 3
+
+
+def test_a_runner_success_without_an_updraft_summary_is_unresolved():
+    jobs = jobs_for("m", 1, 1) + [
+        stored(jobId="no-summary", steps=[{"kind": "implement", "model": "m"}], updraftOutcome=None)
+    ]
+    result = cmp.compare_jobs(jobs)
+    assert arm(result, "m")["jobs"] == 2
+    assert result["excluded"]["unresolved_outcome"] == 1
 
 
 def test_missing_or_unrecognized_outcomes_are_not_counted_as_failed_attempts():
