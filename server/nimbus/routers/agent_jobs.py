@@ -8,7 +8,7 @@ e.g. a laptop on SQLite) has none to serve and answers 400 ``agent_jobs_unavaila
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 
@@ -25,6 +25,10 @@ DEFAULT_WINDOW_DAYS = 30
 MAX_WINDOW_DAYS = 366
 #: ``?kind=all``: compare every kind mixed together (an explicit opt-in).
 ALL_KINDS = "all"
+#: The kinds ``?kind=`` accepts: Updraft's job kinds (src/db/stats.ts), or
+#: ``all``. Anything else -- a blank ``?kind=`` included -- is a 422, so mixing
+#: kinds can only ever be asked for by name.
+KindParam = Literal["implement", "revision", "review", "all"]
 
 
 class AgentJobsUnavailableError(AppError):
@@ -73,7 +77,7 @@ def compare_agent_jobs(
     repository: str | None = None,
     tenant_id: str | None = None,
     stack: str | None = None,
-    kind: str = Query(
+    kind: KindParam = Query(
         default=DEFAULT_KIND,
         description="Job kind to compare (implement, revision, review), or `all` to mix them.",
     ),

@@ -573,6 +573,20 @@ def test_an_arm_reports_an_attribute_only_when_every_member_agrees():
     assert by_adapter["mixed"] == {"model": ["a", "b"]}
     by_model = arm(cmp.compare_jobs(jobs), "a")
     assert by_model["model"] == "a" and by_model["mixed"] == {}
+    assert by_model["unreported"] == {"agent": 1}
+
+
+def test_one_reported_value_among_silent_members_is_not_the_arms_identity():
+    silent = [{"kind": "implement", "adapter": "claude"}]
+    jobs = [
+        stored(jobId="known", steps=[{"kind": "implement", "adapter": "claude", "model": "a"}]),
+        *[stored(jobId=f"silent-{i}", steps=silent) for i in range(9)],
+    ]
+    claude = arm(cmp.compare_jobs(jobs, group_by="adapter"), "claude")
+    assert claude["adapter"] == "claude"
+    assert claude["model"] is None
+    assert claude["mixed"]["model"] == ["a"]
+    assert claude["unreported"]["model"] == 9
 
 
 async def test_the_api_compares_implement_jobs_unless_asked_for_all(client, table):
@@ -591,3 +605,15 @@ async def test_the_api_compares_implement_jobs_unless_asked_for_all(client, tabl
         await client.get("/api/v1/agent-jobs/compare", params={**window, "kind": "all"})
     ).json()
     assert everything["kind"] is None and everything["jobs_compared"] == 2
+
+
+@pytest.mark.parametrize("kind", ["", "Implement", "bogus"])
+async def test_a_blank_or_unknown_kind_is_rejected_not_read_as_mixed(client, kind):
+    response = await client.get("/api/v1/agent-jobs/compare", params={"kind": kind})
+    assert response.status_code == 422
+
+
+def test_an_empty_kind_filter_matches_nothing_rather_than_mixing():
+    result = cmp.compare_jobs(jobs_for("m", 1, 0), kind="")
+    assert result["arms"] == []
+    assert not any("mixed" in w for w in result["warnings"])

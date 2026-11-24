@@ -79,7 +79,7 @@ answers `400 agent_jobs_unavailable`.
 |---|---|---|
 | `since`, `until` | the last 30 days | The window, by finish time. At most 366 days. |
 | `group_by` | `model` | What counts as one arm: `model`, `model_effort`, `agent` or `adapter`. |
-| `kind` | `implement` | The job kind compared: `implement`, `revision` or `review`. `all` mixes them (see below). |
+| `kind` | `implement` | The job kind compared: `implement`, `revision` or `review`. `all` mixes them (see below). Any other value, including a blank one, is rejected with `422`. |
 | `repository`, `tenant_id`, `stack` | – | Keep only jobs that match. |
 | `include_routed` | `false` | Keep tier-routed jobs (see below). |
 | `include_benchmarks` | `false` | Keep jobs started by a benchmark. |
@@ -87,8 +87,10 @@ answers `400 agent_jobs_unavailable`.
 Each arm reports the following:
 
 - **Its identity:** `model`, `effort`, `agent` and `adapter`. Each is set only when every job in
-  the arm agrees on it. When they differ (for example an `adapter` arm that holds two models),
-  the field is `null` and `mixed` lists the values found.
+  the arm reports it and they all report the same value. Otherwise the field is `null`.
+  - `mixed` lists the values that were reported. That's several values when, for example, an
+    `adapter` arm holds two models, or one value when some jobs reported it and others didn't.
+  - `unreported` counts the jobs that didn't report the field at all.
 - **Success rate,** with a 95% Wilson interval. The denominator is only jobs with a known
   outcome (see below).
 - **Rates where the jobs reported the data:** verification pass rate, PR-opened rate and merge

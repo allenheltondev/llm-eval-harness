@@ -143,19 +143,34 @@ ARM_ATTRIBUTES = ("model", "effort", "agent", "adapter")
 def _describe(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
     """An arm's identity, from *every* member rather than the first.
 
-    An attribute is reported only when all the arm's jobs agree on it. When they
-    do not -- an adapter arm holding two models, a model arm run at two efforts --
-    it is ``None``, and ``mixed`` lists the values found.
+    An attribute is reported only when *every* job in the arm reports it, and
+    they all report the same value. Otherwise it is ``None``, and:
+
+    * ``mixed`` lists the values that were reported -- several for an adapter
+      arm holding two models, or one when some members reported it and others
+      did not;
+    * ``unreported`` counts the members that did not report it at all.
+
+    A job that did not say which model ran is not evidence that it was the
+    model its arm-mates reported, so one reported value among silent members is
+    never promoted to the arm's identity.
     """
     steps = [primary_step(job) or {} for job in jobs]
     described: dict[str, Any] = {"arm": label}
     mixed: dict[str, list[str]] = {}
+    unreported: dict[str, int] = {}
     for attribute in ARM_ATTRIBUTES:
-        values = sorted({str(v) for step in steps if (v := step.get(attribute)) is not None})
-        described[attribute] = values[0] if len(values) == 1 else None
-        if len(values) > 1:
+        reported = [str(v) for step in steps if (v := step.get(attribute)) is not None]
+        values = sorted(set(reported))
+        missing = len(steps) - len(reported)
+        unanimous = len(values) == 1 and missing == 0
+        described[attribute] = values[0] if unanimous else None
+        if values and not unanimous:
             mixed[attribute] = values
+        if missing:
+            unreported[attribute] = missing
     described["mixed"] = mixed
+    described["unreported"] = unreported
     return described
 
 
@@ -298,7 +313,7 @@ def compare_jobs(
             (repository and job.get("repository") != repository)
             or (tenant_id and job.get("tenant_id") != tenant_id)
             or (stack and job.get("stack") != stack)
-            or (kind and job.get("kind") != kind)
+            or (kind is not None and job.get("kind") != kind)
         ):
             excluded["filtered"] += 1
             continue
