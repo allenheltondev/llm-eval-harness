@@ -1,5 +1,5 @@
 .PHONY: dev dev-server dev-app lint lint-app lint-server test test-app test-server \
-	install install-app install-server validate-template e2e smoke \
+	install install-app install-server validate-template e2e smoke smoke-agent-jobs \
 	package-eval-worker package-server deploy-backend deploy-frontend deploy create-user grant-access revoke-access \
 	destroy
 
@@ -124,6 +124,14 @@ smoke:
 	fi
 	cd server && uv run python ../scripts/live_smoke.py
 
+# `smoke-agent-jobs` sends one synthetic Updraft `Job Finished` event to the default bus
+# and checks the stack stores it (scripts/agent_jobs_smoke.py, docs/agent-jobs.md).
+# Needs AWS credentials; makes no model calls. Deletes what it stored.
+#   make smoke-agent-jobs
+smoke-agent-jobs:
+	cd server && uv run python ../scripts/agent_jobs_smoke.py --stack $(STACK_NAME) \
+		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),)
+
 # --------------------------------------------------------------------------- #
 # deploy
 #
@@ -146,7 +154,7 @@ smoke:
 #   SERVER_MEMORY=2048 make deploy-backend      # bigger Lambda (faster cold start)
 #   HISTORY_RETENTION_DAYS=365 make deploy-backend  # expire history after a year (default: keep forever)
 #   make deploy-backend ACCESS_GROUP_NAME=nimbus-team  # access group on the shared pool (default: the stack name)
-#   make deploy-backend UPDRAFT_EVENT_BUS_NAME=updraft-events  # store Updraft Job Finished events (docs/agent-jobs.md)
+#   make deploy-backend INGEST_AGENT_JOBS=true  # store Updraft Job Finished events (the intended stack only; docs/agent-jobs.md)
 #   make deploy-backend APP_DOMAIN_NAME=nimbus.example.com APP_HOSTED_ZONE_ID=Z123...
 #       # serve on a custom domain (production passes these). Left off, a deploy
 #       # keeps whatever the stack has -- sam deploy reuses the previous value of
@@ -201,7 +209,7 @@ deploy-backend:
 		$${SPEND_LIMIT_USD:+"SpendLimitUsd=$$SPEND_LIMIT_USD"} \
 		$${SPEND_WINDOW:+"SpendWindow=$$SPEND_WINDOW"} \
 		$(if $(ACCESS_GROUP_NAME),"AccessGroupName=$(ACCESS_GROUP_NAME)",) \
-		$(if $(UPDRAFT_EVENT_BUS_NAME),"UpdraftEventBusName=$(UPDRAFT_EVENT_BUS_NAME)",) \
+		$(if $(INGEST_AGENT_JOBS),"IngestAgentJobs=$(INGEST_AGENT_JOBS)",) \
 		$(call domain_override,AppDomainName,APP_DOMAIN_NAME) \
 		$(call domain_override,AppHostedZoneId,APP_HOSTED_ZONE_ID) ); \
 	echo; \

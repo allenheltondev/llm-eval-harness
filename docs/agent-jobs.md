@@ -6,34 +6,62 @@ job finishes, Updraft Cloud publishes an event. Nimbus stores those events and
 compares the models that did the work.
 
 ```
-Updraft Cloud                                   Nimbus (this stack)
--------------                                   -------------------
+Updraft Cloud                                     Nimbus (this stack)
+-------------                                     -------------------
 UpdraftTable stream
-  -> EventBridge Pipe (+ enrichment)
-  -> bus `updraft-events` ── rule: updraft.cloud / Job Finished ──> AgentJobIngestFunction
-                                                                     -> AGENTJOB# items (EvalTable)
-                                                                   GET /api/v1/agent-jobs/compare
+  -> JobFinishedEventsFunction
+  -> account's default bus ── rule: updraft.cloud / Job Finished ──> AgentJobIngestFunction
+                                                                       -> AGENTJOB# items (EvalTable)
+                                                                     GET /api/v1/agent-jobs/compare
 ```
 
-What Updraft has to add is tracked on its side:
+Both sides meet on the account's **default** EventBridge bus, so neither stack needs the
+other's name and they can deploy in any order. Several Updraft stacks in one account share the
+bus; each event's `stack` field tells them apart, and it is part of every stored job's key.
 
-- software-factory-cli #110 publishes the event.
-- #111 adds the model and usage for each step.
-- #112 adds pinned benchmark dispatch.
+On Updraft's side (software-factory-cli):
 
-Until #110 ships, there is nothing to subscribe to. The pieces here deploy only when you give
-them a bus name.
+- #110 publishes the event, and #111 adds each step's model and usage. Both have shipped.
+- #112 adds pinned benchmark dispatch and is in progress.
+- #116 would replay events for jobs that finished before a tenant opted in.
 
-## Deploying
+## Turning it on
 
-```sh
-make deploy-backend UPDRAFT_EVENT_BUS_NAME=updraft-events
-```
+Nothing passes between the stacks: Updraft always publishes to the default bus, and the harness
+subscribes there. The ingest function reuses the eval worker's zip.
 
-Updraft publishes the bus name in SSM as `/updraft/<stack>/event-bus-name`, and both stacks run
-in the same account and region. This deploy needs the eval worker as well, because the ingest
-function reuses the worker's zip. With `UpdraftEventBusName` left empty, which is the default,
-none of the following resources exist.
+**Which harness stack subscribes.** The default bus is account-wide, so every stack that
+subscribes receives every opted-in tenant's jobs. Ingestion is therefore off by default
+(the `IngestAgentJobs` parameter), and only the intended consumer turns it on:
+
+- The Staging and Production workflows deploy with `INGEST_AGENT_JOBS=true`.
+- Any other deployment, such as a dev stack in the same account, ingests nothing unless it is
+  deployed with `make deploy-backend INGEST_AGENT_JOBS=true`.
+- Both environments deploy the same stack name (`llm-eval-harness`) in the same region, which
+  can't coexist in one account. So Staging and Production are separate accounts, and production
+  jobs can't reach the staging stack. `tests/test_infra_template.py` checks this invariant
+  against the workflows.
+
+Two things remain:
+
+1. **Opt tenants in, in Updraft.** Publishing is per tenant and off by default, because it is
+   the control over whether a tenant's job data leaves Updraft. A platform admin opts a tenant
+   in with `PUT /api/v1/admin/tenants/<installation-id>/job-finished-events` and the body
+   `{"enabled":true}`. Events start from that point: earlier jobs are not sent (#116 tracks a
+   replay).
+2. **Smoke-test the harness side** (optional):
+
+   ```sh
+   make smoke-agent-jobs   # against a stack with ingestion on
+   ```
+
+   This sends one synthetic `Job Finished` event to the default bus, waits for the stack to
+   store it, checks that the dead-letter queue gained nothing, and deletes the item again. The
+   synthetic job uses a `smoke-<timestamp>` stack and is a `review` job, so even before it is
+   deleted it can't appear in a default comparison. It needs AWS credentials that can call
+   `PutEvents` and `GetItem`/`DeleteItem` on the table. It makes no model calls. It proves the
+   harness half only; a real job finishing in Updraft for an opted-in tenant is what tests
+   Updraft's side.
 
 | Resource | What it is |
 |---|---|

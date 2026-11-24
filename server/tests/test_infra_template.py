@@ -379,25 +379,33 @@ AGENT_JOB_RESOURCES = (
 )
 
 
-def test_agent_job_ingest_is_opt_in_and_needs_the_worker_zip(
+def test_agent_job_ingest_is_off_unless_this_stack_is_the_intended_consumer(
     resources: dict, template: dict
 ) -> None:
-    """Nothing is deployed without a bus, and the function reuses the worker's artifact."""
-    assert template["Parameters"]["UpdraftEventBusName"]["Default"] == ""
-    condition = template["Conditions"]["IngestAgentJobs"]["Fn::And"]
+    """The default bus is account-wide, so an arbitrary deployment ingests nothing."""
+    parameter = template["Parameters"]["IngestAgentJobs"]
+    assert parameter["Default"] == "false"
+    assert parameter["AllowedValues"] == ["true", "false"]
+    condition = template["Conditions"]["IngestAgentJobsEnabled"]["Fn::And"]
     assert {"Fn::Condition": "DeployEvalWorker"} in condition
+    assert {"Fn::Equals": [{"Fn::Ref": "IngestAgentJobs"}, "true"]} in condition
     for logical_id in AGENT_JOB_RESOURCES:
-        assert resources[logical_id]["Condition"] == "IngestAgentJobs"
+        assert resources[logical_id]["Condition"] == "IngestAgentJobsEnabled"
+    for output in ("AgentJobIngestFunctionName", "AgentJobIngestDeadLetterQueueUrl"):
+        assert template["Outputs"][output]["Condition"] == "IngestAgentJobsEnabled"
+    # Still no bus name to pass between the stacks.
+    assert "UpdraftEventBusName" not in template["Parameters"]
     code = resources["AgentJobIngestFunction"]["Properties"]["CodeUri"]
     assert code["Key"] == {"Fn::Ref": "EvalWorkerArtifactKey"}
 
 
-def test_agent_job_ingest_subscribes_to_job_finished_on_updrafts_bus(resources: dict) -> None:
+def test_agent_job_ingest_subscribes_to_job_finished_on_the_default_bus(resources: dict) -> None:
     props = resources["AgentJobIngestFunction"]["Properties"]
     assert props["Handler"] == "nimbus.agentjobs.lambda_app.handler"
     rule = props["Events"]["JobFinished"]
     assert rule["Type"] == "EventBridgeRule"
-    assert rule["Properties"]["EventBusName"] == {"Fn::Ref": "UpdraftEventBusName"}
+    # No EventBusName is the account's default bus, where Updraft publishes.
+    assert "EventBusName" not in rule["Properties"]
     # The envelope only: a schemaVersion filter would hide a v2 instead of
     # sending it to the dead-letter queue.
     assert rule["Properties"]["Pattern"] == {
@@ -419,9 +427,49 @@ def test_agent_job_failures_land_on_one_dead_letter_queue(resources: dict) -> No
     }
 
 
+def test_only_this_stacks_rule_may_dead_letter_into_the_queue(resources: dict) -> None:
+    statement = resources["AgentJobIngestDeadLetterQueuePolicy"]["Properties"]["PolicyDocument"][
+        "Statement"
+    ][0]
+    assert statement["Principal"] == {"Service": "events.amazonaws.com"}
+    source = statement["Condition"]["ArnLike"]["aws:SourceArn"]["Fn::Sub"]
+    assert source.endswith(":rule/${AWS::StackName}-*")
+
+
 def test_agent_job_ingest_can_only_put_agent_job_items(resources: dict) -> None:
     statements = resources["AgentJobIngestFunction"]["Properties"]["Policies"][0]["Statement"]
     dynamo = [s for s in statements if str(s["Action"]).startswith("dynamodb")]
     assert [s["Action"] for s in dynamo] == ["dynamodb:PutItem"]
     leading = dynamo[0]["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"]
     assert leading == ["AGENTJOB#*"]
+
+
+def _workflow(name: str) -> str:
+    return (TEMPLATE.parents[1] / ".github" / "workflows" / name).read_text()
+
+
+def _deploy_backend_command(workflow: str) -> str:
+    """The workflow's `make deploy-backend ...` command, continuation lines joined."""
+    text = workflow.replace("\\\n", " ")
+    (line,) = [line for line in text.splitlines() if "make deploy-backend" in line]
+    return " ".join(line.split())
+
+
+@pytest.mark.parametrize(
+    ("workflow", "environment"),
+    [("pull-request.yaml", "Staging"), ("deploy.yaml", "Production")],
+)
+def test_only_the_staging_and_production_stacks_consume_agent_jobs(workflow, environment):
+    """The isolation invariant agent-job ingest relies on (docs/agent-jobs.md).
+
+    Each environment's intended stack turns ingestion on; anything else deploys
+    with it off. Both environments deploy the *same* stack name in the *same*
+    region, which cannot coexist in one account -- so Staging and Production are
+    separate accounts, and production jobs cannot reach the staging stack.
+    """
+    text = _workflow(workflow)
+    command = _deploy_backend_command(text)
+    assert "STACK_NAME=llm-eval-harness" in command
+    assert "DEPLOY_REGION=us-east-1" in command
+    assert "INGEST_AGENT_JOBS=true" in command
+    assert f"environment: {environment}" in text

@@ -310,6 +310,7 @@ def test_tier_routed_infrastructure_and_benchmark_jobs_are_left_out():
     result = cmp.compare_jobs(jobs)
     assert [a["arm"] for a in result["arms"]] == ["a"]
     assert result["excluded"] == {
+        "synthetic": 0,
         "filtered": 0,
         "not_attributable": 1,
         "unresolved_outcome": 0,

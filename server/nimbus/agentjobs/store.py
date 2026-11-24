@@ -26,7 +26,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from nimbus.agentjobs.schemas import JobFinished
+from nimbus.agentjobs.schemas import SYNTHETIC_TTL_SECONDS, JobFinished, is_synthetic
 from nimbus.store import ddb_items
 from nimbus.store.ddb_items import GSI1_INDEX_NAME, GSI1_PK, GSI1_SK, META_SK
 
@@ -125,6 +125,11 @@ def build_item(
         "agent": ddb_items.text(step.get("agent")),
         "job": ddb_items.dump_json(job),
     }
+    if is_synthetic(event.stack):
+        # A smoke test's item always expires, even when it lands after the test
+        # deleted it (a late or repeated delivery), whatever the retention.
+        item[ddb_items.TTL_ATTRIBUTE] = int(received.timestamp()) + SYNTHETIC_TTL_SECONDS
+        return item
     return ddb_items.apply_retention(item, retention_days)
 
 

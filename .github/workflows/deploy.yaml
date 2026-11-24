@@ -163,8 +163,11 @@ jobs:
             echo "::error title=No hosted zone::Set the Production environment's HOSTED_ZONE_ID variable to the readysetcloud.io hosted zone id; production serves on ${APP_DOMAIN_NAME}."
             exit 1
           fi
+          # INGEST_AGENT_JOBS: this is the account's intended consumer of Updraft's
+          # Job Finished events (docs/agent-jobs.md); other stacks default to off.
           make deploy-backend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1 \
-            APP_DOMAIN_NAME="${APP_DOMAIN_NAME}" APP_HOSTED_ZONE_ID="${APP_HOSTED_ZONE_ID}"
+            APP_DOMAIN_NAME="${APP_DOMAIN_NAME}" APP_HOSTED_ZONE_ID="${APP_HOSTED_ZONE_ID}" \
+            INGEST_AGENT_JOBS=true
 
       - name: Diagnose failed deploy
         if: ${{ failure() }}
