@@ -365,3 +365,63 @@ def test_saved_mcp_servers_reach_both_runners(resources: dict) -> None:
             if action.startswith("ssm:")
         }
         assert ssm == {(action, True) for action in actions}, function
+
+
+# --------------------------------------------------------------------------- #
+# Agent jobs (docs/agent-jobs.md)
+# --------------------------------------------------------------------------- #
+
+AGENT_JOB_RESOURCES = (
+    "AgentJobIngestFunction",
+    "AgentJobIngestDeadLetterQueue",
+    "AgentJobIngestDeadLetterQueuePolicy",
+    "AgentJobIngestDeadLetterAlarm",
+)
+
+
+def test_agent_job_ingest_is_opt_in_and_needs_the_worker_zip(
+    resources: dict, template: dict
+) -> None:
+    """Nothing is deployed without a bus, and the function reuses the worker's artifact."""
+    assert template["Parameters"]["UpdraftEventBusName"]["Default"] == ""
+    condition = template["Conditions"]["IngestAgentJobs"]["Fn::And"]
+    assert {"Fn::Condition": "DeployEvalWorker"} in condition
+    for logical_id in AGENT_JOB_RESOURCES:
+        assert resources[logical_id]["Condition"] == "IngestAgentJobs"
+    code = resources["AgentJobIngestFunction"]["Properties"]["CodeUri"]
+    assert code["Key"] == {"Fn::Ref": "EvalWorkerArtifactKey"}
+
+
+def test_agent_job_ingest_subscribes_to_job_finished_on_updrafts_bus(resources: dict) -> None:
+    props = resources["AgentJobIngestFunction"]["Properties"]
+    assert props["Handler"] == "nimbus.agentjobs.lambda_app.handler"
+    rule = props["Events"]["JobFinished"]
+    assert rule["Type"] == "EventBridgeRule"
+    assert rule["Properties"]["EventBusName"] == {"Fn::Ref": "UpdraftEventBusName"}
+    # The envelope only: a schemaVersion filter would hide a v2 instead of
+    # sending it to the dead-letter queue.
+    assert rule["Properties"]["Pattern"] == {
+        "source": ["updraft.cloud"],
+        "detail-type": ["Job Finished"],
+    }
+
+
+def test_agent_job_failures_land_on_one_dead_letter_queue(resources: dict) -> None:
+    """Delivery failures and handler failures both reach the queue the alarm watches."""
+    props = resources["AgentJobIngestFunction"]["Properties"]
+    queue = {"Fn::GetAtt": "AgentJobIngestDeadLetterQueue.Arn"}
+    assert props["Events"]["JobFinished"]["Properties"]["DeadLetterConfig"]["Arn"] == queue
+    on_failure = props["EventInvokeConfig"]["DestinationConfig"]["OnFailure"]
+    assert on_failure == {"Type": "SQS", "Destination": queue}
+    alarm = resources["AgentJobIngestDeadLetterAlarm"]["Properties"]
+    assert alarm["Dimensions"][0]["Value"] == {
+        "Fn::GetAtt": "AgentJobIngestDeadLetterQueue.QueueName"
+    }
+
+
+def test_agent_job_ingest_can_only_put_agent_job_items(resources: dict) -> None:
+    statements = resources["AgentJobIngestFunction"]["Properties"]["Policies"][0]["Statement"]
+    dynamo = [s for s in statements if str(s["Action"]).startswith("dynamodb")]
+    assert [s["Action"] for s in dynamo] == ["dynamodb:PutItem"]
+    leading = dynamo[0]["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"]
+    assert leading == ["AGENTJOB#*"]
