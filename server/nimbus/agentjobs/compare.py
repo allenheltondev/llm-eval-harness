@@ -21,15 +21,33 @@ got different issues. Two things keep the comparison honest about that:
 failure), so this module does not: it counts an outcome only when it knows what
 it means.
 
-* ``succeeded`` is a success; ``failed`` and ``timed_out`` are the agent's
-  failures. These three are the success rate's denominator.
-* Outcomes that say nothing about the agent -- a launch failure, a throttle, a
-  superseded, admin-released or stopped job, a lost microVM, a runner or
-  state-sync error -- are left out and counted in ``excluded.not_attributable``.
-* Anything else, a missing outcome included (identity-only events, Updraft's
-  ``unknown``/``unconfirmed``, a value added later), is left out and counted in
-  ``excluded.unresolved_outcome``: counting it as a failure would charge the
-  model for what nobody knows.
+A job carries two outcomes, and both are read (#66):
+
+* ``outcome`` is the microVM runner's. It is ``succeeded`` whenever ``updraft
+  run-event`` exits 0 -- which it also does when no agent did any work.
+* ``updraft_outcome`` is ``updraft run-event``'s own (``RunEventSummary``):
+  whether the job's agent actually ran and how that went.
+
+So, in order:
+
+1. A runner outcome that says nothing about the agent -- a launch failure, a
+   throttle, a superseded, admin-released or stopped job, a lost microVM, a
+   runner or state-sync error -- is ``not_attributable``.
+2. An Updraft outcome where no agent work was judged -- ``nothing-to-do``,
+   ``canceled``, ``superseded``, ``deferred``, ``not-started``,
+   ``state-pending``, ``error`` (the command itself failed) -- or where the
+   agent succeeded and only its publication failed (``publish-failed``) is
+   ``not_attributable`` too, whatever the runner said.
+3. ``failed`` or ``timed_out`` from the runner, or ``succeeded`` from the runner
+   with ``failed`` from Updraft, is the agent's ``failure``.
+4. ``succeeded`` from *both* is a ``success``.
+5. Anything else -- a missing outcome on either side (identity-only events, a
+   runner success whose summary was lost), Updraft's ``unknown`` /
+   ``unconfirmed``, a value added later -- is ``unresolved``. Counting it either
+   way would credit or charge the model for what nobody knows.
+
+Only successes and failures are the success rate's denominator; the others are
+counted in ``excluded.not_attributable`` and ``excluded.unresolved_outcome``.
 
 **One kind at a time.** Implement, revision and review jobs succeed by different
 standards, so by default only ``implement`` jobs are compared; another kind is
@@ -52,9 +70,27 @@ OutcomeClass = Literal["success", "failure", "not_attributable", "unresolved"]
 
 #: The outcome that counts as success, as Updraft's broker records it.
 SUCCEEDED = "succeeded"
-#: The agent's own failures (deploy/aws-microvm/image/runner/job.mjs): updraft
+#: The runner's failures (deploy/aws-microvm/image/runner/job.mjs): updraft
 #: exited non-zero, or the job ran out of its time budget.
 FAILURE_OUTCOMES = frozenset({"failed", "timed_out"})
+#: ``updraft run-event``'s outcome when its agent's work failed.
+UPDRAFT_FAILED = "failed"
+#: ``updraft run-event`` outcomes under which no agent work was judged, or the
+#: agent's work succeeded and only publishing it failed (src/commands/run-event.ts,
+#: ``RunEventSummary['outcome']``). Under each, the runner may still say
+#: ``succeeded``: the command exited 0.
+UPDRAFT_NOT_ATTRIBUTABLE_OUTCOMES = frozenset(
+    {
+        "nothing-to-do",
+        "canceled",
+        "superseded",
+        "deferred",
+        "not-started",
+        "state-pending",
+        "error",
+        "publish-failed",
+    }
+)
 #: Outcomes that say nothing about the agent: the job never got a fair run, was
 #: stopped by someone, or the infrastructure around it failed (cloud/server/src
 #: launch.ts, broker.ts, reconcile.ts, admin.ts; runner/job.mjs).
@@ -109,15 +145,21 @@ def newcombe(
     return lower, upper
 
 
-def outcome_class(outcome: str | None) -> OutcomeClass:
-    """What a job's outcome says about its agent (see the module docstring)."""
-    if outcome == SUCCEEDED:
-        return "success"
-    if outcome in FAILURE_OUTCOMES:
-        return "failure"
-    if outcome in NOT_ATTRIBUTABLE_OUTCOMES:
+def outcome_class(job: Mapping[str, Any]) -> OutcomeClass:
+    """What a job's two outcomes say about its agent (see the module docstring)."""
+    outcome = job.get("outcome")
+    updraft = job.get("updraft_outcome")
+    if outcome in NOT_ATTRIBUTABLE_OUTCOMES or updraft in UPDRAFT_NOT_ATTRIBUTABLE_OUTCOMES:
         return "not_attributable"
+    if outcome in FAILURE_OUTCOMES or (outcome == SUCCEEDED and updraft == UPDRAFT_FAILED):
+        return "failure"
+    if outcome == SUCCEEDED and updraft == SUCCEEDED:
+        return "success"
     return "unresolved"
+
+
+def _succeeded(job: Mapping[str, Any]) -> bool:
+    return outcome_class(job) == "success"
 
 
 def arm_label(job: Mapping[str, Any], group_by: GroupBy) -> str:
@@ -184,7 +226,7 @@ def _mean(values: list[float]) -> float | None:
 
 def _summarize(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
     n = len(jobs)
-    succeeded = sum(1 for job in jobs if job.get("outcome") == SUCCEEDED)
+    succeeded = sum(1 for job in jobs if _succeeded(job))
     verified = [
         job["verification_passed"] for job in jobs if job.get("verification_passed") is not None
     ]
@@ -225,8 +267,7 @@ def _summarize(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
     costed_successes = sum(
         1
         for job in jobs
-        if job.get("outcome") == SUCCEEDED
-        and (job.get("telemetry") or {}).get("cost_usd") is not None
+        if _succeeded(job) and (job.get("telemetry") or {}).get("cost_usd") is not None
     )
     return {
         **_describe(label, jobs),
@@ -317,7 +358,7 @@ def compare_jobs(
         ):
             excluded["filtered"] += 1
             continue
-        verdict = outcome_class(job.get("outcome"))
+        verdict = outcome_class(job)
         if verdict == "not_attributable":
             excluded["not_attributable"] += 1
             continue

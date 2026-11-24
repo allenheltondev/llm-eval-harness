@@ -116,16 +116,29 @@ models were given different issues.
   stronger models on purpose, so including those jobs would compare the work rather than the
   models. Jobs from round-robin pools and fixed agents are kept, because there the issue does not
   decide the model.
-- **Only known outcomes count.** Updraft accepts any outcome string, so the comparison only counts
-  outcomes it recognizes. Every job left out is counted under `excluded`, by reason.
-  - A success is `succeeded`.
-  - The agent's failures are `failed` and `timed_out`.
-  - These outcomes say nothing about the agent and are left out as `not_attributable`:
-    `launch_failed`, `throttled`, `superseded`, `microvm_gone`, `released_by_admin`, `terminated`,
-    `runner_error` and `state_not_saved`.
-  - Anything else is left out as `unresolved_outcome`. That includes a missing outcome, Updraft's
-    `unknown` or `unconfirmed`, and any value added later. Such jobs are never counted as
-    failures, and a warning gives their number.
+- **Only known outcomes count, judged on both fields.** Every job carries two outcomes, and the
+  comparison reads both:
+  - `outcome` comes from the microVM runner. It is `succeeded` whenever `updraft run-event`
+    exits 0, which also happens when no agent did any work.
+  - `updraft_outcome` is Updraft's own result for the run: whether the agent actually ran, and
+    how that went.
+
+  Every job left out is counted under `excluded`, by reason. The rules are applied in order:
+
+  1. **Not the agent's doing (`not_attributable`):**
+     - the runner says `launch_failed`, `throttled`, `superseded`, `microvm_gone`,
+       `released_by_admin`, `terminated`, `runner_error` or `state_not_saved`; or
+     - Updraft says no agent work was judged (`nothing-to-do`, `canceled`, `superseded`,
+       `deferred`, `not-started`, `state-pending`, or `error`, meaning the command itself failed),
+       or that the agent succeeded and only publishing to GitHub failed (`publish-failed`). This
+       applies whatever the runner said.
+  2. **A failure:** the runner says `failed` or `timed_out`, or the runner says `succeeded` while
+     Updraft says `failed`.
+  3. **A success:** both fields say `succeeded`.
+  4. **Anything else (`unresolved_outcome`):** for example a missing outcome on either side (such
+     as a runner success whose Updraft summary was lost), `unknown` or `unconfirmed`, or a value
+     added later. These jobs are never counted as successes or failures, and a warning gives
+     their number.
 - **One kind at a time.** Implement, revision and review jobs succeed by different standards, so
   the default compares `implement` jobs only. `kind=all` mixes every kind into the same arms. It
   is an explicit opt-in, and the response warns that each arm's rate blends the kinds.
