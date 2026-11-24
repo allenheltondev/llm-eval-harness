@@ -37,6 +37,17 @@ class _Lenient(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
+class Usage(_Lenient):
+    """What one step, or the whole job, used: tokens, cost, tools and time."""
+
+    input_tokens: int | None = Field(default=None, ge=0, alias="inputTokens")
+    output_tokens: int | None = Field(default=None, ge=0, alias="outputTokens")
+    cost_usd: float | None = Field(default=None, ge=0, alias="costUsd")
+    tool_calls: int | None = Field(default=None, ge=0, alias="toolCalls")
+    tool_errors: int | None = Field(default=None, ge=0, alias="toolErrors")
+    duration_ms: int | None = Field(default=None, ge=0, alias="durationMs")
+
+
 class JobStep(_Lenient):
     """One step of a job: its own work, then reviewer runs and revisions."""
 
@@ -49,6 +60,13 @@ class JobStep(_Lenient):
     #: reported it, when they differ). Absent on events from before #111.
     model: str | None = _NAME
     effort: str | None = Field(default=None, max_length=64)
+    #: Where ``model`` came from (software-factory-cli #111): ``response`` when
+    #: the provider's response named it, ``configured`` when only the tenant's
+    #: config did. Kept as a string so a later source does not fail ingestion.
+    model_source: str | None = Field(default=None, max_length=32, alias="modelSource")
+    run_id: str | None = Field(default=None, max_length=128, alias="runId")
+    #: This step's own usage. The job's ``telemetry`` is every step summed.
+    usage: Usage | None = None
     outcome: str | None = Field(default=None, max_length=64)
     verification_passed: bool | None = Field(default=None, alias="verificationPassed")
     publication: str | None = Field(default=None, max_length=64)
@@ -82,15 +100,8 @@ class Routing(_Lenient):
     risk: str | None = Field(default=None, max_length=64)
 
 
-class Telemetry(_Lenient):
+class Telemetry(Usage):
     """The whole job's usage, across every step."""
-
-    input_tokens: int | None = Field(default=None, ge=0, alias="inputTokens")
-    output_tokens: int | None = Field(default=None, ge=0, alias="outputTokens")
-    cost_usd: float | None = Field(default=None, ge=0, alias="costUsd")
-    tool_calls: int | None = Field(default=None, ge=0, alias="toolCalls")
-    tool_errors: int | None = Field(default=None, ge=0, alias="toolErrors")
-    duration_ms: int | None = Field(default=None, ge=0, alias="durationMs")
 
 
 class Benchmark(_Lenient):
