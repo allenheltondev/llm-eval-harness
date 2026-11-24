@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         sqs=session.client("sqs"),
         bus=args.bus,
         queue_url=outputs["AgentJobIngestDeadLetterQueueUrl"],
+        target=args.stack,
         timeout=args.timeout,
     )
     for name, passed, detail in result.checks:

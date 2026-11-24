@@ -25,6 +25,20 @@ EVENT_SOURCE = "updraft.cloud"
 EVENT_DETAIL_TYPE = "Job Finished"
 SCHEMA_VERSION = 1
 
+#: Synthetic events (:mod:`nimbus.agentjobs.smoke`) name a stack with this
+#: prefix. They are stored only by the Nimbus stack their ``smokeTarget`` names,
+#: expire after :data:`SYNTHETIC_TTL_SECONDS` whatever the retention, and never
+#: count in a comparison -- the default bus delivers them to every subscriber in
+#: the account, and a delivery can arrive after the smoke test has cleaned up.
+SYNTHETIC_STACK_PREFIX = "nimbus-smoke-"
+SYNTHETIC_TTL_SECONDS = 24 * 60 * 60
+
+
+def is_synthetic(stack: object) -> bool:
+    """Whether a job's stack marks it as a smoke test's, not Updraft's."""
+    return isinstance(stack, str) and stack.startswith(SYNTHETIC_STACK_PREFIX)
+
+
 #: Bounds on what one event may carry, so a malformed or hostile event cannot
 #: make an item that DynamoDB refuses (400 KB) or a comparison has to wade through.
 MAX_STEPS = 24
@@ -142,6 +156,9 @@ class JobFinished(_Lenient):
     telemetry: Telemetry | None = None
     retried_as: str | None = Field(default=None, max_length=128, alias="retriedAs")
     benchmark: Benchmark | None = None
+    #: Nimbus's own field, set only on synthetic events: the one Nimbus stack
+    #: that should store it.
+    smoke_target: str | None = Field(default=None, max_length=128, alias="smokeTarget")
 
     def stored(self) -> dict[str, Any]:
         """The job as Nimbus stores and serves it: snake_case, nulls dropped."""

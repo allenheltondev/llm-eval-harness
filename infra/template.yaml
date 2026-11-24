@@ -449,6 +449,8 @@ Resources:
         Variables:
           TABLE_NAME: !Ref EvalTable
           NIMBUS_AWS_REGION: !Ref AWS::Region
+          # A smoke test's synthetic event is stored only by the stack it names.
+          STACK_NAME: !Ref AWS::StackName
           # Agent jobs are history: they expire with evaluations and runs.
           NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
       Events:

@@ -62,6 +62,7 @@ import statistics
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
+from nimbus.agentjobs.schemas import is_synthetic
 from nimbus.agentjobs.store import primary_step
 
 GroupBy = Literal["model", "model_effort", "agent", "adapter"]
@@ -360,6 +361,7 @@ def compare_jobs(
     every other job is counted in ``excluded`` under the reason it was left out.
     """
     excluded = {
+        "synthetic": 0,
         "filtered": 0,
         "not_attributable": 0,
         "unresolved_outcome": 0,
@@ -371,6 +373,10 @@ def compare_jobs(
     total = 0
     for job in jobs:
         total += 1
+        # Smoke-test items are never real work, whatever filters were asked for.
+        if is_synthetic(job.get("stack")):
+            excluded["synthetic"] += 1
+            continue
         if (
             (repository and job.get("repository") != repository)
             or (tenant_id and job.get("tenant_id") != tenant_id)

@@ -11,9 +11,12 @@ It proves the harness half of the integration on a deployed stack:
 4. Delete the item, whatever happened, so nothing synthetic is left to skew a
    comparison.
 
-The event's ``stack`` is ``smoke-<timestamp>``, never a real stack's name, and
-its job is a ``review`` kind with a model named ``nimbus-smoke``: even before the
-cleanup, it could not land in a default (``implement``) comparison of real work.
+The event's ``stack`` is ``nimbus-smoke-<timestamp>``
+(:data:`nimbus.agentjobs.schemas.SYNTHETIC_STACK_PREFIX`), and that prefix is
+what keeps it out of real data. The default bus delivers it to every Nimbus
+stack in the account, but only the stack named in its ``smokeTarget`` stores it.
+The item gets a one-day TTL, so even a delivery that lands after the cleanup
+(late, or retried) expires. And no comparison ever counts it.
 
 What it does **not** prove: anything on Updraft's side (the Pipe, the
 enrichment Lambda, tenant opt-in). A real job finishing is the only test of
@@ -29,18 +32,27 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from nimbus.agentjobs.schemas import EVENT_DETAIL_TYPE, EVENT_SOURCE, SCHEMA_VERSION
+from nimbus.agentjobs.schemas import (
+    EVENT_DETAIL_TYPE,
+    EVENT_SOURCE,
+    SCHEMA_VERSION,
+    SYNTHETIC_STACK_PREFIX,
+)
 from nimbus.agentjobs.store import job_key
 from nimbus.store.ddb_items import META_SK
 
-SMOKE_STACK_PREFIX = "smoke-"
+SMOKE_STACK_PREFIX = SYNTHETIC_STACK_PREFIX
 SMOKE_MODEL = "nimbus-smoke"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 POLL_SECONDS = 2.0
 
 
-def build_detail(stack: str, job_id: str, now: datetime) -> dict[str, Any]:
-    """A v1 ``Job Finished`` detail, camelCase, as Updraft's enrichment emits it."""
+def build_detail(stack: str, job_id: str, now: datetime, target: str) -> dict[str, Any]:
+    """A v1 ``Job Finished`` detail, camelCase, as Updraft's enrichment emits it.
+
+    ``target`` is the Nimbus stack meant to store it; every other stack's ingest
+    function skips it (:func:`nimbus.agentjobs.lambda_app.handle`).
+    """
     at = now.astimezone(UTC).isoformat().replace("+00:00", "Z")
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -68,6 +80,7 @@ def build_detail(stack: str, job_id: str, now: datetime) -> dict[str, Any]:
         "routing": {"source": "fixed"},
         "retriedAs": None,
         "benchmark": None,
+        "smokeTarget": target,
     }
 
 
@@ -107,6 +120,7 @@ def run(
     sqs: Any,
     bus: str,
     queue_url: str,
+    target: str,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     poll: float = POLL_SECONDS,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -121,6 +135,7 @@ def run(
         sqs: A ``boto3`` SQS client.
         bus: Updraft's bus name (``/updraft/<stack>/event-bus-name``).
         queue_url: The stack's ``AgentJobIngestDeadLetterQueueUrl`` output.
+        target: The Nimbus stack under test: the only one that stores the event.
     """
     started = now()
     stack = f"{SMOKE_STACK_PREFIX}{started.strftime('%Y%m%d%H%M%S')}"
@@ -131,7 +146,7 @@ def run(
     dead_before = _visible(sqs, queue_url)
     try:
         response = events.put_events(
-            Entries=[build_entry(bus, build_detail(stack, job_id, started))]
+            Entries=[build_entry(bus, build_detail(stack, job_id, started, target))]
         )
         failed = int(response.get("FailedEntryCount", 0))
         if not result.check(
