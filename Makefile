@@ -146,6 +146,7 @@ smoke:
 #   SERVER_MEMORY=2048 make deploy-backend      # bigger Lambda (faster cold start)
 #   HISTORY_RETENTION_DAYS=365 make deploy-backend  # expire history after a year (default: keep forever)
 #   make deploy-backend ACCESS_GROUP_NAME=nimbus-team  # access group on the shared pool (default: the stack name)
+#   make deploy-backend UPDRAFT_EVENT_BUS_NAME=updraft-events  # store Updraft Job Finished events (docs/agent-jobs.md)
 #   make deploy-backend APP_DOMAIN_NAME=nimbus.example.com APP_HOSTED_ZONE_ID=Z123...
 #       # serve on a custom domain (production passes these). Left off, a deploy
 #       # keeps whatever the stack has -- sam deploy reuses the previous value of
@@ -200,6 +201,7 @@ deploy-backend:
 		$${SPEND_LIMIT_USD:+"SpendLimitUsd=$$SPEND_LIMIT_USD"} \
 		$${SPEND_WINDOW:+"SpendWindow=$$SPEND_WINDOW"} \
 		$(if $(ACCESS_GROUP_NAME),"AccessGroupName=$(ACCESS_GROUP_NAME)",) \
+		$(if $(UPDRAFT_EVENT_BUS_NAME),"UpdraftEventBusName=$(UPDRAFT_EVENT_BUS_NAME)",) \
 		$(call domain_override,AppDomainName,APP_DOMAIN_NAME) \
 		$(call domain_override,AppHostedZoneId,APP_HOSTED_ZONE_ID) ); \
 	echo; \

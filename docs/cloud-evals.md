@@ -50,6 +50,7 @@ TTL (`expiresAt`, epoch seconds) depends on what the item is:
 | Progress event | `EVAL#{evaluation_id}` | `EVENT#{seq:08d}` | `seq (number), ts, event (JSON string — exactly the existing EvalStreamEvent wire shapes)` |
 | Cancel flag | `EVAL#{evaluation_id}` | `CANCEL` | `ts` — presence means cancel requested; worker checks between runs and before grading |
 | Run record | `RUN#{run_id}` | `META` | same fields as the SQLite `runs` table (id, ts, model_id, system_prompt, user_prompt, config, output, tool_transcript, metrics, guardrail_trace, status, error — JSON columns as JSON strings), plus `evaluation_id`, `GSI1PK="RUN", GSI1SK={ts}` |
+| Agent job | `AGENTJOB#{stack}#{jobId}` | `META` | an Updraft `Job Finished` event, written by `AgentJobIngestFunction`, not the worker: `id, ts (finished-at, UTC ISO), received_at, stack, tenant_id, job_id, kind, repository, outcome, model, agent, job (JSON string), GSI1PK="AGENTJOB", GSI1SK={ts}` — see [agent-jobs.md](agent-jobs.md) |
 
 Writer rules (worker):
 - Events are appended with a strictly increasing `seq` starting at 0; `META.seq_count`

@@ -52,6 +52,18 @@ Parameters:
       and DELETES the function, bucket and distribution. Use `make
       deploy-backend`.
 
+  UpdraftEventBusName:
+    Type: String
+    Default: ''
+    AllowedPattern: '[A-Za-z0-9._\-/]{0,256}'
+    Description: >
+      Name of the EventBridge bus an Updraft Cloud stack in this account
+      publishes `Job Finished` events on (software-factory-cli #110; Updraft
+      writes it to SSM as /updraft/<stack>/event-bus-name). Set, and with the
+      eval worker deployed, the stack subscribes AgentJobIngestFunction to it
+      and stores each finished job for GET /api/v1/agent-jobs/compare. Empty
+      (the default) deploys none of it. See docs/agent-jobs.md.
+
   HistoryRetentionDays:
     Type: Number
     Default: 0
@@ -191,6 +203,11 @@ Conditions:
   # The worker is opt-in. Everything below is skipped entirely until an artifact
   # key is supplied, so the rest of the stack deploys exactly as it did before.
   DeployEvalWorker: !Not [!Equals [!Ref EvalWorkerArtifactKey, '']]
+  # Agent-job ingest reuses the worker's zip, so it needs the worker deployed
+  # as well as a bus to subscribe to.
+  IngestAgentJobs: !And
+    - !Condition DeployEvalWorker
+    - !Not [!Equals [!Ref UpdraftEventBusName, '']]
   # So is the server + SPA hosting, on exactly the same pattern.
   DeployServer: !Not [!Equals [!Ref ServerArtifactKey, '']]
   # Groups live in the shared pool, so their names are shared by every stack
@@ -384,6 +401,122 @@ Resources:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nimbus/${AWS::StackName}/mcp/*
+  # ------------------------------------------------------------------------
+  # Agent jobs: Updraft's `Job Finished` events, stored for comparison
+  # (docs/agent-jobs.md). One rule on Updraft's bus -> one small Lambda ->
+  # AGENTJOB# items in EvalTable. Nothing here is on any request path.
+  # ------------------------------------------------------------------------
+  # Where an event goes when it cannot be stored: EventBridge's own delivery
+  # failures (the rule target's DLQ) and the function's failures after its
+  # retries (its on-failure destination) both land here, so one alarm covers
+  # "a finished job was not recorded". 14 days is SQS's maximum.
+  AgentJobIngestDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Condition: IngestAgentJobs
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  AgentJobIngestDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Condition: IngestAgentJobs
+    Properties:
+      Queues:
+        - !Ref AgentJobIngestDeadLetterQueue
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          # SAM writes this policy itself only for a DLQ it creates; this one
+          # is shared with the function's destination, so it is ours.
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AgentJobIngestDeadLetterQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${UpdraftEventBusName}/*
+  AgentJobIngestFunction:
+    Type: AWS::Serverless::Function
+    Condition: IngestAgentJobs
+    Metadata:
+      # The eval worker's zip: it already carries the whole nimbus package.
+      SkipBuild: true
+    Properties:
+      CodeUri:
+        Bucket: !Ref ArtifactBucket
+        Key: !Ref EvalWorkerArtifactKey
+      Handler: nimbus.agentjobs.lambda_app.handler
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Tracing: Active
+      # One validation and one PutItem per event.
+      MemorySize: 256
+      Timeout: 30
+      EventInvokeConfig:
+        # Safe to retry: storing is an idempotent PutItem keyed on the job.
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt AgentJobIngestDeadLetterQueue.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EvalTable
+          NIMBUS_AWS_REGION: !Ref AWS::Region
+          # Agent jobs are history: they expire with evaluations and runs.
+          NIMBUS_HISTORY_RETENTION_DAYS: !Ref HistoryRetentionDays
+      Events:
+        JobFinished:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref UpdraftEventBusName
+            # Only the envelope is matched. schemaVersion is checked by the
+            # handler instead, so a v2 Updraft starts publishing fails loudly
+            # into the DLQ rather than being filtered out unseen.
+            Pattern:
+              source:
+                - updraft.cloud
+              detail-type:
+                - Job Finished
+            RetryPolicy:
+              MaximumEventAgeInSeconds: 86400
+              MaximumRetryAttempts: 185
+            DeadLetterConfig:
+              Arn: !GetAtt AgentJobIngestDeadLetterQueue.Arn
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            # Writes AGENTJOB# items only; it never reads the table.
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt EvalTable.Arn
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys:
+                    - AGENTJOB#*
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt AgentJobIngestDeadLetterQueue.Arn
+  AgentJobIngestDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: IngestAgentJobs
+    Properties:
+      AlarmDescription: >
+        An Updraft Job Finished event could not be stored (delivery failure, or
+        an event this version cannot read -- e.g. a new schemaVersion). Inspect
+        the queue; the message holds the event.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AgentJobIngestDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
   ServerFunction:
     Type: AWS::Serverless::Function
     Condition: DeployServer
@@ -895,6 +1028,14 @@ Outputs:
     Condition: DeployEvalWorker
     Description: Worker Lambda ARN (for IAM policies that take an ARN, not a name)
     Value: !GetAtt EvalWorkerFunction.Arn
+  AgentJobIngestFunctionName:
+    Condition: IngestAgentJobs
+    Description: Lambda that stores Updraft `Job Finished` events as AGENTJOB# items
+    Value: !Ref AgentJobIngestFunction
+  AgentJobIngestDeadLetterQueueUrl:
+    Condition: IngestAgentJobs
+    Description: Where Job Finished events that could not be stored wait (14 days)
+    Value: !Ref AgentJobIngestDeadLetterQueue
   UserPoolId:
     Condition: DeployServer
     Description: Cognito user pool the deployed server verifies bearer tokens against -- the shared RSC pool (`make grant-access` reads this)
