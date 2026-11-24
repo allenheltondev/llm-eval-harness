@@ -83,13 +83,17 @@ def primary_step(job: Mapping[str, Any]) -> dict[str, Any] | None:
     A review job is credited to its first review step. Reviewer steps inside
     an implement job's loop are deliberately not the job's model -- they judged
     the work, they did not do it.
+
+    ``None`` when the job reports no step of the kind it needs. Falling back to
+    another step would credit the wrong model (an implement job whose only
+    reported step is its reviewer), so such a job is grouped as unknown instead.
     """
     steps = [s for s in job.get("steps") or [] if isinstance(s, Mapping)]
     wanted = ("review",) if job.get("kind") == "review" else AUTHOR_STEP_KINDS
     for step in steps:
         if step.get("kind") in wanted:
             return dict(step)
-    return dict(steps[0]) if steps else None
+    return None
 
 
 def build_item(

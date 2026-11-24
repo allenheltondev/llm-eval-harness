@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from nimbus.agentjobs.compare import GroupBy, compare_jobs
+from nimbus.agentjobs.compare import DEFAULT_KIND, GroupBy, compare_jobs
 from nimbus.agentjobs.store import AgentJobStore
 from nimbus.config import Settings, get_settings
 from nimbus.errors import AppError, BadRequestError, NotFoundError
@@ -23,6 +23,8 @@ router = APIRouter(tags=["agent-jobs"])
 #: The comparison's window when none is given, and the longest one allowed.
 DEFAULT_WINDOW_DAYS = 30
 MAX_WINDOW_DAYS = 366
+#: ``?kind=all``: compare every kind mixed together (an explicit opt-in).
+ALL_KINDS = "all"
 
 
 class AgentJobsUnavailableError(AppError):
@@ -71,7 +73,10 @@ def compare_agent_jobs(
     repository: str | None = None,
     tenant_id: str | None = None,
     stack: str | None = None,
-    kind: str | None = None,
+    kind: str = Query(
+        default=DEFAULT_KIND,
+        description="Job kind to compare (implement, revision, review), or `all` to mix them.",
+    ),
     include_routed: bool = False,
     include_benchmarks: bool = False,
     store: AgentJobStore | None = Depends(get_agent_job_store),
@@ -97,7 +102,7 @@ def compare_agent_jobs(
         repository=repository,
         tenant_id=tenant_id,
         stack=stack,
-        kind=kind,
+        kind=None if kind == ALL_KINDS else kind,
     )
     comparison["window"] = {"since": start.isoformat(), "until": end.isoformat()}
     comparison["truncated"] = truncated

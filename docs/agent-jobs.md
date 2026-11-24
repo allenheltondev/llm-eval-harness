@@ -79,13 +79,18 @@ answers `400 agent_jobs_unavailable`.
 |---|---|---|
 | `since`, `until` | the last 30 days | The window, by finish time. At most 366 days. |
 | `group_by` | `model` | What counts as one arm: `model`, `model_effort`, `agent` or `adapter`. |
-| `repository`, `tenant_id`, `stack`, `kind` | – | Keep only jobs that match. |
+| `kind` | `implement` | The job kind compared: `implement`, `revision` or `review`. `all` mixes them (see below). |
+| `repository`, `tenant_id`, `stack` | – | Keep only jobs that match. |
 | `include_routed` | `false` | Keep tier-routed jobs (see below). |
 | `include_benchmarks` | `false` | Keep jobs started by a benchmark. |
 
 Each arm reports the following:
 
-- **Success rate** (`outcome == "succeeded"`), with a 95% Wilson interval.
+- **Its identity:** `model`, `effort`, `agent` and `adapter`. Each is set only when every job in
+  the arm agrees on it. When they differ (for example an `adapter` arm that holds two models),
+  the field is `null` and `mixed` lists the values found.
+- **Success rate,** with a 95% Wilson interval. The denominator is only jobs with a known
+  outcome (see below).
 - **Rates where the jobs reported the data:** verification pass rate, PR-opened rate and merge
   rate.
 - **Mean revision rounds** and **median duration**.
@@ -97,6 +102,8 @@ Each arm reports the following:
 A job is credited to the step that did its work. For an implement or revision job, that is the
 first step that wrote code. A review job is credited to its first review step. The reviewer
 inside an implement job's loop judged the work and did not do it, so it never gets the credit.
+If a job reports no step of the kind it needs, for example an implement job whose only reported
+step is its reviewer, no step is credited and the job is grouped as `unknown`.
 
 ## What this can and cannot tell you
 
@@ -107,9 +114,19 @@ models were given different issues.
   stronger models on purpose, so including those jobs would compare the work rather than the
   models. Jobs from round-robin pools and fixed agents are kept, because there the issue does not
   decide the model.
-- **Infrastructure failures are left out.** These are `launch_failed`, `throttled`, `superseded`,
-  `microvm_gone` and `released_by_admin`. They tell you nothing about the model, and they are
-  counted under `excluded`.
+- **Only known outcomes count.** Updraft accepts any outcome string, so the comparison only counts
+  outcomes it recognizes. Every job left out is counted under `excluded`, by reason.
+  - A success is `succeeded`.
+  - The agent's failures are `failed` and `timed_out`.
+  - These outcomes say nothing about the agent and are left out as `not_attributable`:
+    `launch_failed`, `throttled`, `superseded`, `microvm_gone`, `released_by_admin`, `terminated`,
+    `runner_error` and `state_not_saved`.
+  - Anything else is left out as `unresolved_outcome`. That includes a missing outcome, Updraft's
+    `unknown` or `unconfirmed`, and any value added later. Such jobs are never counted as
+    failures, and a warning gives their number.
+- **One kind at a time.** Implement, revision and review jobs succeed by different standards, so
+  the default compares `implement` jobs only. `kind=all` mixes every kind into the same arms. It
+  is an explicit opt-in, and the response warns that each arm's rate blends the kinds.
 - **Volume limits what you can conclude.** At around 100 jobs a month across two or three models,
   each arm gets roughly 30 to 40 comparable jobs, which gives intervals of about ±15 points.
   - A gap of 70% against 90% shows up within a month or two.

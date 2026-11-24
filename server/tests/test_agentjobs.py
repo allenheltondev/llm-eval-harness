@@ -308,7 +308,13 @@ def test_tier_routed_infrastructure_and_benchmark_jobs_are_left_out():
     )
     result = cmp.compare_jobs(jobs)
     assert [a["arm"] for a in result["arms"]] == ["a"]
-    assert result["excluded"] == {"filtered": 0, "infrastructure": 1, "routed": 3, "benchmark": 1}
+    assert result["excluded"] == {
+        "filtered": 0,
+        "not_attributable": 1,
+        "unresolved_outcome": 0,
+        "routed": 3,
+        "benchmark": 1,
+    }
     included = cmp.compare_jobs(jobs, include_routed=True, include_benchmarks=True)
     assert {a["arm"] for a in included["arms"]} == {"a", "routed", "model-a"}
     assert any("Tier-routed jobs are included" in w for w in included["warnings"])
@@ -459,3 +465,129 @@ async def test_a_server_without_the_table_says_agent_jobs_are_unavailable():
         response = await ac.get("/api/v1/agent-jobs")
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "agent_jobs_unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes (PR #65): unresolved outcomes, strict crediting, one kind at a time
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("outcome", "verdict"),
+    [
+        ("succeeded", "success"),
+        ("failed", "failure"),
+        ("timed_out", "failure"),
+        ("launch_failed", "not_attributable"),
+        ("terminated", "not_attributable"),
+        ("runner_error", "not_attributable"),
+        ("state_not_saved", "not_attributable"),
+        ("unconfirmed", "unresolved"),
+        ("unknown", "unresolved"),
+        ("something_new", "unresolved"),
+        (None, "unresolved"),
+    ],
+)
+def test_outcomes_are_classified_from_a_known_vocabulary_only(outcome, verdict):
+    assert cmp.outcome_class(outcome) == verdict
+
+
+def test_missing_or_unrecognized_outcomes_are_not_counted_as_failed_attempts():
+    steps = [{"kind": "implement", "model": "m"}]
+    jobs = (
+        jobs_for("m", 2, 0)
+        + [stored(jobId="no-outcome", steps=steps, outcome=None)]
+        + [stored(jobId="odd", steps=steps, outcome="unconfirmed")]
+    )
+    identity_only = record_of(
+        build_item(
+            JobFinished.model_validate(
+                {
+                    "schemaVersion": 1,
+                    "stack": "s",
+                    "tenantId": "t",
+                    "jobId": "bare",
+                    "kind": "implement",
+                }
+            ),
+            received_at=RECEIVED,
+        )
+    )
+    result = cmp.compare_jobs([*jobs, identity_only])
+    only = arm(result, "m")
+    assert only["jobs"] == 2
+    assert only["success_rate"] == 1.0
+    assert result["excluded"]["unresolved_outcome"] == 3
+    assert any("missing or unrecognized outcome" in w for w in result["warnings"])
+
+
+def test_an_implement_job_with_only_a_reviewer_step_is_not_credited_to_the_reviewer():
+    reviewer_only = [{"kind": "review", "agent": "rev", "model": "reviewer-x"}]
+    assert primary_step({"kind": "implement", "steps": reviewer_only}) is None
+    result = cmp.compare_jobs([stored(jobId="j", steps=reviewer_only)])
+    assert [a["arm"] for a in result["arms"]] == ["unknown"]
+    item = build_item(JobFinished.model_validate(detail(steps=reviewer_only)), received_at=RECEIVED)
+    assert item["model"] is None
+
+
+def test_a_review_job_without_a_review_step_is_not_credited_to_the_implementer():
+    implementer_only = [{"kind": "implement", "agent": "main", "model": "model-a"}]
+    assert primary_step({"kind": "review", "steps": implementer_only}) is None
+
+
+def test_only_implement_jobs_are_compared_by_default():
+    review_steps = [{"kind": "review", "agent": "rev", "model": "m"}]
+    jobs = jobs_for("m", 1, 1) + [stored(jobId="r", kind="review", steps=review_steps)]
+    result = cmp.compare_jobs(jobs)
+    assert result["kind"] == "implement"
+    assert arm(result, "m")["jobs"] == 2
+    assert result["excluded"]["filtered"] == 1
+    reviews = cmp.compare_jobs(jobs, kind="review")
+    assert arm(reviews, "m")["jobs"] == 1
+    assert not any("mixed" in w for w in reviews["warnings"])
+
+
+def test_mixing_kinds_is_an_explicit_opt_in_with_a_warning():
+    review_steps = [{"kind": "review", "agent": "rev", "model": "m"}]
+    jobs = jobs_for("m", 1, 1) + [stored(jobId="r", kind="review", steps=review_steps)]
+    mixed = cmp.compare_jobs(jobs, kind=None)
+    assert arm(mixed, "m")["jobs"] == 3
+    assert any("Job kinds are mixed" in w for w in mixed["warnings"])
+
+
+def test_an_arm_reports_an_attribute_only_when_every_member_agrees():
+    jobs = [
+        stored(
+            jobId="1",
+            steps=[{"kind": "implement", "adapter": "claude", "model": "a", "effort": "high"}],
+        ),
+        stored(
+            jobId="2",
+            steps=[{"kind": "implement", "adapter": "claude", "model": "b", "effort": "high"}],
+        ),
+    ]
+    by_adapter = arm(cmp.compare_jobs(jobs, group_by="adapter"), "claude")
+    assert by_adapter["adapter"] == "claude"
+    assert by_adapter["effort"] == "high"
+    assert by_adapter["model"] is None
+    assert by_adapter["mixed"] == {"model": ["a", "b"]}
+    by_model = arm(cmp.compare_jobs(jobs), "a")
+    assert by_model["model"] == "a" and by_model["mixed"] == {}
+
+
+async def test_the_api_compares_implement_jobs_unless_asked_for_all(client, table):
+    window = {"since": "2026-11-01T00:00:00Z", "until": "2026-11-30T00:00:00Z"}
+    seed(table, jobId="i", finishedAt="2026-11-20T00:00:00Z")
+    seed(
+        table,
+        jobId="r",
+        kind="review",
+        finishedAt="2026-11-21T00:00:00Z",
+        steps=[{"kind": "review", "model": "model-a"}],
+    )
+    default = (await client.get("/api/v1/agent-jobs/compare", params=window)).json()
+    assert default["kind"] == "implement" and default["jobs_compared"] == 1
+    everything = (
+        await client.get("/api/v1/agent-jobs/compare", params={**window, "kind": "all"})
+    ).json()
+    assert everything["kind"] is None and everything["jobs_compared"] == 2

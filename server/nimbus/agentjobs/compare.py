@@ -16,9 +16,25 @@ got different issues. Two things keep the comparison honest about that:
   as behind the leader when that interval excludes zero -- at ~100 jobs a month
   most gaps will not, and saying so is the point.
 
-Jobs that ended for reasons that are not the agent's (a launch failure, a
-throttle, a superseded or admin-released job, a lost microVM) are left out of
-every rate and counted in ``excluded``.
+**Which jobs count as attempts.** Updraft's outcome vocabulary is open-ended
+(the broker accepts any ``[a-z_]`` string and treats what it does not know as a
+failure), so this module does not: it counts an outcome only when it knows what
+it means.
+
+* ``succeeded`` is a success; ``failed`` and ``timed_out`` are the agent's
+  failures. These three are the success rate's denominator.
+* Outcomes that say nothing about the agent -- a launch failure, a throttle, a
+  superseded, admin-released or stopped job, a lost microVM, a runner or
+  state-sync error -- are left out and counted in ``excluded.not_attributable``.
+* Anything else, a missing outcome included (identity-only events, Updraft's
+  ``unknown``/``unconfirmed``, a value added later), is left out and counted in
+  ``excluded.unresolved_outcome``: counting it as a failure would charge the
+  model for what nobody knows.
+
+**One kind at a time.** Implement, revision and review jobs succeed by different
+standards, so by default only ``implement`` jobs are compared; another kind is
+asked for by name, and mixing kinds (``kind=None``) is an explicit opt-in that
+carries a warning.
 """
 
 from __future__ import annotations
@@ -32,13 +48,30 @@ from nimbus.agentjobs.store import primary_step
 
 GroupBy = Literal["model", "model_effort", "agent", "adapter"]
 
+OutcomeClass = Literal["success", "failure", "not_attributable", "unresolved"]
+
 #: The outcome that counts as success, as Updraft's broker records it.
 SUCCEEDED = "succeeded"
-#: Outcomes Updraft records when the job never got a fair run: they say nothing
-#: about the model (cloud/server/src: launch.ts, broker.ts, reconcile.ts, admin.ts).
-INFRASTRUCTURE_OUTCOMES = frozenset(
-    {"launch_failed", "throttled", "superseded", "microvm_gone", "released_by_admin"}
+#: The agent's own failures (deploy/aws-microvm/image/runner/job.mjs): updraft
+#: exited non-zero, or the job ran out of its time budget.
+FAILURE_OUTCOMES = frozenset({"failed", "timed_out"})
+#: Outcomes that say nothing about the agent: the job never got a fair run, was
+#: stopped by someone, or the infrastructure around it failed (cloud/server/src
+#: launch.ts, broker.ts, reconcile.ts, admin.ts; runner/job.mjs).
+NOT_ATTRIBUTABLE_OUTCOMES = frozenset(
+    {
+        "launch_failed",
+        "throttled",
+        "superseded",
+        "microvm_gone",
+        "released_by_admin",
+        "terminated",
+        "runner_error",
+        "state_not_saved",
+    }
 )
+#: The default kind compared, and the value that asks for every kind mixed.
+DEFAULT_KIND = "implement"
 #: Routing sources whose model choice depended on the issue.
 BIASED_ROUTING = frozenset({"tier"})
 #: Below this many jobs an arm is flagged, matching Updraft's own insights.
@@ -76,28 +109,54 @@ def newcombe(
     return lower, upper
 
 
-def arm_of(job: Mapping[str, Any], group_by: GroupBy) -> dict[str, str | None]:
+def outcome_class(outcome: str | None) -> OutcomeClass:
+    """What a job's outcome says about its agent (see the module docstring)."""
+    if outcome == SUCCEEDED:
+        return "success"
+    if outcome in FAILURE_OUTCOMES:
+        return "failure"
+    if outcome in NOT_ATTRIBUTABLE_OUTCOMES:
+        return "not_attributable"
+    return "unresolved"
+
+
+def arm_label(job: Mapping[str, Any], group_by: GroupBy) -> str:
     """The arm a job belongs to, from the step it is credited to."""
     step = primary_step(job) or {}
     model = step.get("model")
-    effort = step.get("effort")
-    agent = step.get("agent")
-    adapter = step.get("adapter")
     if group_by == "agent":
-        label = agent
+        label = step.get("agent")
     elif group_by == "adapter":
-        label = adapter
+        label = step.get("adapter")
     elif group_by == "model_effort":
+        effort = step.get("effort")
         label = f"{model} @ {effort}" if model and effort else model
     else:
         label = model
-    return {
-        "arm": label or UNKNOWN,
-        "model": model,
-        "effort": effort if group_by == "model_effort" else None,
-        "agent": agent if group_by == "agent" else None,
-        "adapter": adapter,
-    }
+    return label or UNKNOWN
+
+
+#: The step attributes an arm describes itself by.
+ARM_ATTRIBUTES = ("model", "effort", "agent", "adapter")
+
+
+def _describe(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """An arm's identity, from *every* member rather than the first.
+
+    An attribute is reported only when all the arm's jobs agree on it. When they
+    do not -- an adapter arm holding two models, a model arm run at two efforts --
+    it is ``None``, and ``mixed`` lists the values found.
+    """
+    steps = [primary_step(job) or {} for job in jobs]
+    described: dict[str, Any] = {"arm": label}
+    mixed: dict[str, list[str]] = {}
+    for attribute in ARM_ATTRIBUTES:
+        values = sorted({str(v) for step in steps if (v := step.get(attribute)) is not None})
+        described[attribute] = values[0] if len(values) == 1 else None
+        if len(values) > 1:
+            mixed[attribute] = values
+    described["mixed"] = mixed
+    return described
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
@@ -108,7 +167,7 @@ def _mean(values: list[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
-def _summarize(arm: dict[str, Any], jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _summarize(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
     n = len(jobs)
     succeeded = sum(1 for job in jobs if job.get("outcome") == SUCCEEDED)
     verified = [
@@ -155,7 +214,7 @@ def _summarize(arm: dict[str, Any], jobs: list[Mapping[str, Any]]) -> dict[str, 
         and (job.get("telemetry") or {}).get("cost_usd") is not None
     )
     return {
-        **arm,
+        **_describe(label, jobs),
         "jobs": n,
         "succeeded": succeeded,
         "success_rate": _rate(succeeded, n),
@@ -203,7 +262,7 @@ def compare_jobs(
     repository: str | None = None,
     tenant_id: str | None = None,
     stack: str | None = None,
-    kind: str | None = None,
+    kind: str | None = DEFAULT_KIND,
 ) -> dict[str, Any]:
     """Group finished jobs into arms and compare them.
 
@@ -215,10 +274,22 @@ def compare_jobs(
         include_benchmarks: Keep jobs a benchmark dispatched. They are a
             different population -- chosen tasks, not real work -- and belong in
             a benchmark's own comparison.
-        repository, tenant_id, stack, kind: Keep only jobs that match.
+        kind: The job kind compared (default ``implement``). ``None`` mixes
+            every kind into the same arms -- an explicit opt-in, warned about,
+            because the kinds succeed by different standards.
+        repository, tenant_id, stack: Keep only jobs that match.
+
+    Only jobs whose outcome is a known success or agent failure are compared;
+    every other job is counted in ``excluded`` under the reason it was left out.
     """
-    excluded = {"filtered": 0, "infrastructure": 0, "routed": 0, "benchmark": 0}
-    groups: dict[str, tuple[dict[str, Any], list[Mapping[str, Any]]]] = {}
+    excluded = {
+        "filtered": 0,
+        "not_attributable": 0,
+        "unresolved_outcome": 0,
+        "routed": 0,
+        "benchmark": 0,
+    }
+    groups: dict[str, list[Mapping[str, Any]]] = {}
     unknown_model = 0
     total = 0
     for job in jobs:
@@ -231,8 +302,12 @@ def compare_jobs(
         ):
             excluded["filtered"] += 1
             continue
-        if job.get("outcome") in INFRASTRUCTURE_OUTCOMES:
-            excluded["infrastructure"] += 1
+        verdict = outcome_class(job.get("outcome"))
+        if verdict == "not_attributable":
+            excluded["not_attributable"] += 1
+            continue
+        if verdict == "unresolved":
+            excluded["unresolved_outcome"] += 1
             continue
         if not include_routed and (job.get("routing") or {}).get("source") in BIASED_ROUTING:
             excluded["routed"] += 1
@@ -240,13 +315,13 @@ def compare_jobs(
         if not include_benchmarks and job.get("benchmark"):
             excluded["benchmark"] += 1
             continue
-        arm = arm_of(job, group_by)
-        if arm["arm"] == UNKNOWN:
+        label = arm_label(job, group_by)
+        if label == UNKNOWN:
             unknown_model += 1
-        groups.setdefault(arm["arm"], (arm, []))[1].append(job)
+        groups.setdefault(label, []).append(job)
 
     summaries = sorted(
-        (_summarize(arm, members) for arm, members in groups.values()), key=_ranking_key
+        (_summarize(label, members) for label, members in groups.items()), key=_ranking_key
     )
     # The leader is the best-ranked arm whose model is known: crediting a lead to
     # "unknown" would tell nobody which model to pick.
@@ -257,12 +332,13 @@ def compare_jobs(
     return {
         "basis": "observational",
         "group_by": group_by,
+        "kind": kind,
         "jobs_read": total,
         "jobs_compared": sum(s["jobs"] for s in summaries),
         "excluded": excluded,
         "leader": leader["arm"] if leader else None,
         "arms": summaries,
-        "warnings": _warnings(summaries, excluded, unknown_model, include_routed),
+        "warnings": _warnings(summaries, excluded, unknown_model, include_routed, kind),
     }
 
 
@@ -286,8 +362,19 @@ def _warnings(
     excluded: Mapping[str, int],
     unknown_model: int,
     include_routed: bool,
+    kind: str | None,
 ) -> list[str]:
     warnings: list[str] = []
+    if kind is None:
+        warnings.append(
+            "Job kinds are mixed: implement, revision and review jobs succeed by different "
+            "standards, so an arm's rate blends them. Compare one kind for a ranking."
+        )
+    if excluded.get("unresolved_outcome"):
+        warnings.append(
+            f"{excluded['unresolved_outcome']} job(s) had a missing or unrecognized outcome "
+            "and were left out rather than counted as failures."
+        )
     if not summaries:
         warnings.append("No jobs to compare in this window.")
         return warnings
