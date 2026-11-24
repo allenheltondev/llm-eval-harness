@@ -52,6 +52,20 @@ Parameters:
       and DELETES the function, bucket and distribution. Use `make
       deploy-backend`.
 
+  IngestAgentJobs:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Whether this stack stores Updraft Cloud's `Job Finished` events from the
+      account's default event bus (docs/agent-jobs.md). Off by default because
+      the default bus is account-wide: every stack that subscribes receives
+      every opted-in tenant's jobs, so an arbitrary extra deployment (a dev
+      stack, say) must not get real tenant data unasked. The Staging and
+      Production workflows turn it on for the one intended stack in each
+      account (`make deploy-backend INGEST_AGENT_JOBS=true`). Needs the eval
+      worker, whose zip the ingest function reuses.
+
   HistoryRetentionDays:
     Type: Number
     Default: 0
@@ -191,6 +205,10 @@ Conditions:
   # The worker is opt-in. Everything below is skipped entirely until an artifact
   # key is supplied, so the rest of the stack deploys exactly as it did before.
   DeployEvalWorker: !Not [!Equals [!Ref EvalWorkerArtifactKey, '']]
+  # The intended consumer only: see the IngestAgentJobs parameter.
+  IngestAgentJobsEnabled: !And
+    - !Condition DeployEvalWorker
+    - !Equals [!Ref IngestAgentJobs, 'true']
   # So is the server + SPA hosting, on exactly the same pattern.
   DeployServer: !Not [!Equals [!Ref ServerArtifactKey, '']]
   # Groups live in the shared pool, so their names are shared by every stack
@@ -395,13 +413,13 @@ Resources:
   # "a finished job was not recorded". 14 days is SQS's maximum.
   AgentJobIngestDeadLetterQueue:
     Type: AWS::SQS::Queue
-    Condition: DeployEvalWorker
+    Condition: IngestAgentJobsEnabled
     Properties:
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
   AgentJobIngestDeadLetterQueuePolicy:
     Type: AWS::SQS::QueuePolicy
-    Condition: DeployEvalWorker
+    Condition: IngestAgentJobsEnabled
     Properties:
       Queues:
         - !Ref AgentJobIngestDeadLetterQueue
@@ -422,7 +440,7 @@ Resources:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
   AgentJobIngestFunction:
     Type: AWS::Serverless::Function
-    Condition: DeployEvalWorker
+    Condition: IngestAgentJobsEnabled
     Metadata:
       # The eval worker's zip: it already carries the whole nimbus package.
       SkipBuild: true
@@ -490,7 +508,7 @@ Resources:
               Resource: !GetAtt AgentJobIngestDeadLetterQueue.Arn
   AgentJobIngestDeadLetterAlarm:
     Type: AWS::CloudWatch::Alarm
-    Condition: DeployEvalWorker
+    Condition: IngestAgentJobsEnabled
     Properties:
       AlarmDescription: >
         An Updraft Job Finished event could not be stored (delivery failure, or
@@ -1019,11 +1037,11 @@ Outputs:
     Description: Worker Lambda ARN (for IAM policies that take an ARN, not a name)
     Value: !GetAtt EvalWorkerFunction.Arn
   AgentJobIngestFunctionName:
-    Condition: DeployEvalWorker
+    Condition: IngestAgentJobsEnabled
     Description: Lambda that stores Updraft `Job Finished` events as AGENTJOB# items
     Value: !Ref AgentJobIngestFunction
   AgentJobIngestDeadLetterQueueUrl:
-    Condition: DeployEvalWorker
+    Condition: IngestAgentJobsEnabled
     Description: Where Job Finished events that could not be stored wait (14 days)
     Value: !Ref AgentJobIngestDeadLetterQueue
   UserPoolId:

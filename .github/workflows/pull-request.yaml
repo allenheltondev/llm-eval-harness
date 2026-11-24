@@ -158,7 +158,9 @@ jobs:
           aws-region: us-east-1
       # The same target a developer runs locally: one deploy definition.
       - name: Package and deploy the stack
-        run: make deploy-backend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1
+        # INGEST_AGENT_JOBS: this is the account's intended consumer of Updraft's
+        # Job Finished events (docs/agent-jobs.md); other stacks default to off.
+        run: make deploy-backend STACK_NAME=llm-eval-harness DEPLOY_REGION=us-east-1 INGEST_AGENT_JOBS=true
 
       - name: Diagnose failed deploy
         if: ${{ failure() }}

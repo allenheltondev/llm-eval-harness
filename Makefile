@@ -154,6 +154,7 @@ smoke-agent-jobs:
 #   SERVER_MEMORY=2048 make deploy-backend      # bigger Lambda (faster cold start)
 #   HISTORY_RETENTION_DAYS=365 make deploy-backend  # expire history after a year (default: keep forever)
 #   make deploy-backend ACCESS_GROUP_NAME=nimbus-team  # access group on the shared pool (default: the stack name)
+#   make deploy-backend INGEST_AGENT_JOBS=true  # store Updraft Job Finished events (the intended stack only; docs/agent-jobs.md)
 #   make deploy-backend APP_DOMAIN_NAME=nimbus.example.com APP_HOSTED_ZONE_ID=Z123...
 #       # serve on a custom domain (production passes these). Left off, a deploy
 #       # keeps whatever the stack has -- sam deploy reuses the previous value of
@@ -208,6 +209,7 @@ deploy-backend:
 		$${SPEND_LIMIT_USD:+"SpendLimitUsd=$$SPEND_LIMIT_USD"} \
 		$${SPEND_WINDOW:+"SpendWindow=$$SPEND_WINDOW"} \
 		$(if $(ACCESS_GROUP_NAME),"AccessGroupName=$(ACCESS_GROUP_NAME)",) \
+		$(if $(INGEST_AGENT_JOBS),"IngestAgentJobs=$(INGEST_AGENT_JOBS)",) \
 		$(call domain_override,AppDomainName,APP_DOMAIN_NAME) \
 		$(call domain_override,AppHostedZoneId,APP_HOSTED_ZONE_ID) ); \
 	echo; \

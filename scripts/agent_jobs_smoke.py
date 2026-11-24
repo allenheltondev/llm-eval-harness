@@ -7,7 +7,7 @@ The logic is :mod:`nimbus.agentjobs.smoke`; this resolves the stack's outputs
 and reports.
 
 Needs AWS credentials that may PutEvents on the bus and GetItem / DeleteItem on
-the stack's table, and a stack deployed with the eval worker.
+the stack's table, and a stack deployed with ``INGEST_AGENT_JOBS=true``.
 
 Usage::
 
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         print(
             f"agent_jobs_smoke: stack {args.stack!r} has no {', '.join(missing)} output -- "
-            "is it deployed with the eval worker?",
+            "is it deployed with INGEST_AGENT_JOBS=true?",
             file=sys.stderr,
         )
         return 2

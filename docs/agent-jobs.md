@@ -27,9 +27,22 @@ On Updraft's side (software-factory-cli):
 
 ## Turning it on
 
-There is nothing to configure in either stack. Updraft always publishes, and the harness always
-subscribes whenever the eval worker is deployed (`make deploy-backend`). The ingest function
-reuses the worker's zip. Two things remain:
+Nothing passes between the stacks: Updraft always publishes to the default bus, and the harness
+subscribes there. The ingest function reuses the eval worker's zip.
+
+**Which harness stack subscribes.** The default bus is account-wide, so every stack that
+subscribes receives every opted-in tenant's jobs. Ingestion is therefore off by default
+(the `IngestAgentJobs` parameter), and only the intended consumer turns it on:
+
+- The Staging and Production workflows deploy with `INGEST_AGENT_JOBS=true`.
+- Any other deployment, such as a dev stack in the same account, ingests nothing unless it is
+  deployed with `make deploy-backend INGEST_AGENT_JOBS=true`.
+- Both environments deploy the same stack name (`llm-eval-harness`) in the same region, which
+  can't coexist in one account. So Staging and Production are separate accounts, and production
+  jobs can't reach the staging stack. `tests/test_infra_template.py` checks this invariant
+  against the workflows.
+
+Two things remain:
 
 1. **Opt tenants in, in Updraft.** Publishing is per tenant and off by default, because it is
    the control over whether a tenant's job data leaves Updraft. A platform admin opts a tenant
@@ -39,7 +52,7 @@ reuses the worker's zip. Two things remain:
 2. **Smoke-test the harness side** (optional):
 
    ```sh
-   make smoke-agent-jobs
+   make smoke-agent-jobs   # against a stack with ingestion on
    ```
 
    This sends one synthetic `Job Finished` event to the default bus, waits for the stack to

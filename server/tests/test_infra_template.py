@@ -379,14 +379,22 @@ AGENT_JOB_RESOURCES = (
 )
 
 
-def test_agent_job_ingest_deploys_with_the_worker_and_needs_no_configuration(
+def test_agent_job_ingest_is_off_unless_this_stack_is_the_intended_consumer(
     resources: dict, template: dict
 ) -> None:
-    """No bus name to pass between the stacks: it deploys whenever the worker does."""
-    assert "UpdraftEventBusName" not in template["Parameters"]
-    assert "IngestAgentJobs" not in template["Conditions"]
+    """The default bus is account-wide, so an arbitrary deployment ingests nothing."""
+    parameter = template["Parameters"]["IngestAgentJobs"]
+    assert parameter["Default"] == "false"
+    assert parameter["AllowedValues"] == ["true", "false"]
+    condition = template["Conditions"]["IngestAgentJobsEnabled"]["Fn::And"]
+    assert {"Fn::Condition": "DeployEvalWorker"} in condition
+    assert {"Fn::Equals": [{"Fn::Ref": "IngestAgentJobs"}, "true"]} in condition
     for logical_id in AGENT_JOB_RESOURCES:
-        assert resources[logical_id]["Condition"] == "DeployEvalWorker"
+        assert resources[logical_id]["Condition"] == "IngestAgentJobsEnabled"
+    for output in ("AgentJobIngestFunctionName", "AgentJobIngestDeadLetterQueueUrl"):
+        assert template["Outputs"][output]["Condition"] == "IngestAgentJobsEnabled"
+    # Still no bus name to pass between the stacks.
+    assert "UpdraftEventBusName" not in template["Parameters"]
     code = resources["AgentJobIngestFunction"]["Properties"]["CodeUri"]
     assert code["Key"] == {"Fn::Ref": "EvalWorkerArtifactKey"}
 
@@ -434,3 +442,34 @@ def test_agent_job_ingest_can_only_put_agent_job_items(resources: dict) -> None:
     assert [s["Action"] for s in dynamo] == ["dynamodb:PutItem"]
     leading = dynamo[0]["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"]
     assert leading == ["AGENTJOB#*"]
+
+
+def _workflow(name: str) -> str:
+    return (TEMPLATE.parents[1] / ".github" / "workflows" / name).read_text()
+
+
+def _deploy_backend_command(workflow: str) -> str:
+    """The workflow's `make deploy-backend ...` command, continuation lines joined."""
+    text = workflow.replace("\\\n", " ")
+    (line,) = [line for line in text.splitlines() if "make deploy-backend" in line]
+    return " ".join(line.split())
+
+
+@pytest.mark.parametrize(
+    ("workflow", "environment"),
+    [("pull-request.yaml", "Staging"), ("deploy.yaml", "Production")],
+)
+def test_only_the_staging_and_production_stacks_consume_agent_jobs(workflow, environment):
+    """The isolation invariant agent-job ingest relies on (docs/agent-jobs.md).
+
+    Each environment's intended stack turns ingestion on; anything else deploys
+    with it off. Both environments deploy the *same* stack name in the *same*
+    region, which cannot coexist in one account -- so Staging and Production are
+    separate accounts, and production jobs cannot reach the staging stack.
+    """
+    text = _workflow(workflow)
+    command = _deploy_backend_command(text)
+    assert "STACK_NAME=llm-eval-harness" in command
+    assert "DEPLOY_REGION=us-east-1" in command
+    assert "INGEST_AGENT_JOBS=true" in command
+    assert f"environment: {environment}" in text
