@@ -376,14 +376,15 @@ def test_outcome_rates_and_costs_are_summarized():
     assert summary["pr_opened_rate"] == pytest.approx(2 / 3)
     assert summary["merged_rate"] == pytest.approx(0.5)
     assert summary["mean_revision_rounds"] == pytest.approx(3.0)
-    assert summary["cost"] == {
+    # The job totals (every step summed); these steps report no usage of their own.
+    assert summary["job_cost"] == {
         "reported": 2,
         "total_usd": 3.0,
         "per_job_usd": 1.5,
         "per_success_usd": 3.0,
     }
-    # Only job 1 reported tokens; jobs that sent none are not averaged in as zero.
-    assert summary["mean_input_tokens"] == pytest.approx(100)
+    assert summary["cost"]["reported"] == 0
+    assert summary["mean_input_tokens"] is None
 
 
 def test_an_empty_window_says_so():
@@ -660,3 +661,84 @@ def test_an_empty_kind_filter_matches_nothing_rather_than_mixing():
     result = cmp.compare_jobs(jobs_for("m", 1, 0), kind="")
     assert result["arms"] == []
     assert not any("mixed" in w for w in result["warnings"])
+
+
+# --------------------------------------------------------------------------- #
+# #67: cost and tokens belong to the credited step, not the whole job
+# --------------------------------------------------------------------------- #
+
+
+def _priced_steps(implementer_cost: float, reviewer_cost: float) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": "implement",
+            "agent": "main",
+            "model": "cheap",
+            "modelSource": "response",
+            "runId": "run_1",
+            "usage": {"costUsd": implementer_cost, "inputTokens": 1000, "outputTokens": 100},
+        },
+        {
+            "kind": "review",
+            "agent": "rev",
+            "model": "pricey-reviewer",
+            "modelSource": "configured",
+            "usage": {"costUsd": reviewer_cost, "inputTokens": 50000, "outputTokens": 5000},
+        },
+    ]
+
+
+def test_an_arm_is_charged_only_its_own_steps_cost():
+    jobs = [
+        stored(
+            jobId=f"j{i}",
+            steps=_priced_steps(0.5, 9.5),
+            telemetry={"costUsd": 10.0, "inputTokens": 51000, "outputTokens": 5100},
+        )
+        for i in range(2)
+    ]
+    cheap = arm(cmp.compare_jobs(jobs), "cheap")
+    assert cheap["cost"] == {
+        "reported": 2,
+        "total_usd": 1.0,
+        "per_job_usd": 0.5,
+        "per_success_usd": 0.5,
+    }
+    assert cheap["mean_input_tokens"] == pytest.approx(1000)
+    assert cheap["mean_output_tokens"] == pytest.approx(100)
+    # The whole job, reviewer included, is still there -- labelled as such.
+    assert cheap["job_cost"]["per_job_usd"] == pytest.approx(10.0)
+
+
+def test_steps_without_usage_are_not_averaged_in_as_zero():
+    jobs = [
+        stored(jobId="priced", steps=_priced_steps(2.0, 1.0)),
+        stored(jobId="silent", steps=[{"kind": "implement", "model": "cheap"}]),
+    ]
+    cheap = arm(cmp.compare_jobs(jobs), "cheap")
+    assert cheap["jobs"] == 2
+    assert cheap["cost"]["reported"] == 1
+    assert cheap["cost"]["per_job_usd"] == pytest.approx(2.0)
+
+
+def test_each_arm_counts_how_its_model_was_known():
+    jobs = [
+        stored(jobId="r", steps=[{"kind": "implement", "model": "m", "modelSource": "response"}]),
+        stored(jobId="c", steps=[{"kind": "implement", "model": "m", "modelSource": "configured"}]),
+        stored(jobId="u", steps=[{"kind": "implement", "model": "m"}]),
+    ]
+    assert arm(cmp.compare_jobs(jobs), "m")["model_source"] == {
+        "response": 1,
+        "configured": 1,
+        "unreported": 1,
+    }
+    nameless = cmp.compare_jobs([stored(jobId="n", steps=[{"kind": "implement", "agent": "a"}])])
+    assert arm(nameless, "unknown")["model_source"] == {"no_model": 1}
+
+
+def test_step_usage_and_provenance_survive_ingestion():
+    job = stored(steps=_priced_steps(0.5, 9.5))
+    step = job["steps"][0]
+    assert step["usage"]["cost_usd"] == 0.5
+    assert step["model_source"] == "response"
+    assert step["run_id"] == "run_1"

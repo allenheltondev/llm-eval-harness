@@ -224,6 +224,54 @@ def _mean(values: list[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
+UsageRows = list[tuple[Mapping[str, Any], Mapping[str, Any]]]
+
+
+def _reported(rows: UsageRows, key: str) -> list[float]:
+    """The values of ``key`` that were reported, never a missing one as zero."""
+    return [float(usage[key]) for _, usage in rows if usage.get(key) is not None]
+
+
+def _cost(rows: UsageRows) -> dict[str, Any]:
+    """Cost over the jobs that reported one.
+
+    Per success counts only those jobs on both sides: what every costed attempt
+    spent, divided by the successes among them. A partly-reported arm is not
+    made to look cheap by spreading its cost over jobs that sent none.
+    """
+    costs = _reported(rows, "cost_usd")
+    total = sum(costs) if costs else None
+    costed_successes = sum(
+        1 for job, usage in rows if usage.get("cost_usd") is not None and _succeeded(job)
+    )
+    return {
+        "reported": len(costs),
+        "total_usd": total,
+        "per_job_usd": _mean(costs),
+        "per_success_usd": total / costed_successes
+        if total is not None and costed_successes
+        else None,
+    }
+
+
+def _model_sources(jobs: list[Mapping[str, Any]]) -> dict[str, int]:
+    """How each credited step's model was known.
+
+    ``response`` or ``configured`` as Updraft reported it; ``unreported`` for a
+    model with no source; ``no_model`` when the step named no model at all.
+
+    Updraft's own insights trust ``response`` over ``configured``: a configured
+    model is what was asked for, which a fallback may not have served.
+    """
+    counts: dict[str, int] = {}
+    for job in jobs:
+        step = primary_step(job) or {}
+        source = step.get("model_source")
+        key = "no_model" if not step.get("model") else str(source) if source else "unreported"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _summarize(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
     n = len(jobs)
     succeeded = sum(1 for job in jobs if _succeeded(job))
@@ -244,31 +292,9 @@ def _summarize(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
     durations = [
         float(job["duration_seconds"]) for job in jobs if job.get("duration_seconds") is not None
     ]
-    costs = [
-        float(job["telemetry"]["cost_usd"])
-        for job in jobs
-        if (job.get("telemetry") or {}).get("cost_usd") is not None
-    ]
-    inputs = [
-        float(job["telemetry"]["input_tokens"])
-        for job in jobs
-        if (job.get("telemetry") or {}).get("input_tokens") is not None
-    ]
-    outputs = [
-        float(job["telemetry"]["output_tokens"])
-        for job in jobs
-        if (job.get("telemetry") or {}).get("output_tokens") is not None
-    ]
     interval = wilson(succeeded, n)
-    total_cost = sum(costs) if costs else None
-    # Cost per success counts only jobs that reported a cost, on both sides: what
-    # every attempt cost, divided by the successes among them. A partly-reported
-    # arm is not made to look cheap by spreading its cost over jobs that sent none.
-    costed_successes = sum(
-        1
-        for job in jobs
-        if _succeeded(job) and (job.get("telemetry") or {}).get("cost_usd") is not None
-    )
+    step_usage = [(job, (primary_step(job) or {}).get("usage") or {}) for job in jobs]
+    job_usage = [(job, job.get("telemetry") or {}) for job in jobs]
     return {
         **_describe(label, jobs),
         "jobs": n,
@@ -282,18 +308,13 @@ def _summarize(label: str, jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
         "merged_rate": _rate(sum(1 for m in merged_known if m), len(merged_known)),
         "mean_revision_rounds": _mean(rounds),
         "median_duration_seconds": statistics.median(durations) if durations else None,
-        "cost": {
-            "reported": len(costs),
-            "total_usd": total_cost,
-            "per_job_usd": _mean(costs),
-            "per_success_usd": (
-                total_cost / costed_successes
-                if total_cost is not None and costed_successes
-                else None
-            ),
-        },
-        "mean_input_tokens": _mean(inputs),
-        "mean_output_tokens": _mean(outputs),
+        # The credited step's own usage: what *this arm's model* spent (#67).
+        "cost": _cost(step_usage),
+        "mean_input_tokens": _mean(_reported(step_usage, "input_tokens")),
+        "mean_output_tokens": _mean(_reported(step_usage, "output_tokens")),
+        # Every step summed, reviewers and revisions included: what the job cost.
+        "job_cost": _cost(job_usage),
+        "model_source": _model_sources(jobs),
         "small_sample": n < MIN_SAMPLE,
     }
 

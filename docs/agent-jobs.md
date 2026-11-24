@@ -96,8 +96,14 @@ Each arm reports the following:
 - **Rates where the jobs reported the data:** verification pass rate, PR-opened rate and merge
   rate.
 - **Mean revision rounds** and **median duration**.
-- **Cost:** per job and per success, counted only over jobs that reported a cost.
-- **Mean tokens.**
+- **Cost (`cost`) and mean tokens:** taken from the credited step's own `usage`, so an arm is
+  charged only for its own model's work. Costs are per job and per success, counted only over
+  jobs that reported a cost; a job with no reported usage is never averaged in as zero.
+- **Whole-job cost (`job_cost`):** every step summed, reviewer runs and revisions included. Use
+  this for what a job cost to run, not for what one model cost.
+- **`model_source`:** how each job's model was known. `response` means the provider's response
+  named it. `configured` means only the tenant's configuration did, which a fallback may not
+  have honoured. `unreported` means a model with no source, and `no_model` means none was named.
 - **`versus_leader`:** the difference in success rate from the leader, with a Newcombe 95%
   interval and a `distinguishable` flag.
 
