@@ -124,17 +124,13 @@ smoke:
 	fi
 	cd server && uv run python ../scripts/live_smoke.py
 
-# `smoke-agent-jobs` sends one synthetic Updraft `Job Finished` event to the bus
+# `smoke-agent-jobs` sends one synthetic Updraft `Job Finished` event to the default bus
 # and checks the stack stores it (scripts/agent_jobs_smoke.py, docs/agent-jobs.md).
 # Needs AWS credentials; makes no model calls. Deletes what it stored.
-#   make smoke-agent-jobs UPDRAFT_EVENT_BUS_NAME=<updraft-stack>-events
+#   make smoke-agent-jobs
 smoke-agent-jobs:
-	@if [ -z "$(UPDRAFT_EVENT_BUS_NAME)" ]; then \
-		echo "smoke-agent-jobs: set UPDRAFT_EVENT_BUS_NAME=<updraft-stack>-events" >&2; \
-		exit 1; \
-	fi
 	cd server && uv run python ../scripts/agent_jobs_smoke.py --stack $(STACK_NAME) \
-		--bus $(UPDRAFT_EVENT_BUS_NAME) $(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),)
+		$(if $(DEPLOY_REGION),--region $(DEPLOY_REGION),)
 
 # --------------------------------------------------------------------------- #
 # deploy
@@ -158,7 +154,6 @@ smoke-agent-jobs:
 #   SERVER_MEMORY=2048 make deploy-backend      # bigger Lambda (faster cold start)
 #   HISTORY_RETENTION_DAYS=365 make deploy-backend  # expire history after a year (default: keep forever)
 #   make deploy-backend ACCESS_GROUP_NAME=nimbus-team  # access group on the shared pool (default: the stack name)
-#   make deploy-backend UPDRAFT_EVENT_BUS_NAME=<updraft-stack>-events  # store Updraft Job Finished events (docs/agent-jobs.md)
 #   make deploy-backend APP_DOMAIN_NAME=nimbus.example.com APP_HOSTED_ZONE_ID=Z123...
 #       # serve on a custom domain (production passes these). Left off, a deploy
 #       # keeps whatever the stack has -- sam deploy reuses the previous value of
@@ -213,7 +208,6 @@ deploy-backend:
 		$${SPEND_LIMIT_USD:+"SpendLimitUsd=$$SPEND_LIMIT_USD"} \
 		$${SPEND_WINDOW:+"SpendWindow=$$SPEND_WINDOW"} \
 		$(if $(ACCESS_GROUP_NAME),"AccessGroupName=$(ACCESS_GROUP_NAME)",) \
-		$(if $(UPDRAFT_EVENT_BUS_NAME),"UpdraftEventBusName=$(UPDRAFT_EVENT_BUS_NAME)",) \
 		$(call domain_override,AppDomainName,APP_DOMAIN_NAME) \
 		$(call domain_override,AppHostedZoneId,APP_HOSTED_ZONE_ID) ); \
 	echo; \

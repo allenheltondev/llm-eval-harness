@@ -7,14 +7,14 @@ The logic is :mod:`nimbus.agentjobs.smoke`; this resolves the stack's outputs
 and reports.
 
 Needs AWS credentials that may PutEvents on the bus and GetItem / DeleteItem on
-the stack's table, and a stack deployed with ``UpdraftEventBusName``.
+the stack's table, and a stack deployed with the eval worker.
 
 Usage::
 
-    make smoke-agent-jobs UPDRAFT_EVENT_BUS_NAME=<updraft-stack>-events
+    make smoke-agent-jobs
     # or
     cd server && uv run python ../scripts/agent_jobs_smoke.py \\
-        --stack llm-eval-harness --bus <updraft-stack>-events
+        --stack llm-eval-harness
 
 Exit code is 0 only if every check passes.
 """
@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agent_jobs_smoke", description=__doc__.splitlines()[0])
     parser.add_argument("--stack", default="llm-eval-harness", help="this harness's stack name")
     parser.add_argument(
-        "--bus", required=True, help="Updraft's bus: /updraft/<stack>/event-bus-name"
+        "--bus", default="default", help="the bus Updraft publishes to (default: the default bus)"
     )
     parser.add_argument("--region", default=None)
     parser.add_argument("--timeout", type=float, default=smoke.DEFAULT_TIMEOUT_SECONDS)
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         print(
             f"agent_jobs_smoke: stack {args.stack!r} has no {', '.join(missing)} output -- "
-            "is it deployed with UpdraftEventBusName?",
+            "is it deployed with the eval worker?",
             file=sys.stderr,
         )
         return 2

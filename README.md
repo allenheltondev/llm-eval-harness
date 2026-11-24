@@ -245,8 +245,9 @@ The UI disables the cloud option until `GET /health` reports `cloud_evals.config
 and item shapes: `docs/cloud-evals.md`; infrastructure notes and first-deploy verification list:
 `docs/cloud-evals-infra.md`.
 
-**Comparing models on real coding-agent jobs.** A stack deployed with `UPDRAFT_EVENT_BUS_NAME`
-stores each `Job Finished` event an Updraft Cloud deployment publishes, and
+**Comparing models on real coding-agent jobs.** A stack with the eval worker deployed
+stores each `Job Finished` event an Updraft Cloud deployment in the same account publishes to the
+default event bus, and
 `GET /api/v1/agent-jobs/compare` groups those jobs by model. See
 **[docs/agent-jobs.md](docs/agent-jobs.md)**.
 

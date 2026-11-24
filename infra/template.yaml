@@ -52,18 +52,6 @@ Parameters:
       and DELETES the function, bucket and distribution. Use `make
       deploy-backend`.
 
-  UpdraftEventBusName:
-    Type: String
-    Default: ''
-    AllowedPattern: '[A-Za-z0-9._\-/]{0,256}'
-    Description: >
-      Name of the EventBridge bus an Updraft Cloud stack in this account
-      publishes `Job Finished` events on (software-factory-cli #110; Updraft
-      writes it to SSM as /updraft/<stack>/event-bus-name). Set, and with the
-      eval worker deployed, the stack subscribes AgentJobIngestFunction to it
-      and stores each finished job for GET /api/v1/agent-jobs/compare. Empty
-      (the default) deploys none of it. See docs/agent-jobs.md.
-
   HistoryRetentionDays:
     Type: Number
     Default: 0
@@ -203,11 +191,6 @@ Conditions:
   # The worker is opt-in. Everything below is skipped entirely until an artifact
   # key is supplied, so the rest of the stack deploys exactly as it did before.
   DeployEvalWorker: !Not [!Equals [!Ref EvalWorkerArtifactKey, '']]
-  # Agent-job ingest reuses the worker's zip, so it needs the worker deployed
-  # as well as a bus to subscribe to.
-  IngestAgentJobs: !And
-    - !Condition DeployEvalWorker
-    - !Not [!Equals [!Ref UpdraftEventBusName, '']]
   # So is the server + SPA hosting, on exactly the same pattern.
   DeployServer: !Not [!Equals [!Ref ServerArtifactKey, '']]
   # Groups live in the shared pool, so their names are shared by every stack
@@ -403,7 +386,7 @@ Resources:
               Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nimbus/${AWS::StackName}/mcp/*
   # ------------------------------------------------------------------------
   # Agent jobs: Updraft's `Job Finished` events, stored for comparison
-  # (docs/agent-jobs.md). One rule on Updraft's bus -> one small Lambda ->
+  # (docs/agent-jobs.md). One rule on the default bus -> one small Lambda ->
   # AGENTJOB# items in EvalTable. Nothing here is on any request path.
   # ------------------------------------------------------------------------
   # Where an event goes when it cannot be stored: EventBridge's own delivery
@@ -412,13 +395,13 @@ Resources:
   # "a finished job was not recorded". 14 days is SQS's maximum.
   AgentJobIngestDeadLetterQueue:
     Type: AWS::SQS::Queue
-    Condition: IngestAgentJobs
+    Condition: DeployEvalWorker
     Properties:
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
   AgentJobIngestDeadLetterQueuePolicy:
     Type: AWS::SQS::QueuePolicy
-    Condition: IngestAgentJobs
+    Condition: DeployEvalWorker
     Properties:
       Queues:
         - !Ref AgentJobIngestDeadLetterQueue
@@ -433,11 +416,13 @@ Resources:
             Action: sqs:SendMessage
             Resource: !GetAtt AgentJobIngestDeadLetterQueue.Arn
             Condition:
-              ArnEquals:
-                aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${UpdraftEventBusName}/*
+              # This stack's own rule on the default bus (CloudFormation names
+              # it <stack>-<logical id>-<suffix>).
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
   AgentJobIngestFunction:
     Type: AWS::Serverless::Function
-    Condition: IngestAgentJobs
+    Condition: DeployEvalWorker
     Metadata:
       # The eval worker's zip: it already carries the whole nimbus package.
       SkipBuild: true
@@ -470,7 +455,10 @@ Resources:
         JobFinished:
           Type: EventBridgeRule
           Properties:
-            EventBusName: !Ref UpdraftEventBusName
+            # No EventBusName: the account's default bus, which Updraft Cloud
+            # publishes to (software-factory-cli cloud/README.md). No name to
+            # pass between the stacks and no deploy order: until Updraft
+            # publishes, the rule simply matches nothing.
             # Only the envelope is matched. schemaVersion is checked by the
             # handler instead, so a v2 Updraft starts publishing fails loudly
             # into the DLQ rather than being filtered out unseen.
@@ -500,7 +488,7 @@ Resources:
               Resource: !GetAtt AgentJobIngestDeadLetterQueue.Arn
   AgentJobIngestDeadLetterAlarm:
     Type: AWS::CloudWatch::Alarm
-    Condition: IngestAgentJobs
+    Condition: DeployEvalWorker
     Properties:
       AlarmDescription: >
         An Updraft Job Finished event could not be stored (delivery failure, or
@@ -1029,11 +1017,11 @@ Outputs:
     Description: Worker Lambda ARN (for IAM policies that take an ARN, not a name)
     Value: !GetAtt EvalWorkerFunction.Arn
   AgentJobIngestFunctionName:
-    Condition: IngestAgentJobs
+    Condition: DeployEvalWorker
     Description: Lambda that stores Updraft `Job Finished` events as AGENTJOB# items
     Value: !Ref AgentJobIngestFunction
   AgentJobIngestDeadLetterQueueUrl:
-    Condition: IngestAgentJobs
+    Condition: DeployEvalWorker
     Description: Where Job Finished events that could not be stored wait (14 days)
     Value: !Ref AgentJobIngestDeadLetterQueue
   UserPoolId:

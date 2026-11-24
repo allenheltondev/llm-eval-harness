@@ -379,25 +379,25 @@ AGENT_JOB_RESOURCES = (
 )
 
 
-def test_agent_job_ingest_is_opt_in_and_needs_the_worker_zip(
+def test_agent_job_ingest_deploys_with_the_worker_and_needs_no_configuration(
     resources: dict, template: dict
 ) -> None:
-    """Nothing is deployed without a bus, and the function reuses the worker's artifact."""
-    assert template["Parameters"]["UpdraftEventBusName"]["Default"] == ""
-    condition = template["Conditions"]["IngestAgentJobs"]["Fn::And"]
-    assert {"Fn::Condition": "DeployEvalWorker"} in condition
+    """No bus name to pass between the stacks: it deploys whenever the worker does."""
+    assert "UpdraftEventBusName" not in template["Parameters"]
+    assert "IngestAgentJobs" not in template["Conditions"]
     for logical_id in AGENT_JOB_RESOURCES:
-        assert resources[logical_id]["Condition"] == "IngestAgentJobs"
+        assert resources[logical_id]["Condition"] == "DeployEvalWorker"
     code = resources["AgentJobIngestFunction"]["Properties"]["CodeUri"]
     assert code["Key"] == {"Fn::Ref": "EvalWorkerArtifactKey"}
 
 
-def test_agent_job_ingest_subscribes_to_job_finished_on_updrafts_bus(resources: dict) -> None:
+def test_agent_job_ingest_subscribes_to_job_finished_on_the_default_bus(resources: dict) -> None:
     props = resources["AgentJobIngestFunction"]["Properties"]
     assert props["Handler"] == "nimbus.agentjobs.lambda_app.handler"
     rule = props["Events"]["JobFinished"]
     assert rule["Type"] == "EventBridgeRule"
-    assert rule["Properties"]["EventBusName"] == {"Fn::Ref": "UpdraftEventBusName"}
+    # No EventBusName is the account's default bus, where Updraft publishes.
+    assert "EventBusName" not in rule["Properties"]
     # The envelope only: a schemaVersion filter would hide a v2 instead of
     # sending it to the dead-letter queue.
     assert rule["Properties"]["Pattern"] == {
@@ -417,6 +417,15 @@ def test_agent_job_failures_land_on_one_dead_letter_queue(resources: dict) -> No
     assert alarm["Dimensions"][0]["Value"] == {
         "Fn::GetAtt": "AgentJobIngestDeadLetterQueue.QueueName"
     }
+
+
+def test_only_this_stacks_rule_may_dead_letter_into_the_queue(resources: dict) -> None:
+    statement = resources["AgentJobIngestDeadLetterQueuePolicy"]["Properties"]["PolicyDocument"][
+        "Statement"
+    ][0]
+    assert statement["Principal"] == {"Service": "events.amazonaws.com"}
+    source = statement["Condition"]["ArnLike"]["aws:SourceArn"]["Fn::Sub"]
+    assert source.endswith(":rule/${AWS::StackName}-*")
 
 
 def test_agent_job_ingest_can_only_put_agent_job_items(resources: dict) -> None:
